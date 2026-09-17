@@ -137,6 +137,16 @@ xref:requirements:city-and-failures.adoc#_selection_picking_and_hover[City and
 Failures]. Presenter ownership, fixed cue draws, camera, picking, lifecycle,
 and resource policy remain unchanged.
 
+Subsequent refinement (issue 569)::
+Issue https://github.com/FelixGeisler/code-city/issues/569[#569] supersedes both
+historical line-cue appearances, their extra passes, programs, VAOs, buffers,
+staging arrays, and cue-specific failure machinery. Hover and selection now use
+two validated integer uniforms in the one existing fill shader with the exact
+surface-focus precedence and constants in City and Failures. Camera, traversal,
+real-AABB CPU picking, controller authority, public presenter APIs, privacy,
+generation gates, and lifecycle remain unchanged. Semantic publication now
+atomically includes one persistent noninteractive numeric complexity legend.
+
 === Immutable-centre camera and picking
 
 The validated bounds centre `C` is immutable for the session. Each instance

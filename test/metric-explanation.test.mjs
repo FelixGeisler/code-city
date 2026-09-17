@@ -11,15 +11,15 @@ registerHooks({
 const { explainMetricFact, METRIC_PALETTE_LEGEND } = await import("../src/application/metric-explanation.ts");
 
 const boundaries = [
-  { M: 0, range: "0", rgba: "#A78BFAFF" },
-  { M: 1, range: "1", rgba: "#818CF8FF" },
-  { M: 2, range: "2–3", rgba: "#38BDF8FF" },
-  { M: 3, range: "2–3", rgba: "#38BDF8FF" },
-  { M: 4, range: "4–7", rgba: "#2DD4BFFF" },
-  { M: 7, range: "4–7", rgba: "#2DD4BFFF" },
-  { M: 8, range: "8–15", rgba: "#A3E635FF" },
-  { M: 15, range: "8–15", rgba: "#A3E635FF" },
-  { M: 16, range: "16+", rgba: "#FACC15FF" },
+  { M: 0, range: "0", rgba: "#22C55EFF" },
+  { M: 1, range: "1", rgba: "#84CC16FF" },
+  { M: 2, range: "2–3", rgba: "#FACC15FF" },
+  { M: 3, range: "2–3", rgba: "#FACC15FF" },
+  { M: 4, range: "4–7", rgba: "#F59E0BFF" },
+  { M: 7, range: "4–7", rgba: "#F59E0BFF" },
+  { M: 8, range: "8–15", rgba: "#F97316FF" },
+  { M: 15, range: "8–15", rgba: "#F97316FF" },
+  { M: 16, range: "16+", rgba: "#EF4444FF" },
 ];
 
 const expectedHeight = (S) => 4 + Math.floor(36 * Math.log1p(Math.min(S, 1000)) / Math.log(1001) + 0.5);
@@ -45,12 +45,12 @@ test("metric explanation maps every required palette boundary and exact derived 
 
 test("the text legend is one immutable complete six-band M1 palette", () => {
   assert.deepEqual(METRIC_PALETTE_LEGEND, [
-    { range: "0", rgba: "#A78BFAFF" },
-    { range: "1", rgba: "#818CF8FF" },
-    { range: "2–3", rgba: "#38BDF8FF" },
-    { range: "4–7", rgba: "#2DD4BFFF" },
-    { range: "8–15", rgba: "#A3E635FF" },
-    { range: "16+", rgba: "#FACC15FF" },
+    { range: "0", rgba: "#22C55EFF" },
+    { range: "1", rgba: "#84CC16FF" },
+    { range: "2–3", rgba: "#FACC15FF" },
+    { range: "4–7", rgba: "#F59E0BFF" },
+    { range: "8–15", rgba: "#F97316FF" },
+    { range: "16+", rgba: "#EF4444FF" },
   ]);
   assert.equal(Object.isFrozen(METRIC_PALETTE_LEGEND), true);
   assert(METRIC_PALETTE_LEGEND.every(Object.isFrozen));

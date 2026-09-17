@@ -25,37 +25,9 @@ const CUBE_VERTEX_DATA = new Float32Array([
   0, 1, 0, 2,  0, 1, 1, 2,  1, 1, 1, 2,  1, 1, 0, 2,
 ]);
 
-const SELECTION_BOX_POSITIONS = new Float32Array([
-  -1 / 64, -1 / 64, -1 / 64,
-  65 / 64, -1 / 64, -1 / 64,
-  65 / 64, 65 / 64, -1 / 64,
-  -1 / 64, 65 / 64, -1 / 64,
-  -1 / 64, -1 / 64, 65 / 64,
-  65 / 64, -1 / 64, 65 / 64,
-  65 / 64, 65 / 64, 65 / 64,
-  -1 / 64, 65 / 64, 65 / 64,
-]);
-
-const HOVER_BOX_POSITIONS = new Float32Array([
-  0, 0, 0,
-  1, 0, 0,
-  1, 1, 0,
-  0, 1, 0,
-  0, 0, 1,
-  1, 0, 1,
-  1, 1, 1,
-  0, 1, 1,
-]);
-
 const CUBE_INDICES = new Uint8Array([
   0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11,
   12, 13, 14, 12, 14, 15, 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23,
-]);
-
-const BOX_EDGE_INDICES = new Uint8Array([
-  0, 1, 1, 2, 2, 3, 3, 0,
-  4, 5, 5, 6, 6, 7, 7, 4,
-  0, 4, 1, 5, 2, 6, 3, 7,
 ]);
 
 const VERTEX_SHADER_SOURCE = `#version 300 es
@@ -68,6 +40,8 @@ layout(location = 3) in vec4 a_color;
 layout(location = 4) in float a_faceClass;
 
 uniform mat4 u_clipFromTarget;
+uniform int u_hoverIndex;
+uniform int u_selectionIndex;
 
 flat out vec4 v_color;
 
@@ -75,9 +49,18 @@ void main() {
   vec3 targetRelativePosition = a_targetRelativeMinimum + a_unitPosition * a_dimensions;
   gl_Position = u_clipFromTarget * vec4(targetRelativePosition, 1.0);
   vec3 base = a_color.rgb;
-  vec3 displayed = a_faceClass > 1.5
+  vec3 ordinary = a_faceClass > 1.5
     ? base + 0.12 * (vec3(1.0) - base)
     : a_faceClass > 0.5 ? 0.82 * base : 0.62 * base;
+  vec3 displayed = ordinary;
+  if (u_selectionIndex >= 0) {
+    if (gl_InstanceID != u_selectionIndex) {
+      displayed = 0.70 * ordinary;
+      if (gl_InstanceID == u_hoverIndex) displayed = mix(displayed, ordinary, 0.15);
+    }
+  } else if (gl_InstanceID == u_hoverIndex) {
+    displayed = mix(ordinary, vec3(1.0), 0.15);
+  }
   v_color = vec4(displayed, 1.0);
 }
 `;
@@ -90,41 +73,6 @@ layout(location = 0) out vec4 o_color;
 
 void main() {
   o_color = v_color;
-}
-`;
-
-const OUTLINE_VERTEX_SHADER_SOURCE = `#version 300 es
-precision highp float;
-
-layout(location = 0) in vec3 a_unitPosition;
-layout(location = 1) in vec3 a_targetRelativeMinimum;
-layout(location = 2) in vec3 a_dimensions;
-
-uniform mat4 u_clipFromTarget;
-
-void main() {
-  vec3 targetRelativePosition = a_targetRelativeMinimum + a_unitPosition * a_dimensions;
-  gl_Position = u_clipFromTarget * vec4(targetRelativePosition, 1.0);
-}
-`;
-
-const OUTLINE_FRAGMENT_SHADER_SOURCE = `#version 300 es
-precision highp float;
-
-layout(location = 0) out vec4 o_color;
-
-void main() {
-  o_color = vec4(248.0 / 255.0, 250.0 / 255.0, 252.0 / 255.0, 1.0);
-}
-`;
-
-const HOVER_FRAGMENT_SHADER_SOURCE = `#version 300 es
-precision highp float;
-
-layout(location = 0) out vec4 o_color;
-
-void main() {
-  o_color = vec4(148.0 / 255.0, 163.0 / 255.0, 184.0 / 255.0, 1.0);
 }
 `;
 
@@ -291,26 +239,10 @@ type Session<G> = {
   positionBuffer?: WebGLBuffer;
   indexBuffer?: WebGLBuffer;
   instanceBuffer?: WebGLBuffer;
-  uniform?: WebGLUniformLocation;
-  outlineVertexShader?: WebGLShader;
-  outlineFragmentShader?: WebGLShader;
-  outlineProgram?: WebGLProgram;
-  outlineVao?: WebGLVertexArrayObject;
-  outlinePositionBuffer?: WebGLBuffer;
-  outlineIndexBuffer?: WebGLBuffer;
-  outlineInstanceBuffer?: WebGLBuffer;
-  outlineUniform?: WebGLUniformLocation;
-  hoverVertexShader?: WebGLShader;
-  hoverFragmentShader?: WebGLShader;
-  hoverProgram?: WebGLProgram;
-  hoverVao?: WebGLVertexArrayObject;
-  hoverPositionBuffer?: WebGLBuffer;
-  hoverIndexBuffer?: WebGLBuffer;
-  hoverInstanceBuffer?: WebGLBuffer;
+  matrixUniform?: WebGLUniformLocation;
   hoverUniform?: WebGLUniformLocation;
+  selectionUniform?: WebGLUniformLocation;
   staging?: Uint8Array;
-  outlineStaging?: Uint8Array;
-  hoverStaging?: Uint8Array;
   pointer?: HoverPosition;
   requestEpoch: number;
   pendingFrame?: number;
@@ -326,7 +258,6 @@ const INSTANCE_STRIDE = 28;
 // Trusted WebGL 2 values from the Khronos WebGL specification. Keeping these
 // local closes the context data-property surface to drawing-buffer dimensions.
 const NO_ERROR = 0;
-const LINES = 0x0001;
 const TRIANGLES = 0x0004;
 const DEPTH_BUFFER_BIT = 0x0100;
 const LESS = 0x0201;
@@ -347,7 +278,6 @@ const SAMPLE_COVERAGE = 0x80a0;
 const ARRAY_BUFFER = 0x8892;
 const ELEMENT_ARRAY_BUFFER = 0x8893;
 const STATIC_DRAW = 0x88e4;
-const DYNAMIC_DRAW = 0x88e8;
 const FRAGMENT_SHADER = 0x8b30;
 const VERTEX_SHADER = 0x8b31;
 const COMPILE_STATUS = 0x8b81;
@@ -431,14 +361,8 @@ function createInstanceStaging(model: ValidatedGeometry, centre: readonly number
 }
 
 function draw(session: Session<unknown>, size: Dimensions, view: CameraView): void {
-  const {
-    canvas, gl, program, vao, uniform, model,
-    outlineProgram, outlineVao, outlineUniform,
-    hoverProgram, hoverVao, hoverUniform,
-  } = session;
-  if (!canvas || !gl || !program || !vao || !uniform || !model
-    || !outlineProgram || !outlineVao || !outlineUniform
-    || !hoverProgram || !hoverVao || !hoverUniform) {
+  const { canvas, gl, program, vao, matrixUniform, hoverUniform, selectionUniform, model } = session;
+  if (!canvas || !gl || !program || !vao || !matrixUniform || !hoverUniform || !selectionUniform || !model) {
     throw new Error("Incomplete presentation session");
   }
   if (canvas.width !== size.width || canvas.height !== size.height
@@ -467,34 +391,11 @@ function draw(session: Session<unknown>, size: Dimensions, view: CameraView): vo
     gl.clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
     gl.useProgram(program);
     gl.bindVertexArray(vao);
-    gl.uniformMatrix4fv(uniform, false, matrix);
+    gl.uniformMatrix4fv(matrixUniform, false, matrix);
+    gl.uniform1i(hoverUniform, session.hover ?? -1);
+    gl.uniform1i(selectionUniform, session.selection ?? -1);
     gl.drawElementsInstanced(TRIANGLES, 36, UNSIGNED_BYTE, 0, model.count);
     requireNoError(gl);
-    if (session.selection !== null || session.hover !== null) {
-      let cueFailed = false;
-      let cueFailure: unknown;
-      try {
-        gl.disable(DEPTH_TEST);
-        if (session.selection !== null) {
-          gl.useProgram(outlineProgram);
-          gl.bindVertexArray(outlineVao);
-          gl.uniformMatrix4fv(outlineUniform, false, matrix);
-          gl.drawElementsInstanced(LINES, 24, UNSIGNED_BYTE, 0, 1);
-        }
-        if (session.hover !== null) {
-          gl.useProgram(hoverProgram);
-          gl.bindVertexArray(hoverVao);
-          gl.uniformMatrix4fv(hoverUniform, false, matrix);
-          gl.drawElementsInstanced(LINES, 24, UNSIGNED_BYTE, 0, 1);
-        }
-      } catch (error) {
-        cueFailed = true;
-        cueFailure = error;
-      }
-      gl.enable(DEPTH_TEST);
-      requireNoError(gl);
-      if (cueFailed) throw cueFailure;
-    }
   } finally {
     matrix.fill(0);
   }
@@ -526,9 +427,15 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   const linked = gl.getProgramParameter(session.program, LINK_STATUS);
   requireNoError(gl);
   if (linked !== true) throw new Error("WebGL2 program link failed");
-  session.uniform = gl.getUniformLocation(session.program, "u_clipFromTarget") ?? undefined;
+  session.matrixUniform = gl.getUniformLocation(session.program, "u_clipFromTarget") ?? undefined;
   requireNoError(gl);
-  if (!session.uniform) throw new Error("WebGL2 uniform is unavailable");
+  session.hoverUniform = gl.getUniformLocation(session.program, "u_hoverIndex") ?? undefined;
+  requireNoError(gl);
+  session.selectionUniform = gl.getUniformLocation(session.program, "u_selectionIndex") ?? undefined;
+  requireNoError(gl);
+  if (!session.matrixUniform || !session.hoverUniform || !session.selectionUniform) {
+    throw new Error("WebGL2 uniform is unavailable");
+  }
 
   const vertexShader = session.vertexShader;
   session.vertexShader = undefined;
@@ -575,117 +482,7 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   gl.vertexAttribDivisor(3, 1);
   requireNoError(gl);
 
-  session.outlineVertexShader = compileShader(gl, VERTEX_SHADER, OUTLINE_VERTEX_SHADER_SOURCE, (shader) => { session.outlineVertexShader = shader; });
-  session.outlineFragmentShader = compileShader(gl, FRAGMENT_SHADER, OUTLINE_FRAGMENT_SHADER_SOURCE, (shader) => { session.outlineFragmentShader = shader; });
-  session.outlineProgram = requireResource(gl.createProgram(), gl, (program) => { session.outlineProgram = program; });
-  gl.attachShader(session.outlineProgram, session.outlineVertexShader);
-  gl.attachShader(session.outlineProgram, session.outlineFragmentShader);
-  gl.linkProgram(session.outlineProgram);
-  const outlineLinked = gl.getProgramParameter(session.outlineProgram, LINK_STATUS);
-  requireNoError(gl);
-  if (outlineLinked !== true) throw new Error("WebGL2 outline program link failed");
-  session.outlineUniform = gl.getUniformLocation(session.outlineProgram, "u_clipFromTarget") ?? undefined;
-  requireNoError(gl);
-  if (!session.outlineUniform) throw new Error("WebGL2 outline uniform is unavailable");
-
-  const outlineVertexShader = session.outlineVertexShader;
-  session.outlineVertexShader = undefined;
-  gl.deleteShader(outlineVertexShader);
-  const outlineFragmentShader = session.outlineFragmentShader;
-  session.outlineFragmentShader = undefined;
-  gl.deleteShader(outlineFragmentShader);
-  requireNoError(gl);
-
-  session.outlineVao = requireResource(gl.createVertexArray(), gl, (vao) => { session.outlineVao = vao; });
-  session.outlinePositionBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.outlinePositionBuffer = buffer; });
-  session.outlineIndexBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.outlineIndexBuffer = buffer; });
-  session.outlineInstanceBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.outlineInstanceBuffer = buffer; });
-  session.outlineStaging = new Uint8Array(24);
-
-  gl.bindVertexArray(session.outlineVao);
-  gl.bindBuffer(ARRAY_BUFFER, session.outlinePositionBuffer);
-  gl.bufferData(ARRAY_BUFFER, SELECTION_BOX_POSITIONS, STATIC_DRAW);
-  requireNoError(gl);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, FLOAT, false, 0, 0);
-  gl.bindBuffer(ELEMENT_ARRAY_BUFFER, session.outlineIndexBuffer);
-  gl.bufferData(ELEMENT_ARRAY_BUFFER, BOX_EDGE_INDICES, STATIC_DRAW);
-  requireNoError(gl);
-  gl.bindBuffer(ARRAY_BUFFER, session.outlineInstanceBuffer);
-  gl.bufferData(ARRAY_BUFFER, session.outlineStaging, DYNAMIC_DRAW);
-  requireNoError(gl);
-  gl.enableVertexAttribArray(1);
-  gl.vertexAttribPointer(1, 3, FLOAT, false, 24, 0);
-  gl.vertexAttribDivisor(1, 1);
-  gl.enableVertexAttribArray(2);
-  gl.vertexAttribPointer(2, 3, FLOAT, false, 24, 12);
-  gl.vertexAttribDivisor(2, 1);
-  requireNoError(gl);
-
-  session.hoverVertexShader = compileShader(gl, VERTEX_SHADER, OUTLINE_VERTEX_SHADER_SOURCE, (shader) => { session.hoverVertexShader = shader; });
-  session.hoverFragmentShader = compileShader(gl, FRAGMENT_SHADER, HOVER_FRAGMENT_SHADER_SOURCE, (shader) => { session.hoverFragmentShader = shader; });
-  session.hoverProgram = requireResource(gl.createProgram(), gl, (program) => { session.hoverProgram = program; });
-  gl.attachShader(session.hoverProgram, session.hoverVertexShader);
-  gl.attachShader(session.hoverProgram, session.hoverFragmentShader);
-  gl.linkProgram(session.hoverProgram);
-  const hoverLinked = gl.getProgramParameter(session.hoverProgram, LINK_STATUS);
-  requireNoError(gl);
-  if (hoverLinked !== true) throw new Error("WebGL2 hover program link failed");
-  session.hoverUniform = gl.getUniformLocation(session.hoverProgram, "u_clipFromTarget") ?? undefined;
-  requireNoError(gl);
-  if (!session.hoverUniform) throw new Error("WebGL2 hover uniform is unavailable");
-
-  const hoverVertexShader = session.hoverVertexShader;
-  session.hoverVertexShader = undefined;
-  gl.deleteShader(hoverVertexShader);
-  const hoverFragmentShader = session.hoverFragmentShader;
-  session.hoverFragmentShader = undefined;
-  gl.deleteShader(hoverFragmentShader);
-  requireNoError(gl);
-
-  session.hoverVao = requireResource(gl.createVertexArray(), gl, (vao) => { session.hoverVao = vao; });
-  session.hoverPositionBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.hoverPositionBuffer = buffer; });
-  session.hoverIndexBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.hoverIndexBuffer = buffer; });
-  session.hoverInstanceBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.hoverInstanceBuffer = buffer; });
-  session.hoverStaging = new Uint8Array(24);
-
-  gl.bindVertexArray(session.hoverVao);
-  gl.bindBuffer(ARRAY_BUFFER, session.hoverPositionBuffer);
-  gl.bufferData(ARRAY_BUFFER, HOVER_BOX_POSITIONS, STATIC_DRAW);
-  requireNoError(gl);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, FLOAT, false, 0, 0);
-  gl.bindBuffer(ELEMENT_ARRAY_BUFFER, session.hoverIndexBuffer);
-  gl.bufferData(ELEMENT_ARRAY_BUFFER, BOX_EDGE_INDICES, STATIC_DRAW);
-  requireNoError(gl);
-  gl.bindBuffer(ARRAY_BUFFER, session.hoverInstanceBuffer);
-  gl.bufferData(ARRAY_BUFFER, session.hoverStaging, DYNAMIC_DRAW);
-  requireNoError(gl);
-  gl.enableVertexAttribArray(1);
-  gl.vertexAttribPointer(1, 3, FLOAT, false, 24, 0);
-  gl.vertexAttribDivisor(1, 1);
-  gl.enableVertexAttribArray(2);
-  gl.vertexAttribPointer(2, 3, FLOAT, false, 24, 12);
-  gl.vertexAttribDivisor(2, 1);
-  requireNoError(gl);
   draw(session as Session<unknown>, size, initialCamera.view);
-}
-
-function updateCue(session: Session<unknown>, index: number, kind: "selection" | "hover"): void {
-  const { gl, staging } = session;
-  const instanceBuffer = kind === "selection" ? session.outlineInstanceBuffer : session.hoverInstanceBuffer;
-  const cueStaging = kind === "selection" ? session.outlineStaging : session.hoverStaging;
-  if (!gl || !instanceBuffer || !cueStaging || !staging) throw new Error(`Incomplete ${kind} cue`);
-  const byteOffset = index * INSTANCE_STRIDE;
-  cueStaging.set(staging.subarray(byteOffset, byteOffset + 24));
-  try {
-    gl.bindBuffer(ARRAY_BUFFER, instanceBuffer);
-    gl.bufferSubData(ARRAY_BUFFER, 0, cueStaging);
-    requireNoError(gl);
-  } catch (error) {
-    cueStaging.fill(0);
-    throw error;
-  }
 }
 
 function releaseGesture<G>(session: Session<G>): void {
@@ -772,20 +569,6 @@ function cleanup<G>(session: Session<G>): boolean {
       session.indexBuffer && (() => gl.deleteBuffer(session.indexBuffer!)),
       session.instanceBuffer && (() => gl.deleteBuffer(session.instanceBuffer!)),
       session.vao && (() => gl.deleteVertexArray(session.vao!)),
-      session.outlineVertexShader && (() => gl.deleteShader(session.outlineVertexShader!)),
-      session.outlineFragmentShader && (() => gl.deleteShader(session.outlineFragmentShader!)),
-      session.outlineProgram && (() => gl.deleteProgram(session.outlineProgram!)),
-      session.outlinePositionBuffer && (() => gl.deleteBuffer(session.outlinePositionBuffer!)),
-      session.outlineIndexBuffer && (() => gl.deleteBuffer(session.outlineIndexBuffer!)),
-      session.outlineInstanceBuffer && (() => gl.deleteBuffer(session.outlineInstanceBuffer!)),
-      session.outlineVao && (() => gl.deleteVertexArray(session.outlineVao!)),
-      session.hoverVertexShader && (() => gl.deleteShader(session.hoverVertexShader!)),
-      session.hoverFragmentShader && (() => gl.deleteShader(session.hoverFragmentShader!)),
-      session.hoverProgram && (() => gl.deleteProgram(session.hoverProgram!)),
-      session.hoverPositionBuffer && (() => gl.deleteBuffer(session.hoverPositionBuffer!)),
-      session.hoverIndexBuffer && (() => gl.deleteBuffer(session.hoverIndexBuffer!)),
-      session.hoverInstanceBuffer && (() => gl.deleteBuffer(session.hoverInstanceBuffer!)),
-      session.hoverVao && (() => gl.deleteVertexArray(session.hoverVao!)),
     ];
     for (const release of releases) {
       try { release?.(); } catch { complete = false; }
@@ -793,7 +576,6 @@ function cleanup<G>(session: Session<G>): boolean {
   }
   try { canvas?.remove(); } catch { complete = false; }
   session.staging?.fill(0);
-  session.outlineStaging?.fill(0);
   session.canvas = undefined;
   session.gl = undefined;
   session.vertexShader = undefined;
@@ -803,26 +585,10 @@ function cleanup<G>(session: Session<G>): boolean {
   session.positionBuffer = undefined;
   session.indexBuffer = undefined;
   session.instanceBuffer = undefined;
-  session.uniform = undefined;
-  session.outlineVertexShader = undefined;
-  session.outlineFragmentShader = undefined;
-  session.outlineProgram = undefined;
-  session.outlineVao = undefined;
-  session.outlinePositionBuffer = undefined;
-  session.outlineIndexBuffer = undefined;
-  session.outlineInstanceBuffer = undefined;
-  session.outlineUniform = undefined;
-  session.hoverVertexShader = undefined;
-  session.hoverFragmentShader = undefined;
-  session.hoverProgram = undefined;
-  session.hoverVao = undefined;
-  session.hoverPositionBuffer = undefined;
-  session.hoverIndexBuffer = undefined;
-  session.hoverInstanceBuffer = undefined;
+  session.matrixUniform = undefined;
   session.hoverUniform = undefined;
+  session.selectionUniform = undefined;
   session.staging = undefined;
-  session.outlineStaging = undefined;
-  session.hoverStaging = undefined;
   session.pointer = undefined;
   session.model = undefined;
   session.eventSink = undefined;
@@ -1309,8 +1075,6 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
       try {
         const selectionChanged = selection !== session.selection;
         const hoverChanged = hover !== session.hover;
-        if (selectionChanged && selection !== null) updateCue(session as Session<unknown>, selection, "selection");
-        if (hoverChanged && hover !== null) updateCue(session as Session<unknown>, hover, "hover");
         session.selection = selection;
         session.hover = hover;
         if (selectionChanged || hoverChanged) {

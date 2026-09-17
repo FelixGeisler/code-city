@@ -35,12 +35,12 @@ raw metric value but share the corresponding capped displayed dimension.
 |===
 |Complexity `M` |Base RGBA colour
 
-|0 |`#A78BFAFF`
-|1 |`#818CF8FF`
-|2–3 |`#38BDF8FF`
-|4–7 |`#2DD4BFFF`
-|8–15 |`#A3E635FF`
-|16+ |`#FACC15FF`
+|0 |`#22C55EFF`
+|1 |`#84CC16FF`
+|2–3 |`#FACC15FF`
+|4–7 |`#F59E0BFF`
+|8–15 |`#F97316FF`
+|16+ |`#EF4444FF`
 |===
 
 The geometry payload stores this exact opaque base RGBA. Face display
@@ -346,18 +346,32 @@ one recomputation only when the pointer is inside and no gesture is active.
 Pointer leave clears and invalidates hover; gesture end queues recomputation
 only for a current inside position. Replacement rejects work from old sessions.
 
-Selection draws an opaque `#F8FAFCFF` frame over all 12 edges of a
-presentation-only box whose fixed unit coordinates are `-1/64` and `65/64`.
-With the unchanged vertex formula, the frame expands each side of the selected
-building by `dimension/64`. Hover draws an opaque `#94A3B8FF` frame over all 12
-edges of the exact building AABB, using unit coordinates `0` and `1`. Selection
-draws first and hover second; when both address one building, exact hover nests
-inside selection. One depth-test disable/restore surrounds all active cue draws.
-Both use default-width `gl.LINES`; there is no pixel-width, contrast-ratio,
-antialiasing, universal on-screen visibility, or non-crossing-projection
-promise. The frames do not change metric RGBA, fill uploads, real AABBs, or CPU
-picking. The controller remains authoritative over the presenter's visual
-replicas.
+== Surface focus
+
+Let `c` be the ordinary face RGB after the fixed face transform above. Surface
+focus is applied after that transform with dim multiplier `D = 0.70`, hover
+amount `H = 0.15`, and alpha fixed at `1`:
+
+[cols="2,2,4",options="header"]
+|===
+|Selection |Hover |Displayed RGB for instance `i`
+
+|None |Not `i` |`c`
+|None |`i` |`mix(c, white, H)`
+|`i` |None or `i` |`c`
+|Another instance |None |`D * c`
+|`s`, with different `h` |`i = h` |`mix(D * c, c, H)`
+|`s`, with different `h` |Every other non-selected `i` |`D * c`
+|===
+
+Selection wins and retains ordinary face colours. A different hovered building
+lifts only toward its own ordinary colour. The trusted fill shader receives
+required integer uniforms `u_hoverIndex` and `u_selectionIndex` on every redraw;
+`-1` is null and every other value is controller- and presenter-validated in
+`0..count-1`. One program, one VAO, three immutable buffers, and one instanced
+`TRIANGLES` draw remain. Exact uploads are `384 + 36 + 28N` bytes, at most
+`112420` bytes for `N=4000`. There is no line cue, extra pass, buffer sub-upload,
+readback, animation, or change to metric RGBA, real AABBs, or CPU picking.
 
 == Inspector and visual quality
 
@@ -368,14 +382,24 @@ resulting displayed height and equal displayed width/depth. It states `S cap
 1000; displayed height range 4..40` and `U cap 100; displayed side range
 3..18`. A raw value above a cap remains shown even though its displayed
 dimension is capped. The inspector also shows the selected `M` palette range,
-exact base RGBA, and the complete six-band base-colour legend above. All other
-selection-only, inert-text, semantic status, empty-selection, hover-only, and
-non-disclosure rules remain unchanged.
+exact base RGBA. The complete legend is not duplicated inside selected content.
+
+Every committed city has one persistent, noninteractive legend labelled exactly
+“Complexity: low → high”. It presents six swatches in increasing `M` order with
+visible labels `M = 0`, `M = 1`, `M = 2–3`, `M = 4–7`, `M = 8–15`, and `M =
+16+`; these colours communicate complexity, not health, correctness, or safety.
+The legend commits atomically after the canvas and inspector, is absent before
+commit and after any rollback, invalidation, failure, context loss, replacement,
+or disposal, and never intercepts pointer input. It sits below the unchanged
+fixed-height city/canvas and reserves external space so it cannot overlap the
+inspector or Reset control. Its swatches use one row above `42rem`, three
+columns by two rows from `30rem` through `42rem`, and two columns by three rows
+below `30rem`; the label spans the grid.
 
 Visual quality is an M2 release requirement: the city remains the visual focus;
-controls look intentional and interaction is predictable; hover and selection
-cues do not overpower metric colours; and the inspector is clean, responsive,
-and readable. There is no numeric aesthetic threshold. This page records the
+controls look intentional and interaction is predictable; surface focus
+preserves metric-colour prominence; and the inspector and legend are clean,
+responsive, and readable. There is no numeric aesthetic threshold. This page records the
 requirement; issue https://github.com/FelixGeisler/code-city/issues/537[#537],
 Acceptance 6–8, solely owns representative screenshot review and its durable
 textual-only attestation under its accepted body SHA-256
@@ -389,8 +413,8 @@ A successful worker outcome contains one aligned, source-free city with
 geometry and inspection facts. The controller validates it once, snapshots it,
 stages presentation and detached semantic content, rechecks the current
 generation, commits the presenter, and performs one publication-root commit.
-Geometry, facts, revision, canvas, inspector container, and empty hover and
-selection become current together.
+Geometry, facts, revision, canvas, inspector container, persistent legend, and
+empty hover and selection become current together.
 
 [cols="2,3,3,2",options="header"]
 |===
@@ -427,7 +451,7 @@ selection become current together.
 |Current city
 
 |New or invalid submission, cancellation, or attempt/city/provider failure
-|Clear facts, hover, selection, and inspector first
+|Clear facts, hover, selection, inspector, and legend first
 |Roll back candidate and dispose current session
 |Existing user state/category
 
@@ -442,7 +466,7 @@ selection become current together.
 |Replacement only
 
 |Context loss
-|Clear facts, hover, selection, and inspector first
+|Clear facts, hover, selection, inspector, and legend first
 |Dispose; do not restore
 |`M1-PRES-1`
 
@@ -459,8 +483,8 @@ selection become current together.
 
 Presenter disposal is exactly-once and idempotent: invalidate frame work,
 release pointer capture, remove input, Reset, context-loss, lifecycle, and
-resize listeners, delete city and outline WebGL resources, clear staging,
-camera, and visual state, and remove the canvas.
+resize listeners, delete the one fill program, one VAO, and three buffers,
+clear staging, camera, and visual state, and remove the canvas.
 
 == Failures and privacy
 

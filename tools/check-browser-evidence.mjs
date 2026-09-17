@@ -30,12 +30,12 @@ const SUCCESS_FIXTURE = Object.freeze({
   source: "const answer = 42;\n",
   blob: "5c947feee9cbb434b57ed2e576b643e99e35e782",
   expectedNormalizedSourceSha256: "8691f74ea796569734dafffbbcb79088362b52c3cef154aa0d8f32696d2d4737",
-  modelBytesSha256: "baabdf99753c1d9ff090ead67b914a6654eaed2a7eb5934a602192949451b7d1",
+  modelBytesSha256: "b7bae3dc4ba98bf412ed2598bf2a647f46eb2e99f551096f315af41e564dbeb1",
 });
 const CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'";
 const INTERACTIVE_FIXTURE_PATH = path.join(projectRoot, "test", "fixtures", "interactive", "fixture.json");
 const INTERACTIVE_FIXTURE_SHA256 = "5085a17a80aa57fc7fd49b0e8ec0de0e6a82b3a894bcb7c30528bb084ed7488a";
-const INTERACTIVE_MODEL_SHA256 = "e4c1de484f03b75051f75fa6976bec43cd2d404c1a61c8868297edcf4078a636";
+const INTERACTIVE_MODEL_SHA256 = "01dbbb2bb381af333ac102e03c881e65f685cc0d825e1a09923f1ab32952ae1d";
 
 function invariant(condition, message) {
   if (!condition) throw new Error(message);
@@ -195,7 +195,7 @@ function deriveInteractiveJourneyPoints({ message, matrix, rectangle, orderedPat
     return { index, point: hits[0]?.index === index ? project(anchor) : null };
   }).filter(({ index, point }) => index !== targetIndex && point !== null
     && Math.hypot(point.x - target.x, point.y - target.y) > 2);
-  assert(alternates.length > 0, "no second visible fixture building was available for distinct cues");
+  assert(alternates.length > 0, "no second visible fixture building was available for distinct focus");
   return {
     targetIndex,
     target,
@@ -333,14 +333,15 @@ function pageObservationSource() {
     HTMLCanvasElement.prototype.getContext = function(kind, attributes) {
       const actual = acquire.call(this, kind, attributes);
       if (kind !== "webgl2" || !actual) return actual;
-      const record = { uploads: [], subUploads: [], matrices: [], outlineMatrices: [], hoverMatrices: [], draws: [], outlineDraws: [], hoverDraws: [], cueIdentities: [], shaderSources: [], clearColors: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
+      const record = { uploads: [], subUploads: [], matrices: [], selectionFocusMatrices: [], hoverFocusMatrices: [], draws: [], selectionFocusDraws: [], hoverFocusDraws: [], focusStates: [], uniformUpdates: [], shaderSources: [], clearColors: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, hoverIndex: -1, selectionIndex: -1, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
       const programKinds = new Map();
       const vaoKinds = new Map();
+      const uniformNames = new Map();
       let programCount = 0;
       let vaoCount = 0;
       let currentProgram = null;
       let currentVao = null;
-      const resourceKind = (count) => count === 1 ? "city" : count === 2 ? "selection" : count === 3 ? "hover" : "unexpected";
+      const resourceKind = (count) => count === 1 ? "city" : "unexpected";
       evidence.contexts.push(record);
       return new Proxy(actual, { get(target, property) {
         if (property === "createProgram") return () => {
@@ -373,6 +374,18 @@ function pageObservationSource() {
           record.shaderSources.push(source);
           return target.shaderSource(shader, source);
         };
+        if (property === "getUniformLocation") return (program, name) => {
+          const location = target.getUniformLocation(program, name);
+          if (location) uniformNames.set(location, name);
+          return location;
+        };
+        if (property === "uniform1i") return (location, value) => {
+          const name = uniformNames.get(location);
+          record.uniformUpdates.push({ name, value });
+          if (name === "u_hoverIndex") record.hoverIndex = value;
+          if (name === "u_selectionIndex") record.selectionIndex = value;
+          return target.uniform1i(location, value);
+        };
         if (property === "uniformMatrix4fv") return (location, transpose, matrix) => {
           record.lastMatrix = Array.from(matrix);
           return target.uniformMatrix4fv(location, transpose, matrix);
@@ -384,26 +397,15 @@ function pageObservationSource() {
         if (property === "drawElementsInstanced") return (...args) => {
           const program = programKinds.get(currentProgram);
           const vao = vaoKinds.get(currentVao);
-          if (program !== vao) throw new Error("Bound program/VAO identity differs");
-          if (args[0] === 0x0001) {
-            if (program === "hover") {
-              record.hoverDraws.push(args.slice(1));
-              record.hoverMatrices.push(record.lastMatrix);
-              record.operations.push("hover");
-            } else if (program === "selection") {
-              record.outlineDraws.push(args.slice(1));
-              record.outlineMatrices.push(record.lastMatrix);
-              record.operations.push("outline");
-            } else {
-              throw new Error("Line draw used an unknown cue identity");
-            }
-            record.cueIdentities.push({ kind: program, program, vao });
-          } else {
-            if (program !== "city") throw new Error("Fill draw used a cue identity");
-            record.draws.push(args.slice(1));
-            record.matrices.push(record.lastMatrix);
-            record.operations.push("city");
-          }
+          if (program !== "city" || vao !== "city" || args[0] !== 0x0004) throw new Error("Non-fill draw identity");
+          const draw = args.slice(1);
+          const focus = { hover: record.hoverIndex, selection: record.selectionIndex };
+          record.draws.push(draw);
+          record.matrices.push(record.lastMatrix);
+          record.focusStates.push(focus);
+          if (focus.hover >= 0) { record.hoverFocusDraws.push(draw); record.hoverFocusMatrices.push(record.lastMatrix); }
+          if (focus.selection >= 0) { record.selectionFocusDraws.push(draw); record.selectionFocusMatrices.push(record.lastMatrix); }
+          record.operations.push("city");
           return target.drawElementsInstanced(...args);
         };
         if (property === "disable") return (...args) => {
@@ -605,12 +607,13 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const first = await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===1`, "first successful city");
     invariant(first === true, "First successful package run did not publish");
 
-    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
+    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,legends:document.querySelectorAll('[data-city] [data-palette-legend]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
     assert.equal(cleared.commit, "");
     assert.equal(cleared.canvases, 0);
     assert.equal(cleared.inspectors, 0);
+    assert.equal(cleared.legends, 0);
     assert.equal(cleared.children, 0);
-    assert.deepEqual(cleared.deletes, { shader: 6, program: 3, buffer: 9, vao: 3 });
+    assert.deepEqual(cleared.deletes, { shader: 2, program: 1, buffer: 3, vao: 1 });
 
     await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===2&&globalThis.__codeCitySuccessEvidence.contexts.length===2`, "second successful city");
     await Promise.all(childInstallations);
@@ -634,28 +637,28 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await evaluate("document.querySelector('[data-city] canvas').scrollIntoView({block:'center'});true");
     await new Promise((resolve) => setTimeout(resolve, 50));
     const hoverPoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,left:r.left,top:r.top,right:r.right,bottom:r.bottom}; })()`);
-    const hoverStart = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,outline:context.outlineDraws.length,hover:context.hoverDraws.length,identities:context.cueIdentities.length,subUploads:context.subUploads.length,operations:context.operations.length,uploads:JSON.stringify(context.uploads),frames:{...globalThis.__codeCitySuccessEvidence.hoverFrames}}; })()`);
+    const hoverStart = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,selection:context.selectionFocusDraws.length,hover:context.hoverFocusDraws.length,states:context.focusStates.length,uniforms:context.uniformUpdates.length,subUploads:context.subUploads.length,operations:context.operations.length,uploads:JSON.stringify(context.uploads),frames:{...globalThis.__codeCitySuccessEvidence.hoverFrames}}; })()`);
     await dispatchPointer({ type: "mouseMoved", x: hoverPoint.x - 2, y: hoverPoint.y });
     await dispatchPointer({ type: "mouseMoved", x: hoverPoint.x + 2, y: hoverPoint.y });
     await dispatchPointer({ type: "mouseMoved", x: hoverPoint.x, y: hoverPoint.y });
-    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].hoverDraws.length>=${hoverStart.hover + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native burst hover");
-    const burstHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {cityDraws:context.draws.length-${hoverStart.city},outlineDraws:context.outlineDraws.length-${hoverStart.outline},hoverDraws:context.hoverDraws.length-${hoverStart.hover},cueIdentities:context.cueIdentities.slice(${hoverStart.identities}),subUploads:context.subUploads.length-${hoverStart.subUploads},hoverArgs:context.hoverDraws.slice(${hoverStart.hover}),fullBoxIndices:context.uploads[7],fixedSlate:context.shaderSources.some(source=>source.includes('o_color = vec4(148.0 / 255.0, 163.0 / 255.0, 184.0 / 255.0, 1.0);')),inspectorHidden:inspector.hidden,inspectorText:inspector.textContent,frames:{...globalThis.__codeCitySuccessEvidence.hoverFrames}}; })()`);
-    const cameraHoverStart = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); canvas.focus(); const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,outline:context.outlineDraws.length,hover:context.hoverDraws.length}; })()`);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].hoverFocusDraws.length>=${hoverStart.hover + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native burst hover");
+    const burstHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {cityDraws:context.draws.length-${hoverStart.city},selectionFocusDraws:context.selectionFocusDraws.length-${hoverStart.selection},hoverFocusDraws:context.hoverFocusDraws.length-${hoverStart.hover},focusStates:context.focusStates.slice(${hoverStart.states}),uniforms:context.uniformUpdates.slice(${hoverStart.uniforms}),subUploads:context.subUploads.length-${hoverStart.subUploads},hoverArgs:context.hoverFocusDraws.slice(${hoverStart.hover}),inspectorHidden:inspector.hidden,inspectorText:inspector.textContent,frames:{...globalThis.__codeCitySuccessEvidence.hoverFrames}}; })()`);
+    const cameraHoverStart = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); canvas.focus(); const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,selection:context.selectionFocusDraws.length,hover:context.hoverFocusDraws.length}; })()`);
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, text: "d" });
-    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].hoverDraws.length>=${cameraHoverStart.hover + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "no-motion camera hover renewal");
-    const cameraHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {cityDraws:context.draws.length-${cameraHoverStart.city},outlineDraws:context.outlineDraws.length-${cameraHoverStart.outline},hoverDraws:context.hoverDraws.length-${cameraHoverStart.hover}}; })()`);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].hoverFocusDraws.length>=${cameraHoverStart.hover + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "no-motion camera hover renewal");
+    const cameraHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {cityDraws:context.draws.length-${cameraHoverStart.city},selectionFocusDraws:context.selectionFocusDraws.length-${cameraHoverStart.selection},hoverFocusDraws:context.hoverFocusDraws.length-${cameraHoverStart.hover}}; })()`);
     const leaveStart = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].draws.length");
     await dispatchPointer({ type: "mouseMoved", x: 2, y: 2 });
     await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${leaveStart + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native pointer leave clear");
-    const leaveHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {cityDraws:context.draws.length-${leaveStart},hoverDraws:context.hoverDraws.length-${cameraHoverStart.hover + cameraHover.hoverDraws}}; })()`);
-    const reenterStart = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,hover:context.hoverDraws.length}; })()`);
+    const leaveHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {cityDraws:context.draws.length-${leaveStart},hoverFocusDraws:context.hoverFocusDraws.length-${cameraHoverStart.hover + cameraHover.hoverFocusDraws}}; })()`);
+    const reenterStart = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,hover:context.hoverFocusDraws.length}; })()`);
     await dispatchPointer({ type: "mouseMoved", x: hoverPoint.x, y: hoverPoint.y });
-    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].hoverDraws.length>=${reenterStart.hover + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native pointer re-entry hover");
-    const reenterHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {cityDraws:context.draws.length-${reenterStart.city},hoverDraws:context.hoverDraws.length-${reenterStart.hover}}; })()`);
-    const resetHoverStart = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,hover:context.hoverDraws.length}; })()`);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].hoverFocusDraws.length>=${reenterStart.hover + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native pointer re-entry hover");
+    const reenterHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {cityDraws:context.draws.length-${reenterStart.city},hoverFocusDraws:context.hoverFocusDraws.length-${reenterStart.hover}}; })()`);
+    const resetHoverStart = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,hover:context.hoverFocusDraws.length}; })()`);
     await dispatchKey({ key: "0", code: "Digit0", virtualKey: 48, text: "0" });
-    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].hoverDraws.length>=${resetHoverStart.hover + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native Reset hover renewal");
-    const resetHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {cityDraws:context.draws.length-${resetHoverStart.city},hoverDraws:context.hoverDraws.length-${resetHoverStart.hover}}; })()`);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].hoverFocusDraws.length>=${resetHoverStart.hover + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native Reset hover renewal");
+    const resetHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {cityDraws:context.draws.length-${resetHoverStart.city},hoverFocusDraws:context.hoverFocusDraws.length-${resetHoverStart.hover}}; })()`);
     const finalLeaveStart = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].draws.length");
     await dispatchPointer({ type: "mouseMoved", x: 2, y: 2 });
     await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${finalLeaveStart + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native final hover clear");
@@ -664,7 +667,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const navigationStart = await evaluate(`(() => {
       const canvas=document.querySelector('[data-city] canvas');
       const context=globalThis.__codeCitySuccessEvidence.contexts[1];
-      return {draws:context.draws.length,outlineDraws:context.outlineDraws.length,hoverDraws:context.hoverDraws.length,matrices:context.matrices.length,outlineMatrices:context.outlineMatrices.length,hoverMatrices:context.hoverMatrices.length,subUploads:context.subUploads.length,operations:context.operations.length,uploads:context.uploads.map(bytes=>bytes.length),matrix:context.matrices.at(-1),eventCounts:Object.fromEntries(Object.entries(globalThis.__navigationEvidence).map(([key,value])=>[key,value.length])),rect:(()=>{const r=canvas.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()};
+      return {draws:context.draws.length,selectionFocusDraws:context.selectionFocusDraws.length,hoverFocusDraws:context.hoverFocusDraws.length,matrices:context.matrices.length,selectionFocusMatrices:context.selectionFocusMatrices.length,hoverFocusMatrices:context.hoverFocusMatrices.length,subUploads:context.subUploads.length,operations:context.operations.length,uploads:context.uploads.map(bytes=>bytes.length),matrix:context.matrices.at(-1),eventCounts:Object.fromEntries(Object.entries(globalThis.__navigationEvidence).map(([key,value])=>[key,value.length])),rect:(()=>{const r=canvas.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()};
     })()`);
     await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
     const focusedCanvas = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); const style=getComputedStyle(canvas); return {active:document.activeElement===canvas,tabIndex:canvas.tabIndex,label:canvas.getAttribute("aria-label"),description:canvas.getAttribute("aria-describedby"),outlineStyle:style.outlineStyle,outlineWidth:style.outlineWidth,outlineColor:style.outlineColor}; })()`);
@@ -673,7 +676,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, text: "d", autoRepeat: true });
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, modifiers: 2, text: "d" });
     await dispatchKey({ key: "ArrowRight", code: "ArrowRight", virtualKey: 39 });
-    const selectedByKeyboard = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); const path=inspector.querySelector('[data-canonical-path]'); const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {hidden:inspector.hidden,pathText:path.textContent,pathTag:path.tagName,sourceLines:inspector.querySelector('[data-source-lines]').textContent,executableUnits:inspector.querySelector('[data-executable-units]').textContent,maximumComplexity:inspector.querySelector('[data-maximum-complexity]').textContent,height:inspector.querySelector('[data-height]').textContent,width:inspector.querySelector('[data-width]').textContent,depth:inspector.querySelector('[data-depth]').textContent,range:inspector.querySelector('[data-selected-range]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent,legend:[...inspector.querySelectorAll('[data-palette-legend] li')].map(item=>item.textContent),links:inspector.querySelectorAll('a').length,tabIndex:inspector.tabIndex,label:inspector.getAttribute('aria-label'),role:inspector.getAttribute('role'),live:inspector.getAttribute('aria-live'),atomic:inspector.getAttribute('aria-atomic'),cityDraws:context.draws.length-${navigationStart.draws},outlineDraws:context.outlineDraws.length-${navigationStart.outlineDraws},subUploads:context.subUploads.length-${navigationStart.subUploads},exactReplica:JSON.stringify(context.subUploads[0])===JSON.stringify(context.uploads[2].slice(0,24)),operations:context.operations.slice(-5),outlineArgs:context.outlineDraws.at(-1),cueIdentity:context.cueIdentities.at(-1),fixedOffWhite:context.shaderSources.some(source=>source.includes('o_color = vec4(248.0 / 255.0, 250.0 / 255.0, 252.0 / 255.0, 1.0);')),polygonOffsetEnables:context.polygonOffsetEnables}; })()`);
+    const selectedByKeyboard = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); const path=inspector.querySelector('[data-canonical-path]'); const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {hidden:inspector.hidden,pathText:path.textContent,pathTag:path.tagName,sourceLines:inspector.querySelector('[data-source-lines]').textContent,executableUnits:inspector.querySelector('[data-executable-units]').textContent,maximumComplexity:inspector.querySelector('[data-maximum-complexity]').textContent,height:inspector.querySelector('[data-height]').textContent,width:inspector.querySelector('[data-width]').textContent,depth:inspector.querySelector('[data-depth]').textContent,range:inspector.querySelector('[data-selected-range]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent,legend:[...inspector.querySelectorAll('[data-palette-legend] li')].map(item=>item.textContent),links:inspector.querySelectorAll('a').length,tabIndex:inspector.tabIndex,label:inspector.getAttribute('aria-label'),role:inspector.getAttribute('role'),live:inspector.getAttribute('aria-live'),atomic:inspector.getAttribute('aria-atomic'),cityDraws:context.draws.length-${navigationStart.draws},selectionFocusDraws:context.selectionFocusDraws.length-${navigationStart.selectionFocusDraws},subUploads:context.subUploads.length-${navigationStart.subUploads},operations:context.operations.slice(-5),selectionArgs:context.selectionFocusDraws.at(-1),focusState:context.focusStates.at(-1),uniforms:context.uniformUpdates.slice(-2),polygonOffsetEnables:context.polygonOffsetEnables}; })()`);
     await dispatchKey({ key: "ArrowLeft", code: "ArrowLeft", virtualKey: 37, modifiers: 8 });
     await dispatchKey({ key: "ArrowDown", code: "ArrowDown", virtualKey: 40, autoRepeat: true });
     await dispatchKey({ key: "Home", code: "Home", virtualKey: 36 });
@@ -749,7 +752,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       const pointerDown=globalThis.__navigationEvidence.pointers.at(-1);
       const context=globalThis.__codeCitySuccessEvidence.contexts[1];
       const inspector=document.querySelector('[data-inspector]');
-      return {pointerId:pointerDown.pointerId,captured:canvas.hasPointerCapture(pointerDown.pointerId),pointerUpCount:globalThis.__navigationEvidence.pointers.filter(({type})=>type==='pointerup').length,selection:{hidden:inspector.hidden,path:inspector.querySelector('[data-canonical-path]').textContent},cityDraws:context.draws.length,outlineDraws:context.outlineDraws.length,operations:context.operations.length};
+      return {pointerId:pointerDown.pointerId,captured:canvas.hasPointerCapture(pointerDown.pointerId),pointerUpCount:globalThis.__navigationEvidence.pointers.filter(({type})=>type==='pointerup').length,selection:{hidden:inspector.hidden,path:inspector.querySelector('[data-canonical-path]').textContent},cityDraws:context.draws.length,selectionFocusDraws:context.selectionFocusDraws.length,operations:context.operations.length};
     })()`);
     assert.equal(outsideCapture.captured, true, JSON.stringify(outsideCapture));
     assert.deepEqual(outsideCapture.selection, { hidden: false, path: fixture.path });
@@ -765,7 +768,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       const context=globalThis.__codeCitySuccessEvidence.contexts[1];
       const pointerUps=globalThis.__navigationEvidence.pointers.filter(({type})=>type==='pointerup');
       const delivered=pointerUps.at(-1);
-      return {captured:canvas.hasPointerCapture(${outsideCapture.pointerId}),pointerUpCount:pointerUps.length,delivered:{type:delivered?.type,pointerId:delivered?.pointerId,button:delivered?.button,clientX:delivered?.clientX,clientY:delivered?.clientY,target:delivered?.target},selection:{hidden:inspector.hidden,text:inspector.textContent,path:inspector.querySelector('[data-canonical-path]')?.textContent??"",children:inspector.childNodes.length},cityDraws:context.draws.length-${outsideCapture.cityDraws},outlineDraws:context.outlineDraws.length-${outsideCapture.outlineDraws},operations:context.operations.slice(${outsideCapture.operations})};
+      return {captured:canvas.hasPointerCapture(${outsideCapture.pointerId}),pointerUpCount:pointerUps.length,delivered:{type:delivered?.type,pointerId:delivered?.pointerId,button:delivered?.button,clientX:delivered?.clientX,clientY:delivered?.clientY,target:delivered?.target},selection:{hidden:inspector.hidden,text:inspector.textContent,path:inspector.querySelector('[data-canonical-path]')?.textContent??"",children:inspector.childNodes.length},cityDraws:context.draws.length-${outsideCapture.cityDraws},selectionFocusDraws:context.selectionFocusDraws.length-${outsideCapture.selectionFocusDraws},operations:context.operations.slice(${outsideCapture.operations})};
     })()`);
     await evaluate(`document.body.style.minHeight="200vh";document.querySelector('[data-city] canvas').scrollIntoView({block:"center"});document.querySelector('[data-city] canvas').focus();true`);
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -800,7 +803,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const focusedReset = await evaluate("document.activeElement===document.querySelector('[data-city-reset]')");
     await dispatchKey({ key: "Enter", code: "Enter", virtualKey: 13, text: "\r" });
     await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 17}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "keyboard Reset redraw and hover renewal");
-    const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {draws:context.draws.length-${navigationStart.draws},outlineDraws:context.outlineDraws.length-${navigationStart.outlineDraws},hoverDraws:context.hoverDraws.length-${navigationStart.hoverDraws},matrices:context.matrices.slice(${navigationStart.matrices}),outlineMatrices:context.outlineMatrices.slice(${navigationStart.outlineMatrices}),hoverMatrices:context.hoverMatrices.slice(${navigationStart.hoverMatrices}),subUploads:context.subUploads.length-${navigationStart.subUploads},uploads:context.uploads.map(bytes=>bytes.length),events:Object.fromEntries(Object.entries(globalThis.__navigationEvidence).map(([key,value])=>[key,value.slice(${JSON.stringify(navigationStart.eventCounts)}[key])])),canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,selectionAfterCameraResizeReset:{hidden:inspector.hidden,path:inspector.querySelector('[data-canonical-path]').textContent,sourceLines:inspector.querySelector('[data-source-lines]').textContent,range:inspector.querySelector('[data-selected-range]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent}}; })()`);
+    const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {draws:context.draws.length-${navigationStart.draws},selectionFocusDraws:context.selectionFocusDraws.length-${navigationStart.selectionFocusDraws},hoverFocusDraws:context.hoverFocusDraws.length-${navigationStart.hoverFocusDraws},matrices:context.matrices.slice(${navigationStart.matrices}),selectionFocusMatrices:context.selectionFocusMatrices.slice(${navigationStart.selectionFocusMatrices}),hoverFocusMatrices:context.hoverFocusMatrices.slice(${navigationStart.hoverFocusMatrices}),subUploads:context.subUploads.length-${navigationStart.subUploads},uploads:context.uploads.map(bytes=>bytes.length),events:Object.fromEntries(Object.entries(globalThis.__navigationEvidence).map(([key,value])=>[key,value.slice(${JSON.stringify(navigationStart.eventCounts)}[key])])),canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,selectionAfterCameraResizeReset:{hidden:inspector.hidden,path:inspector.querySelector('[data-canonical-path]').textContent,sourceLines:inspector.querySelector('[data-source-lines]').textContent,range:inspector.querySelector('[data-selected-range]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent}}; })()`);
 
     const observed = await evaluate("globalThis.__codeCitySuccessEvidence");
     const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorHidden:document.querySelector('[data-inspector]')?.hidden,pathTag:document.querySelector('[data-canonical-path]')?.tagName,legendItems:document.querySelectorAll('[data-palette-legend] li').length,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName)})");
@@ -843,7 +846,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     }
     const presentationDigests = observed.contexts.map((context) => createHash("sha256").update(JSON.stringify({ uploads: context.uploads, matrices: context.matrices.slice(0, 1), draws: context.draws.slice(0, 1) })).digest("hex"));
     assert.equal(presentationDigests[0], presentationDigests[1]);
-    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [384, 36, 28, 96, 24, 24, 96, 24, 24]);
+    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [384, 36, 28]);
     assert.equal(observed.contexts[0].matrices.length, 1);
     assert.deepEqual(observed.contexts[0].draws, [[36, 5121, 0, 1]]);
     assert.deepEqual(observed.contexts[1].matrices[0], observed.contexts[0].matrices[0]);
@@ -858,19 +861,20 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(focusedInspector, true);
     assert.equal(focusedReset, true);
     assert.equal(hoverJourney.burst.cityDraws, 1);
-    assert.equal(hoverJourney.burst.outlineDraws, 0);
-    assert.equal(hoverJourney.burst.hoverDraws, 1);
-    assert.equal(hoverJourney.burst.subUploads, 1);
-    assert.deepEqual(hoverJourney.burst.hoverArgs, [[24, 5121, 0, 1]]);
-    assert.deepEqual(hoverJourney.burst.cueIdentities, [{ kind: "hover", program: "hover", vao: "hover" }]);
-    assert.deepEqual(hoverJourney.burst.fullBoxIndices, [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]);
-    assert.equal(hoverJourney.burst.fixedSlate, true);
+    assert.equal(hoverJourney.burst.selectionFocusDraws, 0);
+    assert.equal(hoverJourney.burst.hoverFocusDraws, 1);
+    assert.equal(hoverJourney.burst.subUploads, 0);
+    assert.deepEqual(hoverJourney.burst.hoverArgs, [[36, 5121, 0, 1]]);
+    assert.deepEqual(hoverJourney.burst.focusStates, [{ hover: 0, selection: -1 }]);
+    assert.deepEqual(hoverJourney.burst.uniforms, [
+      { name: "u_hoverIndex", value: 0 }, { name: "u_selectionIndex", value: -1 },
+    ]);
     assert.equal(hoverJourney.burst.inspectorHidden, true);
     assert.equal(hoverJourney.burst.inspectorText, "");
-    assert.deepEqual(hoverJourney.camera, { cityDraws: 3, outlineDraws: 0, hoverDraws: 1 });
-    assert.deepEqual(hoverJourney.leave, { cityDraws: 1, hoverDraws: 0 });
-    assert.deepEqual(hoverJourney.reenter, { cityDraws: 1, hoverDraws: 1 });
-    assert.deepEqual(hoverJourney.reset, { cityDraws: 3, hoverDraws: 1 });
+    assert.deepEqual(hoverJourney.camera, { cityDraws: 3, selectionFocusDraws: 0, hoverFocusDraws: 1 });
+    assert.deepEqual(hoverJourney.leave, { cityDraws: 1, hoverFocusDraws: 0 });
+    assert.deepEqual(hoverJourney.reenter, { cityDraws: 1, hoverFocusDraws: 1 });
+    assert.deepEqual(hoverJourney.reset, { cityDraws: 3, hoverFocusDraws: 1 });
     assert.equal(hoverJourney.metricUploadsUnchanged, true);
     assert.equal(hoverJourney.frames.maximumPending, 1);
     assert.equal(hoverJourney.frames.pending, 0);
@@ -885,15 +889,8 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       width: "4",
       depth: "4",
       range: "M = 1",
-      rgba: "#818CF8FF",
-      legend: [
-        "M = 0 — #A78BFAFF",
-        "M = 1 — #818CF8FF",
-        "M = 2–3 — #38BDF8FF",
-        "M = 4–7 — #2DD4BFFF",
-        "M = 8–15 — #A3E635FF",
-        "M = 16+ — #FACC15FF",
-      ],
+      rgba: "#84CC16FF",
+      legend: [],
       links: 0,
       tabIndex: 0,
       label: "Selected building metric explanation",
@@ -901,9 +898,21 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       live: "polite",
       atomic: "true",
     };
-    assert.deepEqual(selectedByKeyboard, { ...expectedInspector, cityDraws: 3, outlineDraws: 1, subUploads: 1, exactReplica: true, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"], outlineArgs: [24, 5121, 0, 1], cueIdentity: { kind: "selection", program: "selection", vao: "selection" }, fixedOffWhite: true, polygonOffsetEnables: 0 });
+    assert.deepEqual(selectedByKeyboard, {
+      ...expectedInspector,
+      cityDraws: 3,
+      selectionFocusDraws: 1,
+      subUploads: 0,
+      operations: ["city", "depth:on", "city", "depth:on", "city"],
+      selectionArgs: [36, 5121, 0, 1],
+      focusState: { hover: -1, selection: 0 },
+      uniforms: [
+        { name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: 0 },
+      ],
+      polygonOffsetEnables: 0,
+    });
     assert.deepEqual(clearedSelection, { hidden: true, text: "", children: 0, path: null });
-    assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, path: fixture.path, sourceLines: "1", range: "M = 1", rgba: "#818CF8FF" });
+    assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, path: fixture.path, sourceLines: "1", range: "M = 1", rgba: "#84CC16FF" });
     assert.deepEqual(primaryCapture, { focused: true, pointerId: 1, captured: true });
     assert.deepEqual(primaryReleased, { released: true, selectionRetained: true });
     assert.equal(pointerActivationCaptured, true);
@@ -919,25 +928,25 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       delivered: { type: "pointerup", pointerId: outsideCapture.pointerId, button: 0, clientX: outsideReleasePosition.x, clientY: outsideReleasePosition.y, target: "CANVAS" },
       selection: { hidden: true, text: "", path: "", children: 0 },
       cityDraws: 1,
-      outlineDraws: 0,
+      selectionFocusDraws: 0,
       operations: ["depth:on", "city"],
     });
     assert.equal(resizeReleasedCapture, true);
     assert.equal(resizeChangedMatrix, true);
     assert(scrollAfter > scrollBefore, `Wheel outside canvas did not retain browser scrolling: ${scrollBefore} -> ${scrollAfter}`);
     assert.equal(navigation.draws, 23);
-    assert.equal(navigation.outlineDraws, 17);
-    assert.equal(navigation.hoverDraws, 1);
+    assert.equal(navigation.selectionFocusDraws, 17);
+    assert.equal(navigation.hoverFocusDraws, 1);
     assert.equal(navigation.matrices.length, 23);
-    assert.equal(navigation.outlineMatrices.length, 17);
-    assert.equal(navigation.hoverMatrices.length, 1);
-    assert.equal(navigation.subUploads, 6);
+    assert.equal(navigation.selectionFocusMatrices.length, 17);
+    assert.equal(navigation.hoverFocusMatrices.length, 1);
+    assert.equal(navigation.subUploads, 0);
     assert.deepEqual(navigation.uploads, navigationStart.uploads);
     assert.deepEqual(navigation.matrices[8], navigationStart.matrix, "keyboard 0 did not restore the exact initial overview");
     assert.notDeepEqual(navigation.matrices[9], navigation.matrices[8], "native wheel did not zoom");
     assert.deepEqual(navigation.matrices.at(-1), keyboardResetMatrix, "native Reset button did not reproduce the keyboard resized overview");
-    assert(navigation.outlineMatrices.every((matrix) => navigation.matrices.some((cityMatrix) => JSON.stringify(cityMatrix) === JSON.stringify(matrix))), "outline did not reuse a city camera matrix");
-    assert(navigation.hoverMatrices.every((matrix) => navigation.matrices.some((cityMatrix) => JSON.stringify(cityMatrix) === JSON.stringify(matrix))), "hover did not reuse a city camera matrix");
+    assert(navigation.selectionFocusMatrices.every((matrix) => navigation.matrices.some((cityMatrix) => JSON.stringify(cityMatrix) === JSON.stringify(matrix))), "selection focus did not reuse a city camera matrix");
+    assert(navigation.hoverFocusMatrices.every((matrix) => navigation.matrices.some((cityMatrix) => JSON.stringify(cityMatrix) === JSON.stringify(matrix))), "hover focus did not reuse a city camera matrix");
     assert.deepEqual(navigation.canvasListeners.adds, [
       { type: "webglcontextlost", passive: true, once: true },
       { type: "keydown", passive: null, once: false },
@@ -973,29 +982,46 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert(navigation.events.pointers.some(({ type, target, defaultPrevented }) => type === "pointerdown" && target !== "CANVAS" && !defaultPrevented));
     assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target === "CANVAS" && defaultPrevented));
     assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target !== "CANVAS" && !defaultPrevented));
-    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, inspectors: 1, inspectorHidden: false, pathTag: "BDI", legendItems: 6, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview. Use the arrow keys to traverse buildings, Home or End to select the first or last building, and Escape to clear selection.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION"] });
+    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, inspectors: 1, inspectorHidden: false, pathTag: "BDI", legendItems: 6, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview. Use the arrow keys to traverse buildings, Home or End to select the first or last building, and Escape to clear selection.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION", "SECTION"] });
 
-    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: false }, sessionId);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const responsiveInspector = await evaluate(`(() => {
-      const city=document.querySelector('[data-city]').getBoundingClientRect();
-      const inspector=document.querySelector('[data-inspector]').getBoundingClientRect();
-      const path=document.querySelector('[data-canonical-path]');
-      const style=getComputedStyle(document.querySelector('[data-inspector]'));
-      const pathStyle=getComputedStyle(path);
-      return {viewport:innerWidth,city:{left:city.left,right:city.right,bottom:city.bottom,height:city.height},inspector:{left:inspector.left,right:inspector.right,bottom:inspector.bottom,height:inspector.height},overflowY:style.overflowY,position:style.position,pathOverflowWrap:pathStyle.overflowWrap,pathUnicodeBidi:pathStyle.unicodeBidi,canvasTabIndex:document.querySelector('[data-city] canvas').tabIndex,resetVisible:document.querySelector('[data-city-reset]').getBoundingClientRect().height>0};
-    })()`);
-    assert.equal(responsiveInspector.viewport, 390);
+    const layouts = [];
+    for (const expected of [
+      { width: 900, height: 900, columns: 6, rows: 1 },
+      { width: 600, height: 844, columns: 3, rows: 2 },
+      { width: 390, height: 844, columns: 2, rows: 3 },
+      { width: 320, height: 700, columns: 2, rows: 3 },
+    ]) {
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width: expected.width, height: expected.height, deviceScaleFactor: 1, mobile: false }, sessionId);
+      await evaluate("document.querySelector('[data-city] canvas').scrollIntoView({block:'center'});true");
+      await waitFor(`innerWidth===${expected.width}&&document.querySelector('[data-city] canvas').width===document.querySelector('[data-city]').clientWidth`, `${expected.width}px legend layout`);
+      const layout = await evaluate(`(() => {
+        const cityElement=document.querySelector('[data-city]');const city=cityElement.getBoundingClientRect();const canvas=document.querySelector('[data-city] canvas');const canvasRect=canvas.getBoundingClientRect();const inspector=document.querySelector('[data-inspector]').getBoundingClientRect();const legendElement=document.querySelector('[data-palette-legend]');const legend=legendElement.getBoundingClientRect();const reset=document.querySelector('[data-city-reset]').getBoundingClientRect();const style=getComputedStyle(legendElement);const title=legendElement.querySelector('h2');const titleStyle=getComputedStyle(title);const path=document.querySelector('[data-canonical-path]');const inspectorStyle=getComputedStyle(document.querySelector('[data-inspector]'));const pathStyle=getComputedStyle(path);return {viewport:innerWidth,city:{left:city.left,right:city.right,top:city.top,bottom:city.bottom,width:city.width,height:city.height,clientWidth:cityElement.clientWidth,clientHeight:cityElement.clientHeight},canvas:{left:canvasRect.left,right:canvasRect.right,top:canvasRect.top,bottom:canvasRect.bottom,width:canvasRect.width,height:canvasRect.height,backingWidth:canvas.width,backingHeight:canvas.height},inspector:{left:inspector.left,right:inspector.right,top:inspector.top,bottom:inspector.bottom,height:inspector.height},legend:{left:legend.left,right:legend.right,top:legend.top,bottom:legend.bottom,columns:style.gridTemplateColumns.split(' ').length,rows:new Set([...legendElement.querySelectorAll('li')].map(item=>item.offsetTop)).size,pointerEvents:style.pointerEvents,label:title.textContent,labelStart:titleStyle.gridColumnStart,labelEnd:titleStyle.gridColumnEnd,items:[...legendElement.querySelectorAll('li')].map(item=>item.textContent)},reset:{top:reset.top,bottom:reset.bottom,height:reset.height},hit:document.elementFromPoint(city.left+5,city.top+5)?.tagName,overflowY:inspectorStyle.overflowY,position:inspectorStyle.position,pathOverflowWrap:pathStyle.overflowWrap,pathUnicodeBidi:pathStyle.unicodeBidi,canvasTabIndex:canvas.tabIndex};
+      })()`);
+      assert.equal(layout.viewport, expected.width);
+      assert.equal(layout.legend.columns, expected.columns);
+      assert.equal(layout.legend.rows, expected.rows);
+      assert.equal(layout.legend.pointerEvents, "none");
+      assert.equal(layout.legend.label, "Complexity: low → high");
+      assert.equal(layout.legend.labelStart, "1");
+      assert.equal(layout.legend.labelEnd, "-1");
+      assert.deepEqual(layout.legend.items, ["M = 0", "M = 1", "M = 2–3", "M = 4–7", "M = 8–15", "M = 16+"]);
+      assert(layout.legend.top >= layout.canvas.bottom);
+      assert(layout.legend.left >= layout.city.left && layout.legend.right <= layout.city.right);
+      assert(layout.inspector.left >= layout.city.left && layout.inspector.right <= layout.city.right && layout.inspector.top >= layout.city.top && layout.inspector.bottom <= layout.city.bottom);
+      assert(layout.inspector.height <= layout.city.height);
+      assert(layout.reset.top >= layout.legend.bottom);
+      assert.equal(layout.canvas.backingWidth, layout.city.clientWidth);
+      assert.equal(layout.canvas.backingHeight, layout.city.clientHeight);
+      assert.equal(layout.hit, "CANVAS");
+      assert.equal(layout.canvasTabIndex, 0);
+      assert(layout.reset.height > 0);
+      layouts.push(layout);
+    }
+    const responsiveInspector=layouts[2];
     assert.equal(responsiveInspector.position, "absolute");
     assert.equal(responsiveInspector.overflowY, "auto");
     assert.equal(responsiveInspector.pathOverflowWrap, "anywhere");
     assert.equal(responsiveInspector.pathUnicodeBidi, "isolate");
-    assert(responsiveInspector.inspector.left >= responsiveInspector.city.left);
-    assert(responsiveInspector.inspector.right <= responsiveInspector.city.right);
-    assert(responsiveInspector.inspector.bottom <= responsiveInspector.city.bottom);
-    assert(responsiveInspector.inspector.height <= responsiveInspector.city.height);
-    assert.equal(responsiveInspector.canvasTabIndex, 0);
-    assert.equal(responsiveInspector.resetVisible, true);
     await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId);
 
     const actualNetwork = requestedUrls.slice(networkStart);
@@ -1010,7 +1036,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       const event=new Event('webglcontextlost',{cancelable:true});
       globalThis.__codeCitySuccessEvidence.contexts[1].forceLost=true;
       canvas.dispatchEvent(event);
-      return {defaultPrevented:event.defaultPrevented,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,listeners:globalThis.__codeCitySuccessEvidence.contexts[1].listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,deletes:globalThis.__codeCitySuccessEvidence.contexts[1].deletes};
+      return {defaultPrevented:event.defaultPrevented,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,legends:document.querySelectorAll('[data-city] [data-palette-legend]').length,children:document.querySelector('[data-city]').childNodes.length,listeners:globalThis.__codeCitySuccessEvidence.contexts[1].listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,deletes:globalThis.__codeCitySuccessEvidence.contexts[1].deletes};
     })()`);
     assert.deepEqual(contextLoss, {
       defaultPrevented: false,
@@ -1018,6 +1044,8 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       commit: fixture.selected,
       canvases: 0,
       inspectors: 0,
+      legends: 0,
+      children: 0,
       listeners: {
         adds: [
           { type: "webglcontextlost", passive: true, once: true },
@@ -1034,7 +1062,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
         removes: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu"],
       },
       resetListeners: { adds: 2, removes: 2 },
-      deletes: { shader: 6, program: 0, buffer: 0, vao: 0 },
+      deletes: { shader: 2, program: 0, buffer: 0, vao: 0 },
     });
 
     holdRevisionRequest = true;
@@ -1203,9 +1231,9 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       width: "10",
       depth: "10",
       range: "M = 16+",
-      rgba: "#FACC15FF",
+      rgba: "#EF4444FF",
       policy: "S cap 1000; displayed height range 4..40. U cap 100; displayed side range 3..18.",
-      legend: ["M = 0 — #A78BFAFF", "M = 1 — #818CF8FF", "M = 2–3 — #38BDF8FF", "M = 4–7 — #2DD4BFFF", "M = 8–15 — #A3E635FF", "M = 16+ — #FACC15FF"],
+      legend: [],
     };
     const initial = await evaluate(`(() => {
       const message=globalThis.__codeCitySuccessEvidence.messages[0];
@@ -1217,7 +1245,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     assert.equal(browserExceptions.length, 0);
     assert.equal(failedRequests.length, 0);
     assert.equal(initial.message.count, 18);
-    assert.deepEqual(initial.uploads, [384, 36, 504, 96, 24, 24, 96, 24, 24]);
+    assert.deepEqual(initial.uploads, [384, 36, 504]);
     assert.deepEqual(initial.draws, [[36, 5121, 0, 18]]);
     assert(initial.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")));
     assert(initial.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])));
@@ -1236,7 +1264,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       const context=evidence.contexts[0];
       const canvas=document.querySelector('[data-city] canvas');
       const rectangle=canvas.getBoundingClientRect();
-      return {message:evidence.messages[0],matrix:context.matrices.at(-1),rectangle:{left:rectangle.left,top:rectangle.top,width:rectangle.width,height:rectangle.height},draws:context.draws.length,clearColors:context.clearColors.length,hoverDraws:context.hoverDraws.length,subUploads:context.subUploads.length,frameRequests:evidence.hoverFrames.requests,canvasSize:{width:canvas.width,height:canvas.height},viewport:{width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio}};
+      return {message:evidence.messages[0],matrix:context.matrices.at(-1),rectangle:{left:rectangle.left,top:rectangle.top,width:rectangle.width,height:rectangle.height},draws:context.draws.length,clearColors:context.clearColors.length,hoverFocusDraws:context.hoverFocusDraws.length,subUploads:context.subUploads.length,frameRequests:evidence.hoverFrames.requests,canvasSize:{width:canvas.width,height:canvas.height},viewport:{width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio}};
     })()`);
     const settlePointer = async (point, label) => {
       const before = await evaluate("globalThis.__codeCitySuccessEvidence.hoverFrames.requests");
@@ -1266,15 +1294,14 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       const points = deriveInteractiveJourneyPoints({ ...start, orderedPaths, targetPath });
       const hoverUploadsBefore = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].subUploads.length");
       await settlePointer(points.target, `${label} canonical hover`);
-      await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length>${start.hoverDraws}`, `${label} hover cue`);
-      const targetCue = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {subUploads:context.subUploads.length,latest:context.subUploads.at(-1),expected:context.uploads[2].slice(${points.targetIndex}*28,${points.targetIndex}*28+24)}; })()`);
-      assert(targetCue.subUploads > hoverUploadsBefore, `${label} did not upload a hover cue`);
-      assert.deepEqual(targetCue.latest, targetCue.expected, `${label} hover cue lost canonical alignment`);
-      const hoverDrawsBeforeSelection = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length");
+      await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverFocusDraws.length>${start.hoverFocusDraws}`, `${label} hover focus`);
+      const targetFocus = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {subUploads:context.subUploads.length,focus:context.focusStates.at(-1),uniforms:context.uniformUpdates.slice(-2)}; })()`);
+      assert.equal(targetFocus.subUploads, hoverUploadsBefore, `${label} rewrote immutable uploads for hover focus`);
+      assert.deepEqual(targetFocus.focus, { hover: points.targetIndex, selection: -1 }, `${label} hover focus lost canonical alignment`);
+      assert.deepEqual(targetFocus.uniforms, [{ name: "u_hoverIndex", value: points.targetIndex }, { name: "u_selectionIndex", value: -1 }]);
+      const hoverFocusDrawsBeforeSelection = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].hoverFocusDraws.length");
       await settleClick(points.target, `${label} pointer selection`);
-      if (label === "overview") {
-        await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length>${hoverDrawsBeforeSelection}`, `${label} same-building cues`);
-      }
+      if (label === "overview") await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverFocusDraws.length>${hoverFocusDrawsBeforeSelection}`, `${label} same-building focus`);
       const activationEvents = await evaluate("globalThis.__interactivePointerEvents.slice(-2)");
       assert.deepEqual(activationEvents.map(({ type, pointerId, button, clientX, clientY }) => ({ type, pointerId, button, clientX, clientY })), [
         { type: "pointerdown", pointerId: activationEvents[0]?.pointerId, button: 0, clientX: activationEvents[0]?.clientX, clientY: activationEvents[0]?.clientY },
@@ -1282,29 +1309,17 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       ], `${label} native click was not a stationary primary release: ${JSON.stringify(activationEvents)}`);
       await assertInspector(`${label} pointer inspector; events=${JSON.stringify(activationEvents)}`);
       if (label === "overview") {
-        const sameBuildingCues = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {operations:context.operations.slice(-6),identities:context.cueIdentities.slice(-2),selectionArgs:context.outlineDraws.at(-1),hoverArgs:context.hoverDraws.at(-1),latestReplica:context.subUploads.at(-1),expectedReplica:context.uploads[2].slice(${points.targetIndex}*28,${points.targetIndex}*28+24)}; })()`);
-        assert.deepEqual(sameBuildingCues, {
-          operations: ["depth:on", "city", "depth:off", "outline", "hover", "depth:on"],
-          identities: [{ kind: "selection", program: "selection", vao: "selection" }, { kind: "hover", program: "hover", vao: "hover" }],
-          selectionArgs: [24, 5121, 0, 1],
-          hoverArgs: [24, 5121, 0, 1],
-          latestReplica: sameBuildingCues.expectedReplica,
-          expectedReplica: sameBuildingCues.expectedReplica,
-        }, `${label} same-building cues were not independently classified`);
+        const sameBuildingFocus = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {operation:context.operations.at(-1),focus:context.focusStates.at(-1),selectionArgs:context.selectionFocusDraws.at(-1),hoverArgs:context.hoverFocusDraws.at(-1),subUploads:context.subUploads.length,uniforms:context.uniformUpdates.slice(-2)}; })()`);
+        assert.deepEqual(sameBuildingFocus, { operation:"city", focus:{hover:points.targetIndex,selection:points.targetIndex}, selectionArgs:[36,5121,0,18], hoverArgs:[36,5121,0,18], subUploads:hoverUploadsBefore, uniforms:[{name:"u_hoverIndex",value:points.targetIndex},{name:"u_selectionIndex",value:points.targetIndex}] }, `${label} same-building surface focus was not classified`);
         const selectedObservation = await observation();
         const selectedPoints = deriveInteractiveJourneyPoints({ ...selectedObservation, orderedPaths, targetPath });
         const alternate = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); return ${JSON.stringify(selectedPoints.alternates)}.find(({point})=>document.elementFromPoint(point.x,point.y)===canvas) ?? null; })()`);
         assert.notEqual(alternate, null, `${label} had no second building exposed by the canvas`);
-        const hoverDrawsBeforeAlternate = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length");
+        const hoverFocusDrawsBeforeAlternate = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].hoverFocusDraws.length");
         await settlePointer(alternate.point, `${label} different-building hover`);
-        await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length>${hoverDrawsBeforeAlternate}`, `${label} different-building cues`);
-        const differentBuildingCues = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {operations:context.operations.slice(-6),identities:context.cueIdentities.slice(-2),latestReplica:context.subUploads.at(-1),expectedReplica:context.uploads[2].slice(${alternate.index}*28,${alternate.index}*28+24)}; })()`);
-        assert.deepEqual(differentBuildingCues, {
-          operations: ["depth:on", "city", "depth:off", "outline", "hover", "depth:on"],
-          identities: [{ kind: "selection", program: "selection", vao: "selection" }, { kind: "hover", program: "hover", vao: "hover" }],
-          latestReplica: differentBuildingCues.expectedReplica,
-          expectedReplica: differentBuildingCues.expectedReplica,
-        }, `${label} different-building cues lost selection-first identity`);
+        await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverFocusDraws.length>${hoverFocusDrawsBeforeAlternate}`, `${label} different-building focus`);
+        const differentBuildingFocus = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {operation:context.operations.at(-1),focus:context.focusStates.at(-1),subUploads:context.subUploads.length,uniforms:context.uniformUpdates.slice(-2)}; })()`);
+        assert.deepEqual(differentBuildingFocus, { operation:"city", focus:{hover:alternate.index,selection:points.targetIndex}, subUploads:hoverUploadsBefore, uniforms:[{name:"u_hoverIndex",value:alternate.index},{name:"u_selectionIndex",value:points.targetIndex}] }, `${label} different-building surface focus lost selection precedence`);
       }
       const intraGroupMiss = await visibleWhitespacePoint(points.intraGroupMisses, `${label} intra-group whitespace`);
       await settleClick(intraGroupMiss, `${label} intra-group activation miss`);
@@ -1317,7 +1332,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       const end = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {draws:context.draws.slice(${start.draws}),matrices:context.matrices.slice(${start.draws}),clearColors:context.clearColors.slice(${start.clearColors}),shaderSources:context.shaderSources,exactUploads:JSON.stringify(context.uploads)}; })()`);
       assert(end.draws.length > 0, `${label} produced no native frames`);
       assert(end.draws.every((draw) => JSON.stringify(draw) === JSON.stringify([36, 5121, 0, 18])), `${label} changed the single 18-instance fill draw`);
-      assert(end.matrices.every((matrix) => JSON.stringify(matrix) === JSON.stringify(start.matrix)), `${label} cues diverged from the camera matrix`);
+      assert(end.matrices.every((matrix) => JSON.stringify(matrix) === JSON.stringify(start.matrix)), `${label} focus diverged from the camera matrix`);
       assert.equal(end.clearColors.length, end.draws.length, `${label} shading frames did not clear exactly once`);
       assert(end.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])), `${label} background changed`);
       assert(end.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")), `${label} fixed face shading changed`);
@@ -1373,6 +1388,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     await assertPhase("resize");
 
     const beforeReset = await observation();
+    await evaluate("document.querySelector('[data-city-reset]').scrollIntoView({block:'center'});true");
     const resetPoint = await evaluate(`(() => { const rectangle=document.querySelector('[data-city-reset]').getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
     await nativeClick(resetPoint);
     await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${beforeReset.draws}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native Reset control");
@@ -1444,28 +1460,33 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(result.complexityMatrixRuns[0].densePackedByteLength, result.complexityMatrixRuns[1].densePackedByteLength);
   assert.equal(result.complexityMatrixRuns[0].runDigest, result.complexityMatrixRuns[1].runDigest);
   assert.equal(result.complexityMatrixRuns[0].observed.factsDigest, result.complexityMatrixRuns[1].observed.factsDigest);
-  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "outline", "accessibility", "inputCleanup", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
-  const outline = result.presentation.outline;
-  exactKeys(outline, ["allocationUploads", "updateBytes", "exactReplica", "selection", "camera", "resizeOutlineDraws", "reset", "clear", "immutableUploads", "shaderFixedOffWhite", "polygonOffsetEnables", "cleanup"], "Selection outline");
-  assert.deepEqual(outline.allocationUploads, [384, 36, 28, 96, 24, 24, 96, 24, 24, 384, 36, 28, 96, 24, 24, 96, 24, 24]);
-  assert.equal(outline.updateBytes.length, 24);
-  assert.equal(outline.exactReplica, true);
-  assert.deepEqual(outline.selection, { cityDraws: 1, outlineDraws: 1, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"], identities: [{ kind: "selection", program: "selection", vao: "selection" }] });
-  assert.deepEqual(outline.camera, { cityDraws: 1, outlineDraws: 1 });
-  assert.equal(outline.resizeOutlineDraws, 1);
-  assert.deepEqual(outline.reset, { cityDraws: 1, outlineDraws: 1 });
-  assert.deepEqual(outline.clear, { cityDraws: 1, outlineDraws: 0 });
-  assert.equal(outline.immutableUploads, true);
-  assert.equal(outline.shaderFixedOffWhite, true);
-  assert.equal(outline.polygonOffsetEnables, 0);
-  assert.deepEqual(outline.cleanup, { deleteShader: 12, deleteProgram: 6, deleteBuffer: 18, deleteVertexArray: 6 });
+  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "focus", "accessibility", "inputCleanup", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
+  const focus = result.presentation.focus;
+  exactKeys(focus, ["allocationUploads", "initialUniforms", "selection", "same", "hover", "clear", "camera", "reset", "immutableUploads", "subUploads", "shaderFocus", "faceShading", "polygonOffsetEnables", "cleanup"], "Surface focus");
+  assert.deepEqual(focus.allocationUploads, [384, 36, 28, 384, 36, 28]);
+  assert.deepEqual(focus.initialUniforms, [
+    [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }],
+    [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }],
+  ]);
+  assert.deepEqual(focus.selection, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: 0 }] });
+  assert.deepEqual(focus.same, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: 0 }, { name: "u_selectionIndex", value: 0 }] });
+  assert.deepEqual(focus.hover, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: 0 }, { name: "u_selectionIndex", value: -1 }] });
+  assert.deepEqual(focus.clear, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }] });
+  assert.deepEqual(focus.camera, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }] });
+  assert.deepEqual(focus.reset, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }] });
+  assert.equal(focus.immutableUploads, true);
+  assert.equal(focus.subUploads, 0);
+  assert.equal(focus.shaderFocus, true);
+  assert.equal(focus.faceShading, true);
+  assert.equal(focus.polygonOffsetEnables, 0);
+  assert.deepEqual(focus.cleanup, { deleteShader: 4, deleteProgram: 2, deleteBuffer: 6, deleteVertexArray: 2 });
   assert.deepEqual(result.presentation, {
     webgl2Available: true,
     actualContexts: 4,
     initialDraws: 1,
     repeatDraws: 1,
     resizeDraws: 1,
-    outline,
+    focus,
     accessibility: {
       tabIndex: 0,
       label: "Interactive code city",
@@ -1484,10 +1505,10 @@ function validateBrowserResult(result, expectedAssets) {
     lossOrdering: {
       semanticPresentAtNotification: true,
       hostChildrenAtNotification: 2,
-      cleanupAtNotification: { deleteShader: 6, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
+      cleanupAtNotification: { deleteShader: 2, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
       semanticPresentAfterControllerClear: false,
     },
-    lossCleanup: { deleteShader: 6, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
+    lossCleanup: { deleteShader: 2, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
     lossTerminalState: { retainedCallbacks: 1, failures: 1, drawsAfterTerminal: 0, canvases: 1, hostChildren: 0, cleanupUnchanged: true },
     compileFailureResult: { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" },
     compileFailureDraws: 0,

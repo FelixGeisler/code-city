@@ -402,58 +402,23 @@ test("native picking misses both intra-group and inter-group whitespace in group
   }
 });
 
-test("expanded selection corners remain finite and strictly depth-contained through every camera transition", () => {
-  const bounds = [0, 0, 0, 136_000, 40, 136_000];
-  const buildingMinimum = [135_982, 0, 135_982];
-  const buildingDimensions = [18, 40, 18];
-  const dimensions = { width: 4096, height: 2160 };
-  const resizedDimensions = { width: 900, height: 1600 };
-  const centre = [68_000, 20, 68_000];
-  const expandedUnitCoordinates = [-1 / 64, 65 / 64];
-  const corners = [];
-  for (const z of expandedUnitCoordinates) {
-    for (const y of expandedUnitCoordinates) {
-      for (const x of expandedUnitCoordinates) {
-        corners.push([
-          buildingMinimum[0] - centre[0] + x * buildingDimensions[0],
-          buildingMinimum[1] - centre[1] + y * buildingDimensions[1],
-          buildingMinimum[2] - centre[2] + z * buildingDimensions[2],
-        ]);
-      }
-    }
+test("surface focus stays display-only and preserves real-AABB picking", async () => {
+  const presenter = await readFile(path.join(root, "src/edge/city-presenter.ts"), "utf8");
+  for (const statement of [
+    "uniform int u_hoverIndex;",
+    "uniform int u_selectionIndex;",
+    "displayed = 0.70 * ordinary;",
+    "mix(displayed, ordinary, 0.15)",
+    "mix(ordinary, vec3(1.0), 0.15)",
+    "gl.uniform1i(hoverUniform, session.hover ?? -1)",
+    "gl.uniform1i(selectionUniform, session.selection ?? -1)",
+  ]) assert(presenter.includes(statement), statement);
+  for (const removed of ["SELECTION_BOX_POSITIONS", "HOVER_BOX_POSITIONS", "BOX_EDGE_INDICES", "bufferSubData", "DYNAMIC_DRAW", "gl.LINES"]) {
+    assert.equal(presenter.includes(removed), false, removed);
   }
-  assert.equal(corners.length, 8);
-  assert(corners.flat().every(Number.isFinite));
-  assert(Math.max(...corners.flat().map(Math.abs)) < 68_000.625);
-  assert(68_000.625 < 2 ** 17);
-  assert.deepEqual(buildingDimensions.map((value) => value / 64), [0.28125, 0.625, 0.28125]);
-
-  const overview = success(resetCamera(bounds, dimensions), "selection overview");
-  const orbit = success(orbitCameraByPointer(overview.state, bounds, dimensions, 128, -32, 4096, 2160), "selection orbit");
-  const pan = success(panCameraByKeyboard(orbit.state, bounds, dimensions, "D"), "selection pan");
-  const zoom = success(zoomCamera(pan.state, bounds, dimensions, "in"), "selection zoom");
-  const resize = success(resizeCamera(zoom.state, bounds, resizedDimensions), "selection resize");
-  const restored = success(resetCamera(bounds, resizedDimensions), "selection Reset");
-  for (const [label, transition] of Object.entries({ overview, orbit, pan, zoom, resize, Reset: restored })) {
-    assert.equal(transition.view.centre[0], centre[0], label);
-    assert.equal(transition.view.centre[1], centre[1], label);
-    assert.equal(transition.view.centre[2], centre[2], label);
-    for (const corner of corners) {
-      const matrix = transition.view.matrix;
-      const clip = [
-        matrix[0] * corner[0] + matrix[4] * corner[1] + matrix[8] * corner[2] + matrix[12],
-        matrix[1] * corner[0] + matrix[5] * corner[1] + matrix[9] * corner[2] + matrix[13],
-        matrix[2] * corner[0] + matrix[6] * corner[1] + matrix[10] * corner[2] + matrix[14],
-      ];
-      assert(clip.every(Number.isFinite), `${label} produced a non-finite expanded corner`);
-      const depth = success(calculateOracleDepth(matrix, corner), `${label} expanded depth`).depth;
-      assert(-1 < depth && depth < 1, `${label} expanded depth ${depth} was not strict`);
-    }
-  }
-
   const realBuildingBounds = [135_982, 0, 135_982, 136_000, 40, 136_000];
-  const expandedOnlyRay = { origin: [135_982 - 0.1, 20, 135_981], direction: [0, 0, 1] };
-  assert.equal(success(intersectRayAabb(expandedOnlyRay, realBuildingBounds), "real AABB picking").tEnter, null);
+  const outsideRay = { origin: [135_982 - 0.1, 20, 135_981], direction: [0, 0, 1] };
+  assert.equal(success(intersectRayAabb(outsideRay, realBuildingBounds), "real AABB picking").tEnter, null);
 });
 
 test("the full 4,000-city envelope keeps immutable dimensions and origin-C endpoints exact through deterministic pans", () => {
@@ -487,27 +452,40 @@ test("the full 4,000-city envelope keeps immutable dimensions and origin-C endpo
   assert.deepEqual(bytes(city.geometry.sizes), originalSizes);
 });
 
-test("the amended ADR bytes and requirements are synchronized to the exact numeric contract", async () => {
-  const adr = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0011-interactive-webgl2-navigation-and-inspection.adoc"));
-  assert.equal(adr.byteLength, 18_610);
-  assert.equal(createHash("sha256").update(adr).digest("hex"), "ac393fe3997b8821acd646eb80a564e2cafae86864b05abe8bbb2b25134bb059");
-  assert.equal(adr.at(-1), 10);
-  const adr12 = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc"), "utf8");
-  assert.match(adr12, /^Status:: Accepted$/mu);
-  assert.equal(createHash("sha256").update(adr12.replace("Status:: Accepted", "Status:: Proposed")).digest("hex"), "4d8dcc45129af0681888294c1c5d6d6488d3e0a49c03676fe666598b2cfc45fa");
+test("accepted ADR history and current surface-focus requirements stay synchronized", async () => {
+  const adrFiles = [
+    ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 4_058, "10c512a85b2f10ececbe27dc27721e609c41ebb40a88617c2fbf0f90641251dc"],
+    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 19_273, "4b9e9c5b84b7cf9c28c1d7fe4fc5c0cb843a1aee6683662481c2c8c9d1143d5f"],
+    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 13_070, "d5bd8956047cf7c9ab3177c73a620e23e4c6674fe661e824a93545c98243d2cc"],
+  ];
+  const adrs = [];
+  for (const [file, expectedLength, expectedHash] of adrFiles) {
+    const text = await readFile(path.join(root, "docs/modules/architecture/pages/adr", file), "utf8");
+    const bytes = Buffer.from(text.replaceAll("\r\n", "\n"));
+    assert.equal(bytes.byteLength, expectedLength, file);
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), expectedHash, file);
+    assert.equal(bytes.at(-1), 10, file);
+    assert.match(text, /^Status:: Accepted$/mu, file);
+    adrs.push(text);
+  }
+  assert(adrs[0].includes("issues/569"));
+  assert(adrs[1].includes("Subsequent refinement (issue 569)"));
+  assert(adrs[2].includes("Subsequent refinement (issue 569)"));
   const requirements = await readFile(path.join(root, "docs/modules/requirements/pages/city-and-failures.adoc"), "utf8");
-  const normalizedRequirements = requirements.replace(/\s+/g, " ");
+  const normalized = requirements.replace(/\s+/g, " ");
   for (const statement of [
     "`m[2]`, `m[6]`, `m[10]`, and `m[14]`",
     "`-1 < depth && depth < 1`",
     "not a claim of bit-identical WebGL/GLSL operation ordering or GPU depth",
-    "`#F8FAFCFF` frame over all 12 edges",
-    "`-1/64` and `65/64`",
-    "`#94A3B8FF` frame over all 12 edges of the exact building AABB",
-    "Selection draws first and hover second",
     "real AABBs, or CPU picking",
     "rejects the whole transition atomically as *Presentation failed* / `M1-PRES-1`",
-  ]) assert(normalizedRequirements.includes(statement), statement);
+    "#22C55EFF", "#84CC16FF", "#FACC15FF", "#F59E0BFF", "#F97316FF", "#EF4444FF",
+    "D = 0.70", "H = 0.15", "u_hoverIndex", "u_selectionIndex", "112420",
+    "Complexity: low → high", "M = 16+", "One program, one VAO, three immutable buffers",
+  ]) assert(normalized.includes(statement), statement);
+  for (const superseded of ["#F8FAFCFF", "#94A3B8FF", "-1/64", "65/64", "Selection draws first and hover second"]) {
+    assert.equal(normalized.includes(superseded), false, superseded);
+  }
   const source = await readFile(path.join(root, "src/domain/camera-picking-policy.ts"), "utf8");
   for (const forbidden of ["document.", "window.", "WebGL", "addEventListener", "requestAnimationFrame", "Worker("]) {
     assert.equal(source.includes(forbidden), false, forbidden);

@@ -40,9 +40,10 @@ through a presenter or evidence observer
 snapshots, index proofs, geometry-only observers, and sentinel privacy tests
 
 |Interaction usability and visual imbalance
-|Controls, cues, or inspector layout could obscure the city, become
-unpredictable, or rely on metric colour
-|Keep fixed accessible controls and textual redundancy; issue
+|Controls, surface focus, inspector, or persistent legend layout could obscure
+the city, become unpredictable, intercept picking, or rely on colour alone
+|Keep fixed accessible controls, numeric legend labels, external reserved legend
+space, and textual redundancy; issue
 https://github.com/FelixGeisler/code-city/issues/537[#537] performs one common
 representative visual review before M2 release
 
