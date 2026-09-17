@@ -62,6 +62,17 @@ function groupIdentity(modulePath) {
   return segments.length >= 2 ? segments.slice(0, 2).join("/") : segments[0] ?? "_root";
 }
 
+function matrixDerivedElevation(matrix, label) {
+  assert.equal(matrix.length, 16, `${label} matrix length`);
+  const cameraDirection = [-matrix[2], -matrix[6], -matrix[10]];
+  assert(cameraDirection.every(Number.isFinite), `${label} camera direction is non-finite`);
+  const length = Math.hypot(...cameraDirection);
+  assert(Number.isFinite(length) && length > 0, `${label} camera direction is degenerate`);
+  const sineElevation = cameraDirection[1] / length;
+  assert(sineElevation >= -1 && sineElevation <= 1, `${label} elevation sine is outside [-1,1]`);
+  return Math.asin(sineElevation);
+}
+
 function lineIntervalThroughBox(anchor, direction, origin, size) {
   let minimum = Number.NEGATIVE_INFINITY;
   let maximum = Number.POSITIVE_INFINITY;
@@ -1247,10 +1258,10 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
     await assertCleared("native keyboard clear");
 
-    const drag = async (button, horizontalDivisor, verticalDivisor, label) => {
+    const drag = async (button, horizontalFraction, verticalFraction, label) => {
       const before = await observation();
       const start = { x: before.rectangle.left + before.rectangle.width / 2, y: before.rectangle.top + before.rectangle.height / 2 };
-      const end = { x: start.x + before.rectangle.width / horizontalDivisor, y: start.y + before.rectangle.height / verticalDivisor };
+      const end = { x: start.x + before.rectangle.width * horizontalFraction, y: start.y + before.rectangle.height * verticalFraction };
       const buttons = button === "left" ? 1 : 2;
       await dispatchPointer({ type: "mouseMoved", ...start });
       await dispatchPointer({ type: "mousePressed", ...start, button, buttons });
@@ -1259,10 +1270,19 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${before.draws}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, label);
       const after = await observation();
       assert.notDeepEqual(after.matrix, before.matrix, `${label} did not change the camera`);
+      return { before, after };
     };
-    await drag("left", 16, 20, "native orbit");
-    await assertPhase("orbit");
-    await drag("right", 20, -16, "native pan");
+    const upwardOrbit = await drag("left", 0, -1 / 20, "native upward primary orbit");
+    const elevationBeforeUp = matrixDerivedElevation(upwardOrbit.before.matrix, "before upward primary orbit");
+    const elevationAfterUp = matrixDerivedElevation(upwardOrbit.after.matrix, "after upward primary orbit");
+    assert(elevationAfterUp < elevationBeforeUp, `upward primary drag did not lower matrix-derived elevation: ${elevationBeforeUp} -> ${elevationAfterUp}`);
+    await assertPhase("orbit-up");
+    const downwardOrbit = await drag("left", 0, 1 / 20, "native downward primary orbit");
+    const elevationBeforeDown = matrixDerivedElevation(downwardOrbit.before.matrix, "before downward primary orbit");
+    const elevationAfterDown = matrixDerivedElevation(downwardOrbit.after.matrix, "after downward primary orbit");
+    assert(elevationAfterDown > elevationBeforeDown, `downward primary drag did not raise matrix-derived elevation: ${elevationBeforeDown} -> ${elevationAfterDown}`);
+    await assertPhase("orbit-down");
+    await drag("right", 1 / 20, -1 / 16, "native pan");
     await assertPhase("pan");
 
     const beforeZoom = await observation();

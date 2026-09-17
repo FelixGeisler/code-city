@@ -1048,7 +1048,19 @@ test("primary orbit and secondary pan use exact pointer deltas, focus, capture, 
   assert.equal(expected.kind, "success");
   assert.deepEqual(matrices(canvas.gl).at(-1), expected.view.matrix);
 
-  const primaryUp = inputEvent({ pointerId: 7, button: 0, clientX: 51, clientY: 40 });
+  const upwardMove = inputEvent({ pointerId: 7, button: -1, clientX: 51, clientY: 30 });
+  expected = orbitCameraByPointer(expected.state, geometry.bounds, { width: 200, height: 100 }, 0, -10, 200, 100);
+  canvas.dispatch("pointermove", upwardMove);
+  assert.equal(expected.kind, "success");
+  assert.deepEqual(matrices(canvas.gl).at(-1), expected.view.matrix);
+
+  const downwardMove = inputEvent({ pointerId: 7, button: -1, clientX: 51, clientY: 45 });
+  expected = orbitCameraByPointer(expected.state, geometry.bounds, { width: 200, height: 100 }, 0, 15, 200, 100);
+  canvas.dispatch("pointermove", downwardMove);
+  assert.equal(expected.kind, "success");
+  assert.deepEqual(matrices(canvas.gl).at(-1), expected.view.matrix);
+
+  const primaryUp = inputEvent({ pointerId: 7, button: 0, clientX: 51, clientY: 45 });
   canvas.dispatch("pointerup", primaryUp);
   assert.deepEqual(canvas.releaseCalls, [7]);
   assert.deepEqual([...canvas.pointerCaptures], []);
