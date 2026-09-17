@@ -78,7 +78,10 @@ class FakeGl {
     this.calls = [];
     this.uploads = [];
     this.subUploads = [];
+    this.drawObservations = [];
     this.nextResource = 0;
+    this.currentProgram = null;
+    this.currentVao = null;
     this.lost = false;
   }
   get drawingBufferWidth() { return this.options.drawingBufferMismatch ? this.canvas.width + 1 : this.canvas.width; }
@@ -110,11 +113,11 @@ class FakeGl {
   linkProgram(...args) { this.call("linkProgram", args); }
   getProgramParameter(...args) { return this.call("getProgramParameter", args, this.options.linkStatus !== false); }
   getUniformLocation(...args) { return this.call("getUniformLocation", args, this.options.nullUniform ? null : { kind: "Uniform", id: ++this.nextResource }); }
-  useProgram(...args) { this.call("useProgram", args); }
+  useProgram(program) { this.call("useProgram", [program]); this.currentProgram = program; }
   uniformMatrix4fv(...args) { this.call("uniformMatrix4fv", [args[0], args[1], new Float32Array(args[2])]); }
   deleteProgram(...args) { this.call("deleteProgram", args); }
   createVertexArray() { return this.resource("VertexArray"); }
-  bindVertexArray(...args) { this.call("bindVertexArray", args); }
+  bindVertexArray(vao) { this.call("bindVertexArray", [vao]); this.currentVao = vao; }
   deleteVertexArray(...args) { this.call("deleteVertexArray", args); }
   createBuffer() { return this.resource("Buffer"); }
   bindBuffer(...args) { this.call("bindBuffer", args); }
@@ -136,7 +139,10 @@ class FakeGl {
   clearDepth(...args) { this.call("clearDepth", args); }
   clear(...args) { this.call("clear", args); }
   drawElements(...args) { this.call("drawElements", args); }
-  drawElementsInstanced(...args) { this.call("drawElementsInstanced", args); }
+  drawElementsInstanced(...args) {
+    this.drawObservations.push({ program: this.currentProgram, vao: this.currentVao, args: [...args] });
+    this.call("drawElementsInstanced", args);
+  }
 }
 
 class FakeLifecycleTarget {
@@ -399,7 +405,8 @@ function expectedInitialCalls() {
   const hoverIndexBuffer = { kind: "Buffer", id: 23 };
   const hoverInstanceBuffer = { kind: "Buffer", id: 24 };
   const positionBytes = new Uint8Array(new Float32Array(literals.cubePositions).buffer);
-  const boxPositionBytes = new Uint8Array(new Float32Array(literals.boxPositions).buffer);
+  const selectionPositionBytes = new Uint8Array(new Float32Array(literals.selectionBoxPositions).buffer);
+  const hoverPositionBytes = new Uint8Array(new Float32Array(literals.hoverBoxPositions).buffer);
   return [
     ["getContextAttributes"],
     ["isContextLost"], ["getError"],
@@ -467,7 +474,7 @@ function expectedInitialCalls() {
     ["isContextLost"], ["getError"],
     ["createShader", GL.FRAGMENT_SHADER],
     ["isContextLost"], ["getError"],
-    ["shaderSource", outlineFragmentShader, literals.outlineFragmentShader],
+    ["shaderSource", outlineFragmentShader, literals.selectionFragmentShader],
     ["compileShader", outlineFragmentShader],
     ["getShaderParameter", outlineFragmentShader, GL.COMPILE_STATUS],
     ["isContextLost"], ["getError"],
@@ -493,12 +500,12 @@ function expectedInitialCalls() {
     ["isContextLost"], ["getError"],
     ["bindVertexArray", outlineVao],
     ["bindBuffer", GL.ARRAY_BUFFER, outlinePositionBuffer],
-    ["bufferData", GL.ARRAY_BUFFER, boxPositionBytes, GL.STATIC_DRAW],
+    ["bufferData", GL.ARRAY_BUFFER, selectionPositionBytes, GL.STATIC_DRAW],
     ["isContextLost"], ["getError"],
     ["enableVertexAttribArray", 0],
     ["vertexAttribPointer", 0, 3, GL.FLOAT, false, 0, 0],
     ["bindBuffer", GL.ELEMENT_ARRAY_BUFFER, outlineIndexBuffer],
-    ["bufferData", GL.ELEMENT_ARRAY_BUFFER, new Uint8Array(literals.outlineIndices), GL.STATIC_DRAW],
+    ["bufferData", GL.ELEMENT_ARRAY_BUFFER, new Uint8Array(literals.selectionIndices), GL.STATIC_DRAW],
     ["isContextLost"], ["getError"],
     ["bindBuffer", GL.ARRAY_BUFFER, outlineInstanceBuffer],
     ["bufferData", GL.ARRAY_BUFFER, new Uint8Array(24), GL.DYNAMIC_DRAW],
@@ -544,7 +551,7 @@ function expectedInitialCalls() {
     ["isContextLost"], ["getError"],
     ["bindVertexArray", hoverVao],
     ["bindBuffer", GL.ARRAY_BUFFER, hoverPositionBuffer],
-    ["bufferData", GL.ARRAY_BUFFER, boxPositionBytes, GL.STATIC_DRAW],
+    ["bufferData", GL.ARRAY_BUFFER, hoverPositionBytes, GL.STATIC_DRAW],
     ["isContextLost"], ["getError"],
     ["enableVertexAttribArray", 0],
     ["vertexAttribPointer", 0, 3, GL.FLOAT, false, 0, 0],
@@ -584,7 +591,7 @@ test("cube, indices, shaders, context request, complete setup/draw calls, matrix
   assert.deepEqual([...canvas.gl.uploads[1].bytes], literals.cubeIndices);
   assert.equal(canvas.gl.uploads[1].byteLength, 36);
   const shaderSources = canvas.gl.calls.filter((call) => call[0] === "shaderSource").map((call) => call[2]);
-  assert.deepEqual(shaderSources, [literals.vertexShader, literals.fragmentShader, literals.outlineVertexShader, literals.outlineFragmentShader, literals.outlineVertexShader, literals.hoverFragmentShader]);
+  assert.deepEqual(shaderSources, [literals.vertexShader, literals.fragmentShader, literals.outlineVertexShader, literals.selectionFragmentShader, literals.outlineVertexShader, literals.hoverFragmentShader]);
   assert(shaderSources.every((source) => source.charCodeAt(source.length - 1) === 10));
   assert.equal(canvas.contextRequest.kind, "webgl2");
   assert.deepEqual(canvas.contextRequest.attributes, { alpha: false, antialias: false, depth: true, desynchronized: false, failIfMajorPerformanceCaveat: false, powerPreference: "default", premultipliedAlpha: false, preserveDrawingBuffer: false, stencil: false, xrCompatible: false });
@@ -628,7 +635,7 @@ test("one instance uses exact target-relative float staging, state, and one inst
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, "g", oneBuilding()), COMMITTED);
   const gl = environment.canvases[0].gl;
-  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 28, 96, 24, 24, 96, 8, 24]);
+  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 28, 96, 24, 24, 96, 24, 24]);
   const instance = gl.uploads[2].bytes;
   const view = new DataView(instance.buffer, instance.byteOffset, instance.byteLength);
   assert.deepEqual(Array.from({ length: 6 }, (_, index) => view.getFloat32(index * 4, true)), [-1.5, -2, -1.5, 3, 4, 3]);
@@ -647,7 +654,7 @@ test("one instance uses exact target-relative float staging, state, and one inst
   assert.equal(environment.observers[0].observed, true);
 });
 
-test("selection and hover upload exact replicas and draw black full edges plus magenta top perimeter together", () => {
+test("selection and hover use exact nested 12-edge cues with stable program and VAO identities", () => {
   const model = buildCity([
     { canonicalPath: "a.js", S: 0, U: 0, M: 0 },
     { canonicalPath: "b.js", S: 3, U: 2, M: 7 },
@@ -658,58 +665,98 @@ test("selection and hover upload exact replicas and draw black full edges plus m
   const canvas = environment.canvases[0];
   const gl = canvas.gl;
   const immutableUploads = gl.uploads.map(({ bytes }) => [...bytes]);
+  const exactPositions = [
+    0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0,
+    0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1,
+  ];
+  const expandedPositions = exactPositions.map((coordinate) => coordinate === 0 ? -1 / 64 : 65 / 64);
+  const completeEdges = [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7];
+  assert.deepEqual(literals.selectionBoxPositions, expandedPositions);
+  assert.deepEqual(literals.hoverBoxPositions, exactPositions);
+  assert.deepEqual(literals.selectionIndices, completeEdges);
+  assert.deepEqual(literals.hoverIndices, completeEdges);
+  assert(literals.selectionBoxPositions.every(Number.isFinite));
+  assert(literals.hoverBoxPositions.every(Number.isFinite));
+  assert.deepEqual([...new Float32Array(gl.uploads[3].bytes.buffer)], expandedPositions);
+  assert.deepEqual([...new Float32Array(gl.uploads[6].bytes.buffer)], exactPositions);
+  assert.deepEqual([...gl.uploads[4].bytes], completeEdges);
+  assert.deepEqual([...gl.uploads[7].bytes], completeEdges);
+  assert.deepEqual(gl.uploads.slice(3).map(({ byteLength }) => byteLength), [96, 24, 24, 96, 24, 24]);
+  const edgeKeys = completeEdges.reduce((keys, vertex, index) => {
+    if (index % 2 === 0) return keys;
+    keys.push([completeEdges[index - 1], vertex].sort((left, right) => left - right).join("-"));
+    return keys;
+  }, []);
+  assert.equal(new Set(edgeKeys).size, 12);
+  assert.deepEqual(Array.from({ length: 8 }, (_, vertex) => completeEdges.filter((value) => value === vertex).length), new Array(8).fill(3));
+  for (let index = 0; index < exactPositions.length; index += 1) {
+    assert(expandedPositions[index] < exactPositions[index] || expandedPositions[index] > exactPositions[index]);
+  }
+  assert.match(literals.selectionFragmentShader, /vec4\(248\.0 \/ 255\.0, 250\.0 \/ 255\.0, 252\.0 \/ 255\.0, 1\.0\)/u);
+  assert.match(literals.hoverFragmentShader, /vec4\(148\.0 \/ 255\.0, 163\.0 \/ 255\.0, 184\.0 \/ 255\.0, 1\.0\)/u);
+
+  const drawsFor = (programId, vaoId) => gl.drawObservations.filter(({ program, vao }) => program?.id === programId && vao?.id === vaoId);
+  const cityDrawCount = () => drawsFor(3, 5).length;
+  const selectionDrawCount = () => drawsFor(11, 13).length;
+  const hoverDrawCount = () => drawsFor(19, 21).length;
+  const cityDraws = cityDrawCount();
+  const selectionDraws = selectionDrawCount();
   const callsBefore = gl.calls.length;
 
   assert.deepEqual(presenter.setVisualState(1, null, 1), APPLIED);
   assert.equal(gl.subUploads.length, 1);
+  assert.equal(gl.subUploads[0].byteLength, 24);
   assert.deepEqual([...gl.subUploads[0].bytes], [...gl.uploads[2].bytes.slice(28, 52)]);
   assert.deepEqual(gl.uploads.map(({ bytes }) => [...bytes]), immutableUploads);
   const selectionCalls = gl.calls.slice(callsBefore);
   const cityDraw = selectionCalls.findIndex((call) => call[0] === "drawElementsInstanced" && call[1] === GL.TRIANGLES);
-  const outlineDraw = selectionCalls.findIndex((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES);
-  assert(cityDraw >= 0 && outlineDraw > cityDraw);
-  assert.deepEqual(selectionCalls[outlineDraw], ["drawElementsInstanced", GL.LINES, 24, GL.UNSIGNED_BYTE, 0, 1]);
-  assert.deepEqual(selectionCalls[outlineDraw - 4], ["disable", GL.DEPTH_TEST]);
-  assert.equal(selectionCalls[outlineDraw - 3][0], "useProgram");
-  assert.equal(selectionCalls[outlineDraw - 2][0], "bindVertexArray");
-  assert.deepEqual(selectionCalls[outlineDraw + 1], ["enable", GL.DEPTH_TEST]);
+  const selectionDraw = selectionCalls.findIndex((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES);
+  assert(cityDraw >= 0 && selectionDraw > cityDraw);
+  assert.deepEqual(selectionCalls[selectionDraw], ["drawElementsInstanced", GL.LINES, 24, GL.UNSIGNED_BYTE, 0, 1]);
+  assert.deepEqual(selectionCalls[selectionDraw - 4], ["disable", GL.DEPTH_TEST]);
+  assert.deepEqual(selectionCalls[selectionDraw - 3], ["useProgram", { kind: "Program", id: 11 }]);
+  assert.deepEqual(selectionCalls[selectionDraw - 2], ["bindVertexArray", { kind: "VertexArray", id: 13 }]);
+  assert.deepEqual(selectionCalls[selectionDraw + 1], ["enable", GL.DEPTH_TEST]);
   assert.equal(selectionCalls.slice(cityDraw + 1).some((call) => call[0] === "disable" && call[1] === GL.POLYGON_OFFSET_FILL), false);
-  assert.match(literals.outlineFragmentShader, /vec4\(0\.0, 0\.0, 0\.0, 1\.0\)/u);
-  assert.deepEqual([...gl.uploads[4].bytes], literals.outlineIndices);
 
-  const cityDrawCount = () => gl.calls.filter((call) => call[0] === "drawElementsInstanced" && call[1] === GL.TRIANGLES).length;
-  const outlineDrawCount = () => gl.calls.filter((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES && call[2] === 24).length;
-  const hoverDrawCount = () => gl.calls.filter((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES && call[2] === 8).length;
-  const cityDraws = cityDrawCount();
-  const outlineDraws = outlineDrawCount();
   assert.deepEqual(presenter.setVisualState(1, 0, 1), APPLIED);
-  assert.equal(cityDrawCount(), cityDraws + 1);
-  assert.equal(outlineDrawCount(), outlineDraws + 1);
+  assert.equal(cityDrawCount(), cityDraws + 2);
+  assert.equal(selectionDrawCount(), selectionDraws + 2);
   assert.equal(hoverDrawCount(), 1);
   assert.equal(gl.subUploads.length, 2);
   assert.deepEqual([...gl.subUploads[1].bytes], [...gl.uploads[2].bytes.slice(0, 24)]);
-  assert.deepEqual([...gl.uploads[7].bytes], literals.hoverIndices);
-  assert.match(literals.hoverFragmentShader, /vec4\(1\.0, 0\.0, 1\.0, 1\.0\)/u);
+  const differentCueDraws = gl.drawObservations.slice(-3);
+  assert.deepEqual(differentCueDraws.map(({ program, vao, args }) => [program.id, vao.id, ...args.slice(0, 2)]), [
+    [3, 5, GL.TRIANGLES, 36], [11, 13, GL.LINES, 24], [19, 21, GL.LINES, 24],
+  ]);
+
   const sameCueStart = gl.calls.length;
   assert.deepEqual(presenter.setVisualState(1, 1, 1), APPLIED);
   assert.deepEqual([...gl.subUploads[2].bytes], [...gl.uploads[2].bytes.slice(28, 52)]);
-  const sameCueDraws = gl.calls.slice(sameCueStart).filter((call) => call[0] === "drawElementsInstanced");
-  assert.deepEqual(sameCueDraws.map((call) => call.slice(1, 3)), [[GL.TRIANGLES, 36], [GL.LINES, 24], [GL.LINES, 8]]);
+  const sameCueCalls = gl.calls.slice(sameCueStart);
+  assert.deepEqual(sameCueCalls.filter((call) => call[0] === "drawElementsInstanced").map((call) => call.slice(1, 3)), [
+    [GL.TRIANGLES, 36], [GL.LINES, 24], [GL.LINES, 24],
+  ]);
+  assert.deepEqual(sameCueCalls.filter((call) => (call[0] === "enable" || call[0] === "disable") && call[1] === GL.DEPTH_TEST), [
+    ["enable", GL.DEPTH_TEST], ["disable", GL.DEPTH_TEST], ["enable", GL.DEPTH_TEST],
+  ]);
+  assert.deepEqual(gl.drawObservations.slice(-3).map(({ program, vao }) => [program.id, vao.id]), [[3, 5], [11, 13], [19, 21]]);
 
   canvas.dispatch("keydown", inputEvent({ key: "d" }));
   environment.host.width = 240;
   environment.observers[0].callback();
   environment.resetControl.dispatch();
-  assert.equal(cityDrawCount(), cityDraws + 5);
-  assert.equal(outlineDrawCount(), outlineDraws + 5);
+  assert.equal(cityDrawCount(), cityDraws + 6);
+  assert.equal(selectionDrawCount(), selectionDraws + 6);
   assert.equal(hoverDrawCount(), 5);
   assert.equal(gl.subUploads.length, 3);
 
   assert.deepEqual(presenter.setVisualState(1, null, null), APPLIED);
-  assert.equal(cityDrawCount(), cityDraws + 6);
-  assert.equal(outlineDrawCount(), outlineDraws + 5);
+  assert.equal(cityDrawCount(), cityDraws + 7);
+  assert.equal(selectionDrawCount(), selectionDraws + 6);
   assert.equal(hoverDrawCount(), 5);
   assert.equal(gl.subUploads.length, 3);
+  assert.deepEqual(gl.uploads[2].bytes, new Uint8Array(immutableUploads[2]));
   assert.deepEqual(failures, []);
 });
 
@@ -881,7 +928,7 @@ test("outline update, draw, and depth restoration failures revoke the complete s
   }
 });
 
-test("hover upload, top-perimeter draw, and depth restoration failures revoke the complete session", () => {
+test("hover upload, whole-box draw, and depth restoration failures revoke the complete session", () => {
   for (const failure of ["bufferSubData", "hover draw", "depth restoration"]) {
     const environment = fakeEnvironment();
     const { presenter, failures } = failuresCollector(environment);
@@ -893,7 +940,7 @@ test("hover upload, top-perimeter draw, and depth restoration failures revoke th
       const draw = gl.drawElementsInstanced.bind(gl);
       gl.drawElementsInstanced = (...args) => {
         draw(...args);
-        if (args[0] === GL.LINES && args[1] === 8) throw new Error("injected hover draw");
+        if (args[0] === GL.LINES && gl.currentProgram?.id === 19 && gl.currentVao?.id === 21) throw new Error("injected hover draw");
       };
     }
     if (failure === "depth restoration") {
@@ -1508,7 +1555,7 @@ test("the complete 4,000-building model uploads exactly 112,000 bytes and draws 
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, 4000, model), COMMITTED);
   const gl = environment.canvases[0].gl;
-  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 112000, 96, 24, 24, 96, 8, 24]);
+  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 112000, 96, 24, 24, 96, 24, 24]);
   assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").at(-1).slice(1), [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 4000]);
 });
 

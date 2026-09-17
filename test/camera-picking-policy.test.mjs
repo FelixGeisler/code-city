@@ -402,6 +402,60 @@ test("native picking misses both intra-group and inter-group whitespace in group
   }
 });
 
+test("expanded selection corners remain finite and strictly depth-contained through every camera transition", () => {
+  const bounds = [0, 0, 0, 136_000, 40, 136_000];
+  const buildingMinimum = [135_982, 0, 135_982];
+  const buildingDimensions = [18, 40, 18];
+  const dimensions = { width: 4096, height: 2160 };
+  const resizedDimensions = { width: 900, height: 1600 };
+  const centre = [68_000, 20, 68_000];
+  const expandedUnitCoordinates = [-1 / 64, 65 / 64];
+  const corners = [];
+  for (const z of expandedUnitCoordinates) {
+    for (const y of expandedUnitCoordinates) {
+      for (const x of expandedUnitCoordinates) {
+        corners.push([
+          buildingMinimum[0] - centre[0] + x * buildingDimensions[0],
+          buildingMinimum[1] - centre[1] + y * buildingDimensions[1],
+          buildingMinimum[2] - centre[2] + z * buildingDimensions[2],
+        ]);
+      }
+    }
+  }
+  assert.equal(corners.length, 8);
+  assert(corners.flat().every(Number.isFinite));
+  assert(Math.max(...corners.flat().map(Math.abs)) < 68_000.625);
+  assert(68_000.625 < 2 ** 17);
+  assert.deepEqual(buildingDimensions.map((value) => value / 64), [0.28125, 0.625, 0.28125]);
+
+  const overview = success(resetCamera(bounds, dimensions), "selection overview");
+  const orbit = success(orbitCameraByPointer(overview.state, bounds, dimensions, 128, -32, 4096, 2160), "selection orbit");
+  const pan = success(panCameraByKeyboard(orbit.state, bounds, dimensions, "D"), "selection pan");
+  const zoom = success(zoomCamera(pan.state, bounds, dimensions, "in"), "selection zoom");
+  const resize = success(resizeCamera(zoom.state, bounds, resizedDimensions), "selection resize");
+  const restored = success(resetCamera(bounds, resizedDimensions), "selection Reset");
+  for (const [label, transition] of Object.entries({ overview, orbit, pan, zoom, resize, Reset: restored })) {
+    assert.equal(transition.view.centre[0], centre[0], label);
+    assert.equal(transition.view.centre[1], centre[1], label);
+    assert.equal(transition.view.centre[2], centre[2], label);
+    for (const corner of corners) {
+      const matrix = transition.view.matrix;
+      const clip = [
+        matrix[0] * corner[0] + matrix[4] * corner[1] + matrix[8] * corner[2] + matrix[12],
+        matrix[1] * corner[0] + matrix[5] * corner[1] + matrix[9] * corner[2] + matrix[13],
+        matrix[2] * corner[0] + matrix[6] * corner[1] + matrix[10] * corner[2] + matrix[14],
+      ];
+      assert(clip.every(Number.isFinite), `${label} produced a non-finite expanded corner`);
+      const depth = success(calculateOracleDepth(matrix, corner), `${label} expanded depth`).depth;
+      assert(-1 < depth && depth < 1, `${label} expanded depth ${depth} was not strict`);
+    }
+  }
+
+  const realBuildingBounds = [135_982, 0, 135_982, 136_000, 40, 136_000];
+  const expandedOnlyRay = { origin: [135_982 - 0.1, 20, 135_981], direction: [0, 0, 1] };
+  assert.equal(success(intersectRayAabb(expandedOnlyRay, realBuildingBounds), "real AABB picking").tEnter, null);
+});
+
 test("the full 4,000-city envelope keeps immutable dimensions and origin-C endpoints exact through deterministic pans", () => {
   const envelope = cityFixture.fullEnvelope;
   const facts = Array.from({ length: envelope.count }, (_, index) => ({
@@ -435,18 +489,23 @@ test("the full 4,000-city envelope keeps immutable dimensions and origin-C endpo
 
 test("the amended ADR bytes and requirements are synchronized to the exact numeric contract", async () => {
   const adr = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0011-interactive-webgl2-navigation-and-inspection.adoc"));
-  assert.equal(adr.byteLength, 18_232);
-  assert.equal(createHash("sha256").update(adr).digest("hex"), "4d9a3bbeb2728cbe3f763c65595bcdf85b50db4e00963bdde24070cd7d51df72");
+  assert.equal(adr.byteLength, 18_610);
+  assert.equal(createHash("sha256").update(adr).digest("hex"), "ac393fe3997b8821acd646eb80a564e2cafae86864b05abe8bbb2b25134bb059");
   assert.equal(adr.at(-1), 10);
   const adr12 = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc"), "utf8");
   assert.match(adr12, /^Status:: Accepted$/mu);
-  assert.equal(createHash("sha256").update(adr12.replace("Status:: Accepted", "Status:: Proposed")).digest("hex"), "5e461b7b7d1fb05d76bc6d2dba8b18aacf4a597d93ff7501a446727128723146");
+  assert.equal(createHash("sha256").update(adr12.replace("Status:: Accepted", "Status:: Proposed")).digest("hex"), "4d8dcc45129af0681888294c1c5d6d6488d3e0a49c03676fe666598b2cfc45fa");
   const requirements = await readFile(path.join(root, "docs/modules/requirements/pages/city-and-failures.adoc"), "utf8");
   const normalizedRequirements = requirements.replace(/\s+/g, " ");
   for (const statement of [
     "`m[2]`, `m[6]`, `m[10]`, and `m[14]`",
     "`-1 < depth && depth < 1`",
     "not a claim of bit-identical WebGL/GLSL operation ordering or GPU depth",
+    "`#F8FAFCFF` frame over all 12 edges",
+    "`-1/64` and `65/64`",
+    "`#94A3B8FF` frame over all 12 edges of the exact building AABB",
+    "Selection draws first and hover second",
+    "real AABBs, or CPU picking",
     "rejects the whole transition atomically as *Presentation failed* / `M1-PRES-1`",
   ]) assert(normalizedRequirements.includes(statement), statement);
   const source = await readFile(path.join(root, "src/domain/camera-picking-policy.ts"), "utf8");

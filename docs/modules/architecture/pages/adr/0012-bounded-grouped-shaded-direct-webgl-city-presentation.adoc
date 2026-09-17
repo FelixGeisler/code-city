@@ -128,6 +128,13 @@ ownership, generation gates, failures, context-loss handling, and exactly-once
 cleanup remain unchanged. The current complete-box selection and top-perimeter
 hover cues remain provisional and unchanged.
 
+Subsequent refinement::
+Issue https://github.com/FelixGeisler/code-city/issues/567[#567] supersedes only
+that provisional appearance with the nested whole-building cue policy in
+xref:requirements:city-and-failures.adoc#_selection_picking_and_hover[City and
+Failures]. Presenter ownership, draw passes, camera, picking, lifecycle, and
+resource policy remain unchanged.
+
 Picking ranges over the `count` actual building AABBs only. Intra-group and
 inter-group whitespace must miss. No plate, cell, padding region, or group
 bounds can be hit. Camera changes do not rewrite instance data.

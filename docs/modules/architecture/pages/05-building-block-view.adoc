@@ -17,7 +17,7 @@ reject stale messages
 
 |Interactive presenter |Main edge |Own stage tokens and sessions, canvas and DOM
 input, immutable-centre camera, pointer capture, request epoch, CPU picking,
-WebGL city and outline resources, and visual hover/selection replicas
+WebGL city and fixed cue-line resources, and visual hover/selection replicas
 
 |Worker pipeline coordinator |Worker application |Sequence capabilities and
 suppress downstream work after failure or cancellation

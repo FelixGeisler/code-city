@@ -25,7 +25,18 @@ const CUBE_VERTEX_DATA = new Float32Array([
   0, 1, 0, 2,  0, 1, 1, 2,  1, 1, 1, 2,  1, 1, 0, 2,
 ]);
 
-const BOX_POSITIONS = new Float32Array([
+const SELECTION_BOX_POSITIONS = new Float32Array([
+  -1 / 64, -1 / 64, -1 / 64,
+  65 / 64, -1 / 64, -1 / 64,
+  65 / 64, 65 / 64, -1 / 64,
+  -1 / 64, 65 / 64, -1 / 64,
+  -1 / 64, -1 / 64, 65 / 64,
+  65 / 64, -1 / 64, 65 / 64,
+  65 / 64, 65 / 64, 65 / 64,
+  -1 / 64, 65 / 64, 65 / 64,
+]);
+
+const HOVER_BOX_POSITIONS = new Float32Array([
   0, 0, 0,
   1, 0, 0,
   1, 1, 0,
@@ -41,14 +52,10 @@ const CUBE_INDICES = new Uint8Array([
   12, 13, 14, 12, 14, 15, 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23,
 ]);
 
-const OUTLINE_INDICES = new Uint8Array([
+const BOX_EDGE_INDICES = new Uint8Array([
   0, 1, 1, 2, 2, 3, 3, 0,
   4, 5, 5, 6, 6, 7, 7, 4,
   0, 4, 1, 5, 2, 6, 3, 7,
-]);
-
-const HOVER_INDICES = new Uint8Array([
-  4, 5, 5, 6, 6, 7, 7, 4,
 ]);
 
 const VERTEX_SHADER_SOURCE = `#version 300 es
@@ -107,7 +114,7 @@ precision highp float;
 layout(location = 0) out vec4 o_color;
 
 void main() {
-  o_color = vec4(0.0, 0.0, 0.0, 1.0);
+  o_color = vec4(248.0 / 255.0, 250.0 / 255.0, 252.0 / 255.0, 1.0);
 }
 `;
 
@@ -117,7 +124,7 @@ precision highp float;
 layout(location = 0) out vec4 o_color;
 
 void main() {
-  o_color = vec4(1.0, 0.0, 1.0, 1.0);
+  o_color = vec4(148.0 / 255.0, 163.0 / 255.0, 184.0 / 255.0, 1.0);
 }
 `;
 
@@ -478,7 +485,7 @@ function draw(session: Session<unknown>, size: Dimensions, view: CameraView): vo
           gl.useProgram(hoverProgram);
           gl.bindVertexArray(hoverVao);
           gl.uniformMatrix4fv(hoverUniform, false, matrix);
-          gl.drawElementsInstanced(LINES, 8, UNSIGNED_BYTE, 0, 1);
+          gl.drawElementsInstanced(LINES, 24, UNSIGNED_BYTE, 0, 1);
         }
       } catch (error) {
         cueFailed = true;
@@ -597,12 +604,12 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
 
   gl.bindVertexArray(session.outlineVao);
   gl.bindBuffer(ARRAY_BUFFER, session.outlinePositionBuffer);
-  gl.bufferData(ARRAY_BUFFER, BOX_POSITIONS, STATIC_DRAW);
+  gl.bufferData(ARRAY_BUFFER, SELECTION_BOX_POSITIONS, STATIC_DRAW);
   requireNoError(gl);
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 3, FLOAT, false, 0, 0);
   gl.bindBuffer(ELEMENT_ARRAY_BUFFER, session.outlineIndexBuffer);
-  gl.bufferData(ELEMENT_ARRAY_BUFFER, OUTLINE_INDICES, STATIC_DRAW);
+  gl.bufferData(ELEMENT_ARRAY_BUFFER, BOX_EDGE_INDICES, STATIC_DRAW);
   requireNoError(gl);
   gl.bindBuffer(ARRAY_BUFFER, session.outlineInstanceBuffer);
   gl.bufferData(ARRAY_BUFFER, session.outlineStaging, DYNAMIC_DRAW);
@@ -644,12 +651,12 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
 
   gl.bindVertexArray(session.hoverVao);
   gl.bindBuffer(ARRAY_BUFFER, session.hoverPositionBuffer);
-  gl.bufferData(ARRAY_BUFFER, BOX_POSITIONS, STATIC_DRAW);
+  gl.bufferData(ARRAY_BUFFER, HOVER_BOX_POSITIONS, STATIC_DRAW);
   requireNoError(gl);
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 3, FLOAT, false, 0, 0);
   gl.bindBuffer(ELEMENT_ARRAY_BUFFER, session.hoverIndexBuffer);
-  gl.bufferData(ELEMENT_ARRAY_BUFFER, HOVER_INDICES, STATIC_DRAW);
+  gl.bufferData(ELEMENT_ARRAY_BUFFER, BOX_EDGE_INDICES, STATIC_DRAW);
   requireNoError(gl);
   gl.bindBuffer(ARRAY_BUFFER, session.hoverInstanceBuffer);
   gl.bufferData(ARRAY_BUFFER, session.hoverStaging, DYNAMIC_DRAW);
