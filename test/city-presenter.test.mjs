@@ -1454,10 +1454,12 @@ test("closed failure stimuli fail synchronously after cleanup with no publicatio
   }
 });
 
-test("required uniform and partial allocation failures clean exactly the acquired resources", () => {
+test("required uniform lookup, initial set, and partial allocation failures clean exactly the acquired resources", () => {
   const faults = [
-    { id: "hover uniform", method: "getUniformLocation", occurrence: 2, result: null, deletes: { shader: 2, program: 1, vao: 0, buffer: 0 } },
-    { id: "selection uniform", method: "getUniformLocation", occurrence: 3, result: null, deletes: { shader: 2, program: 1, vao: 0, buffer: 0 } },
+    { id: "hover uniform lookup", method: "getUniformLocation", occurrence: 2, result: null, deletes: { shader: 2, program: 1, vao: 0, buffer: 0 } },
+    { id: "selection uniform lookup", method: "getUniformLocation", occurrence: 3, result: null, deletes: { shader: 2, program: 1, vao: 0, buffer: 0 } },
+    { id: "initial hover uniform set", method: "uniform1i", occurrence: 1, deletes: { shader: 2, program: 1, vao: 1, buffer: 3 } },
+    { id: "initial selection uniform set", method: "uniform1i", occurrence: 2, deletes: { shader: 2, program: 1, vao: 1, buffer: 3 } },
     { id: "vao", method: "createVertexArray", occurrence: 1, result: null, deletes: { shader: 2, program: 1, vao: 0, buffer: 0 } },
     { id: "position buffer", method: "createBuffer", occurrence: 1, result: null, deletes: { shader: 2, program: 1, vao: 1, buffer: 0 } },
     { id: "index buffer", method: "createBuffer", occurrence: 2, result: null, deletes: { shader: 2, program: 1, vao: 1, buffer: 1 } },

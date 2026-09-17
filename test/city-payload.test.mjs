@@ -35,6 +35,14 @@ const LITERAL_PALETTE_COLOURS = [
   [0xf9, 0x73, 0x16, 0xff],
   [0xef, 0x44, 0x44, 0xff],
 ];
+const LITERAL_OLD_PALETTE_CASES = [
+  { M: 0, rgba: [0xa7, 0x8b, 0xfa, 0xff] },
+  { M: 1, rgba: [0x81, 0x8c, 0xf8, 0xff] },
+  { M: 2, rgba: [0x38, 0xbd, 0xf8, 0xff] },
+  { M: 4, rgba: [0x2d, 0xd4, 0xbf, 0xff] },
+  { M: 8, rgba: [0xa3, 0xe6, 0x35, 0xff] },
+  { M: 16, rgba: [0xfa, 0xcc, 0x15, 0xff] },
+];
 const MAX_MODULE_BYTES = 2_097_152;
 const MAX_TOTAL_BYTES = 40 * 1_048_576;
 const MAX_MODULE_UNITS = 1 + Math.floor(MAX_MODULE_BYTES / 3);
@@ -151,6 +159,13 @@ test("controller validates literal palette boundaries and rejects independently 
     const forged = LITERAL_PALETTE_COLOURS.find((candidate) => candidate[0] !== rgba[0]);
     fails(literalPaletteCity(M, forged), `forged M=${M}`);
   }
+});
+
+test("controller rejects every former palette colour for its old band and approved RGB with wrong alpha", () => {
+  for (const { M, rgba } of LITERAL_OLD_PALETTE_CASES) {
+    fails(literalPaletteCity(M, rgba), `old palette M=${M}`);
+  }
+  fails(literalPaletteCity(1, [0x84, 0xcc, 0x16, 0xfe]), "wrong alpha M=1");
 });
 
 test("validator rejects count, canonical order, duplicate identity, dimensions, palette, index alignment, layout, and bounds disagreement", () => {
