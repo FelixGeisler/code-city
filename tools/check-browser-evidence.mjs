@@ -189,9 +189,17 @@ function deriveInteractiveJourneyPoints({ message, matrix, rectangle, orderedPat
   };
   const target = project(targetAnchor);
   assert.notEqual(target, null, "canonical fixture target projected outside the canvas");
+  const alternates = boxes.map((box, index) => {
+    const anchor = box.origin.map((component, axis) => component + box.size[axis] / 2);
+    const hits = intersections(anchor).sort((left, right) => right.interval.maximum - left.interval.maximum || left.index - right.index);
+    return { index, point: hits[0]?.index === index ? project(anchor) : null };
+  }).filter(({ index, point }) => index !== targetIndex && point !== null
+    && Math.hypot(point.x - target.x, point.y - target.y) > 2);
+  assert(alternates.length > 0, "no second visible fixture building was available for distinct cues");
   return {
     targetIndex,
     target,
+    alternates,
     intraGroupMisses: missPoints(true, "intra-group"),
     interGroupMisses: missPoints(false, "inter-group"),
   };
@@ -325,9 +333,34 @@ function pageObservationSource() {
     HTMLCanvasElement.prototype.getContext = function(kind, attributes) {
       const actual = acquire.call(this, kind, attributes);
       if (kind !== "webgl2" || !actual) return actual;
-      const record = { uploads: [], subUploads: [], matrices: [], outlineMatrices: [], hoverMatrices: [], draws: [], outlineDraws: [], hoverDraws: [], shaderSources: [], clearColors: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
+      const record = { uploads: [], subUploads: [], matrices: [], outlineMatrices: [], hoverMatrices: [], draws: [], outlineDraws: [], hoverDraws: [], cueIdentities: [], shaderSources: [], clearColors: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
+      const programKinds = new Map();
+      const vaoKinds = new Map();
+      let programCount = 0;
+      let vaoCount = 0;
+      let currentProgram = null;
+      let currentVao = null;
+      const resourceKind = (count) => count === 1 ? "city" : count === 2 ? "selection" : count === 3 ? "hover" : "unexpected";
       evidence.contexts.push(record);
       return new Proxy(actual, { get(target, property) {
+        if (property === "createProgram") return () => {
+          const program = target.createProgram();
+          if (program) programKinds.set(program, resourceKind(++programCount));
+          return program;
+        };
+        if (property === "createVertexArray") return () => {
+          const vao = target.createVertexArray();
+          if (vao) vaoKinds.set(vao, resourceKind(++vaoCount));
+          return vao;
+        };
+        if (property === "useProgram") return (program) => {
+          currentProgram = program;
+          return target.useProgram(program);
+        };
+        if (property === "bindVertexArray") return (vao) => {
+          currentVao = vao;
+          return target.bindVertexArray(vao);
+        };
         if (property === "bufferData") return (targetKind, data, usage) => {
           record.uploads.push(Array.from(new Uint8Array(data.buffer, data.byteOffset, data.byteLength)));
           return target.bufferData(targetKind, data, usage);
@@ -349,15 +382,24 @@ function pageObservationSource() {
           return target.clearColor(...args);
         };
         if (property === "drawElementsInstanced") return (...args) => {
-          if (args[0] === 0x0001 && args[1] === 8) {
-            record.hoverDraws.push(args.slice(1));
-            record.hoverMatrices.push(record.lastMatrix);
-            record.operations.push("hover");
-          } else if (args[0] === 0x0001) {
-            record.outlineDraws.push(args.slice(1));
-            record.outlineMatrices.push(record.lastMatrix);
-            record.operations.push("outline");
+          const program = programKinds.get(currentProgram);
+          const vao = vaoKinds.get(currentVao);
+          if (program !== vao) throw new Error("Bound program/VAO identity differs");
+          if (args[0] === 0x0001) {
+            if (program === "hover") {
+              record.hoverDraws.push(args.slice(1));
+              record.hoverMatrices.push(record.lastMatrix);
+              record.operations.push("hover");
+            } else if (program === "selection") {
+              record.outlineDraws.push(args.slice(1));
+              record.outlineMatrices.push(record.lastMatrix);
+              record.operations.push("outline");
+            } else {
+              throw new Error("Line draw used an unknown cue identity");
+            }
+            record.cueIdentities.push({ kind: program, program, vao });
           } else {
+            if (program !== "city") throw new Error("Fill draw used a cue identity");
             record.draws.push(args.slice(1));
             record.matrices.push(record.lastMatrix);
             record.operations.push("city");
@@ -592,12 +634,12 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await evaluate("document.querySelector('[data-city] canvas').scrollIntoView({block:'center'});true");
     await new Promise((resolve) => setTimeout(resolve, 50));
     const hoverPoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,left:r.left,top:r.top,right:r.right,bottom:r.bottom}; })()`);
-    const hoverStart = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,outline:context.outlineDraws.length,hover:context.hoverDraws.length,subUploads:context.subUploads.length,operations:context.operations.length,uploads:JSON.stringify(context.uploads),frames:{...globalThis.__codeCitySuccessEvidence.hoverFrames}}; })()`);
+    const hoverStart = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,outline:context.outlineDraws.length,hover:context.hoverDraws.length,identities:context.cueIdentities.length,subUploads:context.subUploads.length,operations:context.operations.length,uploads:JSON.stringify(context.uploads),frames:{...globalThis.__codeCitySuccessEvidence.hoverFrames}}; })()`);
     await dispatchPointer({ type: "mouseMoved", x: hoverPoint.x - 2, y: hoverPoint.y });
     await dispatchPointer({ type: "mouseMoved", x: hoverPoint.x + 2, y: hoverPoint.y });
     await dispatchPointer({ type: "mouseMoved", x: hoverPoint.x, y: hoverPoint.y });
     await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].hoverDraws.length>=${hoverStart.hover + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native burst hover");
-    const burstHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {cityDraws:context.draws.length-${hoverStart.city},outlineDraws:context.outlineDraws.length-${hoverStart.outline},hoverDraws:context.hoverDraws.length-${hoverStart.hover},subUploads:context.subUploads.length-${hoverStart.subUploads},hoverArgs:context.hoverDraws.slice(${hoverStart.hover}),topIndices:context.uploads[7],fixedMagenta:context.shaderSources.some(source=>source.includes('o_color = vec4(1.0, 0.0, 1.0, 1.0);')),inspectorHidden:inspector.hidden,inspectorText:inspector.textContent,frames:{...globalThis.__codeCitySuccessEvidence.hoverFrames}}; })()`);
+    const burstHover = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {cityDraws:context.draws.length-${hoverStart.city},outlineDraws:context.outlineDraws.length-${hoverStart.outline},hoverDraws:context.hoverDraws.length-${hoverStart.hover},cueIdentities:context.cueIdentities.slice(${hoverStart.identities}),subUploads:context.subUploads.length-${hoverStart.subUploads},hoverArgs:context.hoverDraws.slice(${hoverStart.hover}),fullBoxIndices:context.uploads[7],fixedSlate:context.shaderSources.some(source=>source.includes('o_color = vec4(148.0 / 255.0, 163.0 / 255.0, 184.0 / 255.0, 1.0);')),inspectorHidden:inspector.hidden,inspectorText:inspector.textContent,frames:{...globalThis.__codeCitySuccessEvidence.hoverFrames}}; })()`);
     const cameraHoverStart = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); canvas.focus(); const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {city:context.draws.length,outline:context.outlineDraws.length,hover:context.hoverDraws.length}; })()`);
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, text: "d" });
     await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].hoverDraws.length>=${cameraHoverStart.hover + 1}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "no-motion camera hover renewal");
@@ -631,7 +673,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, text: "d", autoRepeat: true });
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, modifiers: 2, text: "d" });
     await dispatchKey({ key: "ArrowRight", code: "ArrowRight", virtualKey: 39 });
-    const selectedByKeyboard = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); const path=inspector.querySelector('[data-canonical-path]'); const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {hidden:inspector.hidden,pathText:path.textContent,pathTag:path.tagName,sourceLines:inspector.querySelector('[data-source-lines]').textContent,executableUnits:inspector.querySelector('[data-executable-units]').textContent,maximumComplexity:inspector.querySelector('[data-maximum-complexity]').textContent,height:inspector.querySelector('[data-height]').textContent,width:inspector.querySelector('[data-width]').textContent,depth:inspector.querySelector('[data-depth]').textContent,range:inspector.querySelector('[data-selected-range]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent,legend:[...inspector.querySelectorAll('[data-palette-legend] li')].map(item=>item.textContent),links:inspector.querySelectorAll('a').length,tabIndex:inspector.tabIndex,label:inspector.getAttribute('aria-label'),role:inspector.getAttribute('role'),live:inspector.getAttribute('aria-live'),atomic:inspector.getAttribute('aria-atomic'),cityDraws:context.draws.length-${navigationStart.draws},outlineDraws:context.outlineDraws.length-${navigationStart.outlineDraws},subUploads:context.subUploads.length-${navigationStart.subUploads},exactReplica:JSON.stringify(context.subUploads[0])===JSON.stringify(context.uploads[2].slice(0,24)),operations:context.operations.slice(-5),outlineArgs:context.outlineDraws.at(-1),fixedBlack:context.shaderSources.some(source=>source.includes('o_color = vec4(0.0, 0.0, 0.0, 1.0);')),polygonOffsetEnables:context.polygonOffsetEnables}; })()`);
+    const selectedByKeyboard = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); const path=inspector.querySelector('[data-canonical-path]'); const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {hidden:inspector.hidden,pathText:path.textContent,pathTag:path.tagName,sourceLines:inspector.querySelector('[data-source-lines]').textContent,executableUnits:inspector.querySelector('[data-executable-units]').textContent,maximumComplexity:inspector.querySelector('[data-maximum-complexity]').textContent,height:inspector.querySelector('[data-height]').textContent,width:inspector.querySelector('[data-width]').textContent,depth:inspector.querySelector('[data-depth]').textContent,range:inspector.querySelector('[data-selected-range]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent,legend:[...inspector.querySelectorAll('[data-palette-legend] li')].map(item=>item.textContent),links:inspector.querySelectorAll('a').length,tabIndex:inspector.tabIndex,label:inspector.getAttribute('aria-label'),role:inspector.getAttribute('role'),live:inspector.getAttribute('aria-live'),atomic:inspector.getAttribute('aria-atomic'),cityDraws:context.draws.length-${navigationStart.draws},outlineDraws:context.outlineDraws.length-${navigationStart.outlineDraws},subUploads:context.subUploads.length-${navigationStart.subUploads},exactReplica:JSON.stringify(context.subUploads[0])===JSON.stringify(context.uploads[2].slice(0,24)),operations:context.operations.slice(-5),outlineArgs:context.outlineDraws.at(-1),cueIdentity:context.cueIdentities.at(-1),fixedOffWhite:context.shaderSources.some(source=>source.includes('o_color = vec4(248.0 / 255.0, 250.0 / 255.0, 252.0 / 255.0, 1.0);')),polygonOffsetEnables:context.polygonOffsetEnables}; })()`);
     await dispatchKey({ key: "ArrowLeft", code: "ArrowLeft", virtualKey: 37, modifiers: 8 });
     await dispatchKey({ key: "ArrowDown", code: "ArrowDown", virtualKey: 40, autoRepeat: true });
     await dispatchKey({ key: "Home", code: "Home", virtualKey: 36 });
@@ -695,7 +737,9 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await dispatchPointer({ type: "mousePressed", x: secondaryPoint.x, y: secondaryPoint.y, button: "right", buttons: 2 });
     await dispatchPointer({ type: "mouseMoved", x: secondaryPoint.x - 9, y: secondaryPoint.y + 7, buttons: 2 });
     await dispatchPointer({ type: "mouseReleased", x: secondaryPoint.x - 9, y: secondaryPoint.y + 7, button: "right", buttons: 0 });
-    const secondaryPanChanged = JSON.stringify(await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)")) !== JSON.stringify(beforeSecondaryDrag);
+    const beforeSecondaryPan = JSON.stringify(beforeSecondaryDrag);
+    await waitFor(`JSON.stringify(globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1))!==${JSON.stringify(beforeSecondaryPan)}`, "native secondary pan matrix");
+    const secondaryPanChanged = true;
 
     const outsideCapturePoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom}}; })()`);
     await dispatchPointer({ type: "mousePressed", x: outsideCapturePoint.x, y: outsideCapturePoint.y, button: "left", buttons: 1 });
@@ -799,7 +843,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     }
     const presentationDigests = observed.contexts.map((context) => createHash("sha256").update(JSON.stringify({ uploads: context.uploads, matrices: context.matrices.slice(0, 1), draws: context.draws.slice(0, 1) })).digest("hex"));
     assert.equal(presentationDigests[0], presentationDigests[1]);
-    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [384, 36, 28, 96, 24, 24, 96, 8, 24]);
+    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [384, 36, 28, 96, 24, 24, 96, 24, 24]);
     assert.equal(observed.contexts[0].matrices.length, 1);
     assert.deepEqual(observed.contexts[0].draws, [[36, 5121, 0, 1]]);
     assert.deepEqual(observed.contexts[1].matrices[0], observed.contexts[0].matrices[0]);
@@ -817,9 +861,10 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(hoverJourney.burst.outlineDraws, 0);
     assert.equal(hoverJourney.burst.hoverDraws, 1);
     assert.equal(hoverJourney.burst.subUploads, 1);
-    assert.deepEqual(hoverJourney.burst.hoverArgs, [[8, 5121, 0, 1]]);
-    assert.deepEqual(hoverJourney.burst.topIndices, [4, 5, 5, 6, 6, 7, 7, 4]);
-    assert.equal(hoverJourney.burst.fixedMagenta, true);
+    assert.deepEqual(hoverJourney.burst.hoverArgs, [[24, 5121, 0, 1]]);
+    assert.deepEqual(hoverJourney.burst.cueIdentities, [{ kind: "hover", program: "hover", vao: "hover" }]);
+    assert.deepEqual(hoverJourney.burst.fullBoxIndices, [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]);
+    assert.equal(hoverJourney.burst.fixedSlate, true);
     assert.equal(hoverJourney.burst.inspectorHidden, true);
     assert.equal(hoverJourney.burst.inspectorText, "");
     assert.deepEqual(hoverJourney.camera, { cityDraws: 3, outlineDraws: 0, hoverDraws: 1 });
@@ -856,7 +901,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       live: "polite",
       atomic: "true",
     };
-    assert.deepEqual(selectedByKeyboard, { ...expectedInspector, cityDraws: 3, outlineDraws: 1, subUploads: 1, exactReplica: true, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"], outlineArgs: [24, 5121, 0, 1], fixedBlack: true, polygonOffsetEnables: 0 });
+    assert.deepEqual(selectedByKeyboard, { ...expectedInspector, cityDraws: 3, outlineDraws: 1, subUploads: 1, exactReplica: true, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"], outlineArgs: [24, 5121, 0, 1], cueIdentity: { kind: "selection", program: "selection", vao: "selection" }, fixedOffWhite: true, polygonOffsetEnables: 0 });
     assert.deepEqual(clearedSelection, { hidden: true, text: "", children: 0, path: null });
     assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, path: fixture.path, sourceLines: "1", range: "M = 1", rgba: "#818CF8FF" });
     assert.deepEqual(primaryCapture, { focused: true, pointerId: 1, captured: true });
@@ -1172,7 +1217,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     assert.equal(browserExceptions.length, 0);
     assert.equal(failedRequests.length, 0);
     assert.equal(initial.message.count, 18);
-    assert.deepEqual(initial.uploads, [384, 36, 504, 96, 24, 24, 96, 8, 24]);
+    assert.deepEqual(initial.uploads, [384, 36, 504, 96, 24, 24, 96, 24, 24]);
     assert.deepEqual(initial.draws, [[36, 5121, 0, 18]]);
     assert(initial.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")));
     assert(initial.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])));
@@ -1225,13 +1270,42 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       const targetCue = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {subUploads:context.subUploads.length,latest:context.subUploads.at(-1),expected:context.uploads[2].slice(${points.targetIndex}*28,${points.targetIndex}*28+24)}; })()`);
       assert(targetCue.subUploads > hoverUploadsBefore, `${label} did not upload a hover cue`);
       assert.deepEqual(targetCue.latest, targetCue.expected, `${label} hover cue lost canonical alignment`);
+      const hoverDrawsBeforeSelection = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length");
       await settleClick(points.target, `${label} pointer selection`);
+      if (label === "overview") {
+        await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length>${hoverDrawsBeforeSelection}`, `${label} same-building cues`);
+      }
       const activationEvents = await evaluate("globalThis.__interactivePointerEvents.slice(-2)");
       assert.deepEqual(activationEvents.map(({ type, pointerId, button, clientX, clientY }) => ({ type, pointerId, button, clientX, clientY })), [
         { type: "pointerdown", pointerId: activationEvents[0]?.pointerId, button: 0, clientX: activationEvents[0]?.clientX, clientY: activationEvents[0]?.clientY },
         { type: "pointerup", pointerId: activationEvents[0]?.pointerId, button: 0, clientX: activationEvents[0]?.clientX, clientY: activationEvents[0]?.clientY },
       ], `${label} native click was not a stationary primary release: ${JSON.stringify(activationEvents)}`);
       await assertInspector(`${label} pointer inspector; events=${JSON.stringify(activationEvents)}`);
+      if (label === "overview") {
+        const sameBuildingCues = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {operations:context.operations.slice(-6),identities:context.cueIdentities.slice(-2),selectionArgs:context.outlineDraws.at(-1),hoverArgs:context.hoverDraws.at(-1),latestReplica:context.subUploads.at(-1),expectedReplica:context.uploads[2].slice(${points.targetIndex}*28,${points.targetIndex}*28+24)}; })()`);
+        assert.deepEqual(sameBuildingCues, {
+          operations: ["depth:on", "city", "depth:off", "outline", "hover", "depth:on"],
+          identities: [{ kind: "selection", program: "selection", vao: "selection" }, { kind: "hover", program: "hover", vao: "hover" }],
+          selectionArgs: [24, 5121, 0, 1],
+          hoverArgs: [24, 5121, 0, 1],
+          latestReplica: sameBuildingCues.expectedReplica,
+          expectedReplica: sameBuildingCues.expectedReplica,
+        }, `${label} same-building cues were not independently classified`);
+        const selectedObservation = await observation();
+        const selectedPoints = deriveInteractiveJourneyPoints({ ...selectedObservation, orderedPaths, targetPath });
+        const alternate = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); return ${JSON.stringify(selectedPoints.alternates)}.find(({point})=>document.elementFromPoint(point.x,point.y)===canvas) ?? null; })()`);
+        assert.notEqual(alternate, null, `${label} had no second building exposed by the canvas`);
+        const hoverDrawsBeforeAlternate = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length");
+        await settlePointer(alternate.point, `${label} different-building hover`);
+        await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length>${hoverDrawsBeforeAlternate}`, `${label} different-building cues`);
+        const differentBuildingCues = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {operations:context.operations.slice(-6),identities:context.cueIdentities.slice(-2),latestReplica:context.subUploads.at(-1),expectedReplica:context.uploads[2].slice(${alternate.index}*28,${alternate.index}*28+24)}; })()`);
+        assert.deepEqual(differentBuildingCues, {
+          operations: ["depth:on", "city", "depth:off", "outline", "hover", "depth:on"],
+          identities: [{ kind: "selection", program: "selection", vao: "selection" }, { kind: "hover", program: "hover", vao: "hover" }],
+          latestReplica: differentBuildingCues.expectedReplica,
+          expectedReplica: differentBuildingCues.expectedReplica,
+        }, `${label} different-building cues lost selection-first identity`);
+      }
       const intraGroupMiss = await visibleWhitespacePoint(points.intraGroupMisses, `${label} intra-group whitespace`);
       await settleClick(intraGroupMiss, `${label} intra-group activation miss`);
       await assertCleared(`${label} intra-group whitespace selected geometry`);
@@ -1372,17 +1446,17 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(result.complexityMatrixRuns[0].observed.factsDigest, result.complexityMatrixRuns[1].observed.factsDigest);
   exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "outline", "accessibility", "inputCleanup", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
   const outline = result.presentation.outline;
-  exactKeys(outline, ["allocationUploads", "updateBytes", "exactReplica", "selection", "camera", "resizeOutlineDraws", "reset", "clear", "immutableUploads", "shaderFixedBlack", "polygonOffsetEnables", "cleanup"], "Selection outline");
-  assert.deepEqual(outline.allocationUploads, [384, 36, 28, 96, 24, 24, 96, 8, 24, 384, 36, 28, 96, 24, 24, 96, 8, 24]);
+  exactKeys(outline, ["allocationUploads", "updateBytes", "exactReplica", "selection", "camera", "resizeOutlineDraws", "reset", "clear", "immutableUploads", "shaderFixedOffWhite", "polygonOffsetEnables", "cleanup"], "Selection outline");
+  assert.deepEqual(outline.allocationUploads, [384, 36, 28, 96, 24, 24, 96, 24, 24, 384, 36, 28, 96, 24, 24, 96, 24, 24]);
   assert.equal(outline.updateBytes.length, 24);
   assert.equal(outline.exactReplica, true);
-  assert.deepEqual(outline.selection, { cityDraws: 1, outlineDraws: 1, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"] });
+  assert.deepEqual(outline.selection, { cityDraws: 1, outlineDraws: 1, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"], identities: [{ kind: "selection", program: "selection", vao: "selection" }] });
   assert.deepEqual(outline.camera, { cityDraws: 1, outlineDraws: 1 });
   assert.equal(outline.resizeOutlineDraws, 1);
   assert.deepEqual(outline.reset, { cityDraws: 1, outlineDraws: 1 });
   assert.deepEqual(outline.clear, { cityDraws: 1, outlineDraws: 0 });
   assert.equal(outline.immutableUploads, true);
-  assert.equal(outline.shaderFixedBlack, true);
+  assert.equal(outline.shaderFixedOffWhite, true);
   assert.equal(outline.polygonOffsetEnables, 0);
   assert.deepEqual(outline.cleanup, { deleteShader: 12, deleteProgram: 6, deleteBuffer: 18, deleteVertexArray: 6 });
   assert.deepEqual(result.presentation, {

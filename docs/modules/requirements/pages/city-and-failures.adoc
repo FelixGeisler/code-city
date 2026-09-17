@@ -346,10 +346,18 @@ one recomputation only when the pointer is inside and no gesture is active.
 Pointer leave clears and invalidates hover; gesture end queues recomputation
 only for a current inside position. Replacement rejects work from old sessions.
 
-Selection draws a fixed opaque black (`#000000FF`) complete box-edge outline.
-Hover draws a fixed opaque magenta (`#FF00FFFF`) top-face perimeter. Both draw
-when they address the same building and neither changes the M1 metric RGBA.
-The controller remains authoritative over the presenter's visual replicas.
+Selection draws an opaque `#F8FAFCFF` frame over all 12 edges of a
+presentation-only box whose fixed unit coordinates are `-1/64` and `65/64`.
+With the unchanged vertex formula, the frame expands each side of the selected
+building by `dimension/64`. Hover draws an opaque `#94A3B8FF` frame over all 12
+edges of the exact building AABB, using unit coordinates `0` and `1`. Selection
+draws first and hover second; when both address one building, exact hover nests
+inside selection. One depth-test disable/restore surrounds all active cue draws.
+Both use default-width `gl.LINES`; there is no pixel-width, contrast-ratio,
+antialiasing, universal on-screen visibility, or non-crossing-projection
+promise. The frames do not change metric RGBA, fill uploads, real AABBs, or CPU
+picking. The controller remains authoritative over the presenter's visual
+replicas.
 
 == Inspector and visual quality
 
@@ -498,8 +506,8 @@ This baseline adds no source viewing or download, dependency view, search,
 filtering, history, authentication, private-repository support, metric
 configuration, export, finding, AI guidance, touch-specific gesture, preset,
 first-person movement, minimap, visible group plate, road, parcel, persistent
-group or building label, tooltip, static building edge, replacement hover or
-selection geometry, animation, saved view, sharing, or telemetry. It changes
+group or building label, tooltip, static building edge, animation, saved view,
+sharing, or telemetry. It changes
 no admission, syntax, raw metric, source limit, provider, browser-only topology,
 privacy boundary, failure category, retry, fallback, camera, input, traversal,
 or CPU picking policy. It adds no backend, worker, context, canvas, renderer/UI/

@@ -130,6 +130,13 @@ together when applicable, without changing its metric RGBA. There is no second
 worker, context, or canvas, no v1 port or Three.js reuse, and no rendering, UI,
 or picking dependency.
 
+Subsequent refinement::
+Issue https://github.com/FelixGeisler/code-city/issues/567[#567] supersedes only
+the provisional cue appearance above with the nested whole-building policy in
+xref:requirements:city-and-failures.adoc#_selection_picking_and_hover[City and
+Failures]. Presenter ownership, fixed cue draws, camera, picking, lifecycle,
+and resource policy remain unchanged.
+
 === Immutable-centre camera and picking
 
 The validated bounds centre `C` is immutable for the session. Each instance
