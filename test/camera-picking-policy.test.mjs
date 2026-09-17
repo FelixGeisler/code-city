@@ -453,22 +453,41 @@ test("the full 4,000-city envelope keeps immutable dimensions and origin-C endpo
 });
 
 test("accepted ADR history and current surface-focus requirements stay synchronized", async () => {
-  const adr8 = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0008-browser-native-webgl2-instanced-city-presentation.adoc"), "utf8");
-  const adr11 = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0011-interactive-webgl2-navigation-and-inspection.adoc"), "utf8");
-  const adr12 = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc"), "utf8");
-  for (const adr of [adr8, adr11, adr12]) assert.match(adr, /^Status:: Accepted$/mu);
-  assert(adr8.includes("issues/569"));
-  assert(adr11.includes("Subsequent refinement (issue 569)"));
-  assert(adr12.includes("Subsequent refinement (issue 569)"));
+  const adrFiles = [
+    ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 4_058, "10c512a85b2f10ececbe27dc27721e609c41ebb40a88617c2fbf0f90641251dc"],
+    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 19_273, "4b9e9c5b84b7cf9c28c1d7fe4fc5c0cb843a1aee6683662481c2c8c9d1143d5f"],
+    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 13_070, "d5bd8956047cf7c9ab3177c73a620e23e4c6674fe661e824a93545c98243d2cc"],
+  ];
+  const adrs = [];
+  for (const [file, expectedLength, expectedHash] of adrFiles) {
+    const text = await readFile(path.join(root, "docs/modules/architecture/pages/adr", file), "utf8");
+    const bytes = Buffer.from(text.replaceAll("\r\n", "\n"));
+    assert.equal(bytes.byteLength, expectedLength, file);
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), expectedHash, file);
+    assert.equal(bytes.at(-1), 10, file);
+    assert.match(text, /^Status:: Accepted$/mu, file);
+    adrs.push(text);
+  }
+  assert(adrs[0].includes("issues/569"));
+  assert(adrs[1].includes("Subsequent refinement (issue 569)"));
+  assert(adrs[2].includes("Subsequent refinement (issue 569)"));
   const requirements = await readFile(path.join(root, "docs/modules/requirements/pages/city-and-failures.adoc"), "utf8");
   const normalized = requirements.replace(/\s+/g, " ");
   for (const statement of [
+    "`m[2]`, `m[6]`, `m[10]`, and `m[14]`",
+    "`-1 < depth && depth < 1`",
+    "not a claim of bit-identical WebGL/GLSL operation ordering or GPU depth",
+    "real AABBs, or CPU picking",
+    "rejects the whole transition atomically as *Presentation failed* / `M1-PRES-1`",
     "#22C55EFF", "#84CC16FF", "#FACC15FF", "#F59E0BFF", "#F97316FF", "#EF4444FF",
     "D = 0.70", "H = 0.15", "u_hoverIndex", "u_selectionIndex", "112420",
     "Complexity: low → high", "M = 16+", "One program, one VAO, three immutable buffers",
-    "real AABBs", "CPU picking", "M1-PRES-1",
   ]) assert(normalized.includes(statement), statement);
   for (const superseded of ["#F8FAFCFF", "#94A3B8FF", "-1/64", "65/64", "Selection draws first and hover second"]) {
     assert.equal(normalized.includes(superseded), false, superseded);
+  }
+  const source = await readFile(path.join(root, "src/domain/camera-picking-policy.ts"), "utf8");
+  for (const forbidden of ["document.", "window.", "WebGL", "addEventListener", "requestAnimationFrame", "Worker("]) {
+    assert.equal(source.includes(forbidden), false, forbidden);
   }
 });
