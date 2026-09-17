@@ -414,7 +414,7 @@ export function orbitCameraByPointer(
   try {
     if (!(finite(cssWidth) > 0) || !(finite(cssHeight) > 0)) throw new Error("invalid pointer dimensions");
     const azimuthDelta = divide(multiply(TAU, finite(dx)), cssWidth);
-    const elevationDelta = -divide(multiply(Math.PI, finite(dy)), cssHeight);
+    const elevationDelta = divide(multiply(Math.PI, finite(dy)), cssHeight);
     return orbitCamera(current, bounds, dimensions, azimuthDelta, finite(elevationDelta));
   } catch {
     return PRESENTATION_FAILURE;

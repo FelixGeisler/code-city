@@ -147,8 +147,10 @@ e0 = asin(1/sqrt(3))
 Initial load and Reset use those vector constants, not a trigonometric
 reconstruction. `A/D` subtract/add `15°` azimuth. `W/S` add/subtract `7.5°`
 elevation. A primary-pointer horizontal delta `dx` adds
-`2π·dx/cssWidth`; downward `dy` subtracts `π·dy/cssHeight`. Azimuth is
-normalised to `[0,2π)` and elevation is clamped inclusively to `15°..75°`.
+`2π·dx/cssWidth`; vertical delta `dy = clientY - lastY` adds
+`π·dy/cssHeight`, so dragging upward lowers elevation and dragging downward
+raises it. Azimuth is normalised to `[0,2π)` and elevation is clamped
+inclusively to `15°..75°`.
 
 Magnification `z` is `1` at overview and is clamped to `[1/64,64]`. For the
 current positive aspect:

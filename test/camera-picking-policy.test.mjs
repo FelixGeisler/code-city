@@ -144,14 +144,39 @@ test("keyboard and pointer orbit use exact directions, normalization, clamps, an
   near(w.state.elevation, reset.state.elevation + Math.PI / 24, "W elevation");
   const s = success(orbitCameraByKeyboard(reset.state, fixture.overview.bounds, fixture.overview.dimensions, "s"));
   near(s.state.elevation, reset.state.elevation - Math.PI / 24, "S elevation");
-  const pointer = success(orbitCameraByPointer(reset.state, fixture.overview.bounds, fixture.overview.dimensions, 100, 50, 400, 200));
+  const pointer = success(orbitCameraByPointer(reset.state, fixture.overview.bounds, fixture.overview.dimensions, 100, 0, 400, 200));
   near(pointer.state.azimuth, reset.state.azimuth + Math.PI / 2, "pointer azimuth");
-  near(pointer.state.elevation, policy.MINIMUM_ELEVATION, "pointer downward clamp");
+  near(pointer.state.elevation, reset.state.elevation, "horizontal pointer elevation");
   const clamped = success(orbitCamera(reset.state, fixture.overview.bounds, fixture.overview.dimensions, -100 * Math.PI, 100 * Math.PI));
   assert(clamped.state.azimuth >= 0 && clamped.state.azimuth < 2 * Math.PI);
   assert.equal(clamped.state.elevation, policy.MAXIMUM_ELEVATION);
   near(clamped.state.D[0] ** 2 + clamped.state.D[1] ** 2 + clamped.state.D[2] ** 2, 1, "D length");
   near(clamped.state.R[0] * clamped.state.V[1] - clamped.state.R[1] * clamped.state.V[0], clamped.state.D[2], "R cross V z");
+});
+
+test("primary pointer vertical orbit independently follows both non-clamping signs", () => {
+  const reset = success(resetCamera(fixture.overview.bounds, fixture.overview.dimensions));
+  const upward = success(orbitCameraByPointer(reset.state, fixture.overview.bounds, fixture.overview.dimensions, 0, -10, 400, 200));
+  const downward = success(orbitCameraByPointer(reset.state, fixture.overview.bounds, fixture.overview.dimensions, 0, 10, 400, 200));
+
+  near(upward.state.elevation, reset.state.elevation - Math.PI / 20, "upward pointer elevation");
+  near(downward.state.elevation, reset.state.elevation + Math.PI / 20, "downward pointer elevation");
+  assert(upward.state.elevation < reset.state.elevation, "upward drag did not lower elevation");
+  assert(downward.state.elevation > reset.state.elevation, "downward drag did not raise elevation");
+  assert.equal(upward.state.azimuth, reset.state.azimuth);
+  assert.equal(downward.state.azimuth, reset.state.azimuth);
+});
+
+test("primary pointer upward orbit clamps at the inclusive minimum elevation", () => {
+  const reset = success(resetCamera(fixture.overview.bounds, fixture.overview.dimensions));
+  const upward = success(orbitCameraByPointer(reset.state, fixture.overview.bounds, fixture.overview.dimensions, 0, -200, 400, 200));
+  assert.equal(upward.state.elevation, policy.MINIMUM_ELEVATION);
+});
+
+test("primary pointer downward orbit clamps at the inclusive maximum elevation", () => {
+  const reset = success(resetCamera(fixture.overview.bounds, fixture.overview.dimensions));
+  const downward = success(orbitCameraByPointer(reset.state, fixture.overview.bounds, fixture.overview.dimensions, 0, 200, 400, 200));
+  assert.equal(downward.state.elevation, policy.MAXIMUM_ELEVATION);
 });
 
 test("pointer and keyboard pan, zoom, resize, and Reset retain or restore exactly the contracted components", () => {
