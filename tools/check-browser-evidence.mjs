@@ -607,10 +607,11 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const first = await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===1`, "first successful city");
     invariant(first === true, "First successful package run did not publish");
 
-    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
+    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,legends:document.querySelectorAll('[data-city] [data-palette-legend]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
     assert.equal(cleared.commit, "");
     assert.equal(cleared.canvases, 0);
     assert.equal(cleared.inspectors, 0);
+    assert.equal(cleared.legends, 0);
     assert.equal(cleared.children, 0);
     assert.deepEqual(cleared.deletes, { shader: 2, program: 1, buffer: 3, vao: 1 });
 
@@ -897,17 +898,19 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       live: "polite",
       atomic: "true",
     };
-    for (const [key, value] of Object.entries(expectedInspector)) assert.deepEqual(selectedByKeyboard[key], value, key);
-    assert.equal(selectedByKeyboard.cityDraws, 3);
-    assert.equal(selectedByKeyboard.selectionFocusDraws, 1);
-    assert.equal(selectedByKeyboard.subUploads, 0);
-    assert.deepEqual(selectedByKeyboard.selectionArgs, [36, 5121, 0, 1]);
-    assert.deepEqual(selectedByKeyboard.focusState, { hover: -1, selection: 0 });
-    assert.deepEqual(selectedByKeyboard.uniforms, [
-      { name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: 0 },
-    ]);
-    assert.equal(selectedByKeyboard.operations.at(-1), "city");
-    assert.equal(selectedByKeyboard.polygonOffsetEnables, 0);
+    assert.deepEqual(selectedByKeyboard, {
+      ...expectedInspector,
+      cityDraws: 3,
+      selectionFocusDraws: 1,
+      subUploads: 0,
+      operations: ["city", "depth:on", "city", "depth:on", "city"],
+      selectionArgs: [36, 5121, 0, 1],
+      focusState: { hover: -1, selection: 0 },
+      uniforms: [
+        { name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: 0 },
+      ],
+      polygonOffsetEnables: 0,
+    });
     assert.deepEqual(clearedSelection, { hidden: true, text: "", children: 0, path: null });
     assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, path: fixture.path, sourceLines: "1", range: "M = 1", rgba: "#84CC16FF" });
     assert.deepEqual(primaryCapture, { focused: true, pointerId: 1, captured: true });
@@ -1004,7 +1007,8 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       assert.deepEqual(layout.legend.items, ["M = 0", "M = 1", "M = 2–3", "M = 4–7", "M = 8–15", "M = 16+"]);
       assert(layout.legend.top >= layout.canvas.bottom);
       assert(layout.legend.left >= layout.city.left && layout.legend.right <= layout.city.right);
-      assert(layout.inspector.left >= layout.city.left && layout.inspector.right <= layout.city.right && layout.inspector.bottom <= layout.city.bottom);
+      assert(layout.inspector.left >= layout.city.left && layout.inspector.right <= layout.city.right && layout.inspector.top >= layout.city.top && layout.inspector.bottom <= layout.city.bottom);
+      assert(layout.inspector.height <= layout.city.height);
       assert(layout.reset.top >= layout.legend.bottom);
       assert.equal(layout.canvas.backingWidth, layout.city.clientWidth);
       assert.equal(layout.canvas.backingHeight, layout.city.clientHeight);
@@ -1032,7 +1036,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       const event=new Event('webglcontextlost',{cancelable:true});
       globalThis.__codeCitySuccessEvidence.contexts[1].forceLost=true;
       canvas.dispatchEvent(event);
-      return {defaultPrevented:event.defaultPrevented,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,listeners:globalThis.__codeCitySuccessEvidence.contexts[1].listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,deletes:globalThis.__codeCitySuccessEvidence.contexts[1].deletes};
+      return {defaultPrevented:event.defaultPrevented,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,legends:document.querySelectorAll('[data-city] [data-palette-legend]').length,children:document.querySelector('[data-city]').childNodes.length,listeners:globalThis.__codeCitySuccessEvidence.contexts[1].listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,deletes:globalThis.__codeCitySuccessEvidence.contexts[1].deletes};
     })()`);
     assert.deepEqual(contextLoss, {
       defaultPrevented: false,
@@ -1040,6 +1044,8 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       commit: fixture.selected,
       canvases: 0,
       inspectors: 0,
+      legends: 0,
+      children: 0,
       listeners: {
         adds: [
           { type: "webglcontextlost", passive: true, once: true },
@@ -1474,17 +1480,43 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(focus.faceShading, true);
   assert.equal(focus.polygonOffsetEnables, 0);
   assert.deepEqual(focus.cleanup, { deleteShader: 4, deleteProgram: 2, deleteBuffer: 6, deleteVertexArray: 2 });
-  assert.equal(result.presentation.webgl2Available, true);
-  assert.equal(result.presentation.actualContexts, 4);
-  assert.equal(result.presentation.initialDraws, 1);
-  assert.equal(result.presentation.repeatDraws, 1);
-  assert.equal(result.presentation.resizeDraws, 1);
-  assert.deepEqual(result.presentation.lossFailures, [[3, "Presentation failed", "M1-PRES-1"]]);
-  assert.deepEqual(result.presentation.lossOrdering.cleanupAtNotification, { deleteShader: 2, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 });
-  assert.deepEqual(result.presentation.lossCleanup, { deleteShader: 2, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 });
-  assert.deepEqual(result.presentation.compileFailureResult, { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" });
-  assert.deepEqual(result.presentation.compileCleanup, { deleteShader: 1, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 });
-  assert.equal(result.presentation.pass, true);
+  assert.deepEqual(result.presentation, {
+    webgl2Available: true,
+    actualContexts: 4,
+    initialDraws: 1,
+    repeatDraws: 1,
+    resizeDraws: 1,
+    focus,
+    accessibility: {
+      tabIndex: 0,
+      label: "Interactive code city",
+      description: "city-navigation-instructions",
+      listenerAdds: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"],
+      resetText: "Reset view",
+    },
+    inputCleanup: {
+      listenerAdds: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide", "webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"],
+      listenerRemoves: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide", "webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"],
+      reset: { adds: 2, removes: 2 },
+    },
+    lossDefaultPrevented: false,
+    lossDraws: 0,
+    lossFailures: [[3, "Presentation failed", "M1-PRES-1"]],
+    lossOrdering: {
+      semanticPresentAtNotification: true,
+      hostChildrenAtNotification: 2,
+      cleanupAtNotification: { deleteShader: 2, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
+      semanticPresentAfterControllerClear: false,
+    },
+    lossCleanup: { deleteShader: 2, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
+    lossTerminalState: { retainedCallbacks: 1, failures: 1, drawsAfterTerminal: 0, canvases: 1, hostChildren: 0, cleanupUnchanged: true },
+    compileFailureResult: { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" },
+    compileFailureDraws: 0,
+    compileFailures: [],
+    compileCleanup: { deleteShader: 1, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
+    compileFailureTerminalState: { retainedCallbacks: 1, failures: 0, drawsAfterTerminal: 0, canvases: 1, hostChildren: 0, cleanupUnchanged: true },
+    pass: true,
+  });
   assert.deepEqual(result.browserExceptions, []);
   assert.deepEqual(result.unexpectedNetworkRequests, []);
   assert.equal(result.overallPass, true);
