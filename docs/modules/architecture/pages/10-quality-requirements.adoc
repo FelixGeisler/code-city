@@ -23,9 +23,9 @@ partial one
 maxima with dense and deep valid syntax and no private lower limit
 
 |Atomicity
-|Geometry, inspection, semantics, canvas, and revision publish as one transaction;
-replacement, cancellation, failure, resize, context loss, or stale interaction
-cannot publish partial or stale output
+|Geometry, inspection, semantics, canvas, persistent complexity legend, and
+revision publish as one transaction; replacement, cancellation, failure,
+resize, context loss, or stale interaction cannot publish partial or stale output
 
 |Resource ownership
 |Provider, parser, worker, presentation, and listener resources follow the
@@ -42,8 +42,8 @@ bands do not rely on colour alone
 
 |Visual quality
 |The city remains the visual focus, controls and interaction are intentional and
-predictable, cues preserve metric-colour prominence, and the inspector remains
-clean, responsive, and readable. Representative review and textual-only
+predictable, surface focus preserves metric-colour prominence, and the inspector
+and persistent numeric legend remain clean, responsive, and readable. Representative review and textual-only
 attestation are owned by https://github.com/FelixGeisler/code-city/issues/537[#537]
 without a numeric aesthetic threshold
 

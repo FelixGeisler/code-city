@@ -156,6 +156,7 @@ button:focus-visible,
   border-radius: 0.35rem;
   box-shadow: var(--shadow);
   height: clamp(24rem, 62vh, 40rem);
+  margin-block-end: 5.9rem;
   min-height: 20rem;
   overflow: visible;
   position: relative;
@@ -295,8 +296,31 @@ button:focus-visible,
 }
 
 [data-palette-legend] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  color: var(--text);
   display: grid;
   gap: 0.4rem;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  inset-block-start: calc(100% + 0.5rem);
+  inset-inline: 0;
+  min-height: 4.5rem;
+  padding: 0.55rem 0.7rem;
+  pointer-events: none;
+  position: absolute;
+}
+
+[data-palette-legend] h2 {
+  color: var(--muted);
+  font-size: 0.78rem;
+  grid-column: 1 / -1;
+  line-height: 1.2;
+  margin: 0;
+}
+
+[data-palette-legend] ul {
+  display: contents;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -307,8 +331,9 @@ button:focus-visible,
   display: grid;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 0.77rem;
-  gap: 0.5rem;
+  gap: 0.45rem;
   grid-template-columns: auto minmax(0, 1fr);
+  white-space: nowrap;
 }
 
 [data-palette-swatch] {
@@ -320,12 +345,12 @@ button:focus-visible,
   width: 0.8rem;
 }
 
-[data-palette-swatch="0"] { background: #a78bfa; }
-[data-palette-swatch="1"] { background: #818cf8; }
-[data-palette-swatch="2"] { background: #38bdf8; }
-[data-palette-swatch="3"] { background: #2dd4bf; }
-[data-palette-swatch="4"] { background: #a3e635; }
-[data-palette-swatch="5"] { background: #facc15; }
+[data-palette-swatch="0"] { background: #22c55e; }
+[data-palette-swatch="1"] { background: #84cc16; }
+[data-palette-swatch="2"] { background: #facc15; }
+[data-palette-swatch="3"] { background: #f59e0b; }
+[data-palette-swatch="4"] { background: #f97316; }
+[data-palette-swatch="5"] { background: #ef4444; }
 
 [data-city-reset] {
   margin-block-start: 0.9rem;
@@ -338,6 +363,12 @@ button:focus-visible,
 
   [data-city] {
     height: clamp(26rem, 72vh, 36rem);
+    margin-block-end: 8.35rem;
+  }
+
+  [data-palette-legend] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    min-height: 6.95rem;
   }
 
   [data-inspector] {
@@ -348,7 +379,7 @@ button:focus-visible,
   }
 }
 
-@media (max-width: 30rem) {
+@media (width < 30rem) {
   form {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -360,6 +391,15 @@ button:focus-visible,
 
   form button {
     width: 100%;
+  }
+
+  [data-city] {
+    margin-block-end: 10.8rem;
+  }
+
+  [data-palette-legend] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-height: 9.4rem;
   }
 
   [data-metric-facts] > div,

@@ -24,6 +24,7 @@ class FakeElement {
     this.throwReplace = false;
     this.tabIndex = -1;
   }
+  get parentNode() { return this.parent; }
   set textContent(value) {
     if (this.throwText) throw new Error("injected text staging failure");
     this.value = String(value);
@@ -46,23 +47,27 @@ class FakeElement {
     this.children = children;
     for (const child of children) if (child instanceof FakeElement) child.parent = this;
   }
+  removeChild(child) {
+    this.children = this.children.filter((candidate) => candidate !== child);
+    child.parent = undefined;
+    return child;
+  }
   remove() {
     if (!this.parent) return;
-    this.parent.children = this.parent.children.filter((child) => child !== this);
-    this.parent = undefined;
+    this.parent.removeChild(this);
   }
 }
 
 const paletteBoundaries = [
-  { M: 0, range: "0", rgba: "#A78BFAFF" },
-  { M: 1, range: "1", rgba: "#818CF8FF" },
-  { M: 2, range: "2–3", rgba: "#38BDF8FF" },
-  { M: 3, range: "2–3", rgba: "#38BDF8FF" },
-  { M: 4, range: "4–7", rgba: "#2DD4BFFF" },
-  { M: 7, range: "4–7", rgba: "#2DD4BFFF" },
-  { M: 8, range: "8–15", rgba: "#A3E635FF" },
-  { M: 15, range: "8–15", rgba: "#A3E635FF" },
-  { M: 16, range: "16+", rgba: "#FACC15FF" },
+  { M: 0, range: "0", rgba: "#22C55EFF" },
+  { M: 1, range: "1", rgba: "#84CC16FF" },
+  { M: 2, range: "2–3", rgba: "#FACC15FF" },
+  { M: 3, range: "2–3", rgba: "#FACC15FF" },
+  { M: 4, range: "4–7", rgba: "#F59E0BFF" },
+  { M: 7, range: "4–7", rgba: "#F59E0BFF" },
+  { M: 8, range: "8–15", rgba: "#F97316FF" },
+  { M: 15, range: "8–15", rgba: "#F97316FF" },
+  { M: 16, range: "16+", rgba: "#EF4444FF" },
 ];
 
 const displayedHeight = (S) => 4 + Math.floor(36 * Math.log1p(Math.min(S, 1000)) / Math.log(1001) + 0.5);
@@ -101,9 +106,9 @@ function byAttribute(element, name) {
   return descendants(element).find((child) => child.attributes.has(name));
 }
 
-test("semantic publication stages one empty, focusable polite region and commits it atomically with the canvas", () => {
+test("semantic publication stages one inspector and persistent numeric legend and commits both atomically", () => {
   const f = fixture();
-  const [inspector] = f.created;
+  const [inspector, legend] = f.created;
   assert.deepEqual(f.root.children, []);
   assert.equal(inspector.tagName, "SECTION");
   assert.deepEqual(inspector.dataset, { inspector: "" });
@@ -114,16 +119,24 @@ test("semantic publication stages one empty, focusable polite region and commits
   assert.equal(inspector.tabIndex, 0);
   assert.equal(inspector.hidden, true);
   assert.equal(inspector.textContent, "");
+  assert.equal(legend.tagName, "SECTION");
+  assert.deepEqual(legend.dataset, { paletteLegend: "" });
+  assert.equal(legend.attributes.get("aria-label"), "Complexity: low → high");
+  assert.equal(legend.children[0].textContent, "Complexity: low → high");
+  assert.deepEqual(legend.children[1].children.map((item) => item.textContent), [
+    "M = 0", "M = 1", "M = 2–3", "M = 4–7", "M = 8–15", "M = 16+",
+  ]);
 
   const canvas = { remove() {} };
   f.publication.commit(canvas);
-  assert.deepEqual(f.root.children, [canvas, inspector]);
+  assert.deepEqual(f.root.children, [canvas, inspector, legend]);
   assert.equal(f.revision.textContent, "a".repeat(40));
 });
 
-test("every required M boundary publishes exact facts, formulas, selected band, and the complete text legend", () => {
+test("every required M boundary publishes selected facts without duplicating the persistent legend", () => {
   const f = fixture();
   const inspector = f.created[0];
+  const legend = f.created[1];
   f.publication.commit({ remove() {} });
 
   for (const [index, expected] of paletteBoundaries.entries()) {
@@ -141,14 +154,9 @@ test("every required M boundary publishes exact facts, formulas, selected band, 
     assert.equal(byAttribute(inspector, "data-depth").textContent, String(displayedSide(fact.U)));
     assert.equal(byDataset(inspector, "selectedRange").textContent, `M = ${expected.range}`);
     assert.equal(byDataset(inspector, "selectedRgba").textContent, expected.rgba);
-    const legend = byDataset(inspector, "paletteLegend");
-    assert.deepEqual(legend.children.map((item) => item.textContent), [
-      "M = 0 — #A78BFAFF",
-      "M = 1 — #818CF8FF",
-      "M = 2–3 — #38BDF8FF",
-      "M = 4–7 — #2DD4BFFF",
-      "M = 8–15 — #A3E635FF",
-      "M = 16+ — #FACC15FF",
+    assert.equal(byDataset(inspector, "paletteLegend"), undefined);
+    assert.deepEqual(legend.children[1].children.map((item) => item.textContent), [
+      "M = 0", "M = 1", "M = 2–3", "M = 4–7", "M = 8–15", "M = 16+",
     ]);
     assert.equal(descendants(inspector).some(({ tagName }) => tagName === "A"), false);
   }
@@ -173,6 +181,7 @@ test("adversarial paths stay complete inert bdi text and every clear removes all
   f.publication.rollback();
   assert.deepEqual(f.root.children, [canvas], "rollback removes only the semantic region");
   assert.equal(f.revision.textContent, "");
+  assert.equal(byDataset(f.root, "paletteLegend"), undefined);
 });
 
 test("invalid selection and formatting or DOM update faults escape to the controller presentation boundary", () => {
@@ -182,6 +191,7 @@ test("invalid selection and formatting or DOM update faults escape to the contro
   const formatting = fixture({ throwPathText: true });
   assert.throws(() => formatting.publication.setSelection(0), /injected text staging failure/u);
   assert.equal(formatting.created[0].textContent, "");
+  assert.throws(() => fixture({ throwCreate: "ul" }), /injected element creation failure/u);
   const creation = fixture({ throwCreate: "dl" });
   assert.throws(() => creation.publication.setSelection(0), /injected element creation failure/u);
   const update = fixture();
@@ -193,11 +203,15 @@ test("invalid selection and formatting or DOM update faults escape to the contro
   assert.equal(inspector.hidden, true);
 });
 
-test("inspector styling keeps exact paths wrapped and isolated in a responsive, scrollable non-colour-only panel", async () => {
+test("inspector and persistent legend styling preserve focus, fixed canvas size, and approved grid breakpoints", async () => {
   const css = await readFile(new URL("../src/edge/shell.css", import.meta.url), "utf8");
   assert.match(css, /\[data-canonical-path\][^{]*\{[^}]*overflow-wrap:\s*anywhere;[^}]*unicode-bidi:\s*isolate;/su);
   assert.match(css, /\[data-inspector\][^{]*\{[^}]*overflow:\s*auto;/su);
   assert.match(css, /@media\s*\(max-width:\s*42rem\)[\s\S]*\[data-inspector\][^{]*\{[^}]*max-height:\s*58%;/u);
   assert.match(css, /\[data-inspector\]:focus-visible/u);
+  assert.match(css, /\[data-city\][^{]*\{[^}]*height:[^;}]+;[^}]*margin-block-end:/su);
+  assert.match(css, /\[data-palette-legend\][^{]*\{[^}]*grid-template-columns:\s*repeat\(6,[^}]*pointer-events:\s*none;[^}]*position:\s*absolute;/su);
+  assert.match(css, /@media\s*\(max-width:\s*42rem\)[\s\S]*\[data-palette-legend\][^{]*\{[^}]*repeat\(3,/u);
+  assert.match(css, /@media\s*\(width\s*<\s*30rem\)[\s\S]*\[data-palette-legend\][^{]*\{[^}]*repeat\(2,/u);
   assert.doesNotMatch(css, /\[data-(?:inspector|canonical-path)\][^{]*\{[^}]*outline:\s*none/su);
 });

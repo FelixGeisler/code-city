@@ -3,8 +3,8 @@
 Status:: Accepted
 
 ADR 0011 xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[amends
-this M1 baseline] for the current interactive camera, aligned city payload,
-outline draws, inert path labels, and lifecycle contract. ADR 0012
+this M1 baseline] for the interactive camera, aligned city payload, historical
+outline-cue decision, inert path labels, and lifecycle contract. ADR 0012
 xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[replaces
 the raw-linear dimensions, square-row layout, palette, background, shared fill
 vertices, and numeric proof] while retaining this decision's direct-WebGL
@@ -84,3 +84,13 @@ renderer package, texture, font, external shader, animation, controls, second
 rendering worker, restoration, retry, or fallback. ADR 0011 removes only the
 no-controls consequence and adds fixed interaction without adding a package,
 worker, restoration, retry, fallback, or animation.
+
+== Subsequent refinement
+
+Issue https://github.com/FelixGeisler/code-city/issues/569[#569] replaces the
+later line-cue implementation with two validated integer uniforms in this
+ADR's existing single instanced fill. It retains direct trusted WebGL2, one
+canvas/context, renderer-neutral geometry, immutable instance upload, real
+AABBs, CPU picking, and the lifecycle/failure boundary. The committed resource
+envelope is now one program, one VAO, three buffers, and one draw; no new ADR
+or technology boundary is introduced.

@@ -19,8 +19,9 @@ image::runtime.svg[Successful aligned city validation, staging, commit, and inte
   recheck current-generation eligibility, commit the token, and perform exactly
   one publication-root `replaceChildren`.
 
-Geometry, facts, revision, canvas, inspector container, and empty initial hover
-and selection publish as one transaction. Each stage receives one complete
+Geometry, facts, revision, canvas, inspector container, persistent numeric
+complexity legend, and empty initial hover and selection publish as one
+transaction. Each stage receives one complete
 predecessor result or does not run. A failure suppresses later stages and
 publishes no partial city.
 
@@ -101,8 +102,9 @@ or token can mutate or fail a newer generation.
 Presenter disposal is exactly-once and idempotent: increment the request epoch,
 cancel frame work, release pointer capture, remove pointer, wheel, keyboard,
 context-menu, context-loss, Reset, blur, visibility, `pagehide`, and resize
-listeners, delete city and fixed cue-line WebGL resources, clear staging arrays, camera,
-and visual indices, and remove the canvas. On `pagehide`, the controller clears
+listeners, delete the single fill program, VAO, and three immutable buffers,
+clear the instance staging array, camera, and visual indices, and remove the
+canvas. On `pagehide`, the controller clears
 its state first, revokes publication, terminally disposes the presenter, and
 terminates the worker without cancellation semantics.
 
@@ -135,8 +137,9 @@ remain from a successful payload. Inspection never enters the presenter.
 have no callback or publication rights.
 
 |Presentation
-|One committed presenter session, controller semantic snapshot, and opaque
-visual indices are current. Camera movement never rewrites city buffers.
+|One committed presenter session with one fill program, one VAO, three immutable
+buffers, controller semantic snapshot and legend, and opaque visual indices is
+current. Camera and focus changes never rewrite city buffers.
 
 |Terminal
 |Owned facts, inspector content, listeners, capture, frame work, buffers, parser

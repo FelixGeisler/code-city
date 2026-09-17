@@ -32,8 +32,12 @@ snapshots produced by the sole city-payload validator.
 inspector publication.
 
 |Visual replica
-|A presenter-owned opaque hover or selection index used only for WebGL cues; the
-controller remains authoritative.
+|A presenter-owned opaque hover or selection index used only by the trusted
+fill shader's surface-focus uniforms; the controller remains authoritative.
+
+|Complexity legend
+|The persistent, noninteractive six-band numeric `M` key atomically published
+below every committed city.
 
 |Presenter token
 |An opaque staged-session identity that gains input and callback eligibility

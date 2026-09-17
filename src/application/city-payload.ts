@@ -42,12 +42,12 @@ const MAX_FLOAT_INTEGER = 2 ** 24;
 const MAX_TARGET_RELATIVE = 2 ** 23;
 const MAX_EXECUTABLE_UNITS_PER_MODULE = 1 + Math.floor(MAX_NORMALIZED_MODULE_BYTES / 3);
 const CONTROLLER_PALETTE = [
-  { maximum: 0, rgba: [0xa7, 0x8b, 0xfa, 0xff] },
-  { maximum: 1, rgba: [0x81, 0x8c, 0xf8, 0xff] },
-  { maximum: 3, rgba: [0x38, 0xbd, 0xf8, 0xff] },
-  { maximum: 7, rgba: [0x2d, 0xd4, 0xbf, 0xff] },
-  { maximum: 15, rgba: [0xa3, 0xe6, 0x35, 0xff] },
-  { maximum: Number.MAX_SAFE_INTEGER, rgba: [0xfa, 0xcc, 0x15, 0xff] },
+  { maximum: 0, rgba: [0x22, 0xc5, 0x5e, 0xff] },
+  { maximum: 1, rgba: [0x84, 0xcc, 0x16, 0xff] },
+  { maximum: 3, rgba: [0xfa, 0xcc, 0x15, 0xff] },
+  { maximum: 7, rgba: [0xf5, 0x9e, 0x0b, 0xff] },
+  { maximum: 15, rgba: [0xf9, 0x73, 0x16, 0xff] },
+  { maximum: Number.MAX_SAFE_INTEGER, rgba: [0xef, 0x44, 0x44, 0xff] },
 ] as const;
 
 function expectedPaletteForComplexity(complexity: number): readonly [number, number, number, number] {

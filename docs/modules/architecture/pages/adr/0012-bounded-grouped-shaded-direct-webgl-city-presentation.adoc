@@ -135,6 +135,18 @@ xref:requirements:city-and-failures.adoc#_selection_picking_and_hover[City and
 Failures]. Presenter ownership, draw passes, camera, picking, lifecycle, and
 resource policy remain unchanged.
 
+Subsequent refinement (issue 569)::
+Issue https://github.com/FelixGeisler/code-city/issues/569[#569] supersedes the
+six palette values recorded with this baseline and all retained line-cue
+appearance/resources. It keeps the six `M` thresholds, domain palette
+ownership, independent controller reconstruction, closed payload,
+canonical-index alignment, fixed face classes, one-fill-draw rule, privacy,
+real-AABB picking, camera, and lifecycle. The current fill shader applies the
+requirement-owned `D = 0.70` / `H = 0.15` surface focus using two integer
+uniforms, and semantic publication includes a persistent numeric legend. This
+is a reversible refinement inside the accepted direct-WebGL boundary, not a
+new architecture decision.
+
 Picking ranges over the `count` actual building AABBs only. Intra-group and
 inter-group whitespace must miss. No plate, cell, padding region, or group
 bounds can be hit. Camera changes do not rewrite instance data.

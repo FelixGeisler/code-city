@@ -81,21 +81,27 @@ function selectedContent(documentTarget: SemanticDocument, value: MetricExplanat
   selectedRgba.textContent = value.rgba;
   selectedColour.append(selectedSwatch, selectedRange, selectedRgba);
 
-  const legendTitle = heading(documentTarget, "h3", "Complexity colour legend");
-  const legend = documentTarget.createElement("ul");
+  return [title, identity, metricTitle, metrics, dimensionTitle, dimensionPolicy, dimensions, colourTitle, selectedColour];
+}
+
+function complexityLegend(documentTarget: SemanticDocument): HTMLElement {
+  const legend = documentTarget.createElement("section");
   legend.dataset.paletteLegend = "";
+  legend.setAttribute("aria-label", "Complexity: low → high");
+  const title = heading(documentTarget, "h2", "Complexity: low → high");
+  const list = documentTarget.createElement("ul");
   for (const [index, band] of METRIC_PALETTE_LEGEND.entries()) {
     const item = documentTarget.createElement("li");
     const swatch = documentTarget.createElement("span");
     swatch.dataset.paletteSwatch = String(index);
     swatch.setAttribute("aria-hidden", "true");
     const text = documentTarget.createElement("span");
-    text.textContent = `M = ${band.range} — ${band.rgba}`;
+    text.textContent = `M = ${band.range}`;
     item.append(swatch, text);
-    legend.append(item);
+    list.append(item);
   }
-
-  return [title, identity, metricTitle, metrics, dimensionTitle, dimensionPolicy, dimensions, colourTitle, selectedColour, legendTitle, legend];
+  legend.append(title, list);
+  return legend;
 }
 
 export function stageSemanticPublication(
@@ -113,11 +119,12 @@ export function stageSemanticPublication(
   inspector.setAttribute("aria-label", "Selected building metric explanation");
   inspector.tabIndex = 0;
   inspector.hidden = true;
+  const legend = complexityLegend(documentTarget);
   let committedToRoot = false;
 
   return Object.freeze({
     commit(canvas: ControllerCanvas) {
-      publicationRoot.replaceChildren(canvas as unknown as Node, inspector);
+      publicationRoot.replaceChildren(canvas as unknown as Node, inspector, legend);
       revisionOutput.textContent = revision;
       committedToRoot = true;
     },
@@ -137,6 +144,7 @@ export function stageSemanticPublication(
       try { inspector.hidden = true; } catch {}
       try { inspector.replaceChildren(); } catch {}
       try { inspector.remove(); } catch {}
+      try { legend.parentNode?.removeChild(legend); } catch {}
       let ownsRevision = committedToRoot;
       if (!ownsRevision) {
         try { ownsRevision = revisionOutput.textContent === revision; } catch {}

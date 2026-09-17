@@ -52,21 +52,21 @@ const TYPED_ARRAY_BYTE_OFFSET = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROT
 const TYPED_ARRAY_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "length")!.get as IntrinsicGetter;
 const ARRAY_BUFFER_BYTE_LENGTH = Object.getOwnPropertyDescriptor(ARRAY_BUFFER_PROTOTYPE, "byteLength")!.get as IntrinsicGetter;
 const PALETTE = [
-  [0xa7, 0x8b, 0xfa, 0xff],
-  [0x81, 0x8c, 0xf8, 0xff],
-  [0x38, 0xbd, 0xf8, 0xff],
-  [0x2d, 0xd4, 0xbf, 0xff],
-  [0xa3, 0xe6, 0x35, 0xff],
+  [0x22, 0xc5, 0x5e, 0xff],
+  [0x84, 0xcc, 0x16, 0xff],
   [0xfa, 0xcc, 0x15, 0xff],
+  [0xf5, 0x9e, 0x0b, 0xff],
+  [0xf9, 0x73, 0x16, 0xff],
+  [0xef, 0x44, 0x44, 0xff],
 ] as const;
 
 export const COMPLEXITY_PALETTE_LEGEND = Object.freeze([
-  Object.freeze({ range: "0", rgba: "#A78BFAFF" }),
-  Object.freeze({ range: "1", rgba: "#818CF8FF" }),
-  Object.freeze({ range: "2–3", rgba: "#38BDF8FF" }),
-  Object.freeze({ range: "4–7", rgba: "#2DD4BFFF" }),
-  Object.freeze({ range: "8–15", rgba: "#A3E635FF" }),
-  Object.freeze({ range: "16+", rgba: "#FACC15FF" }),
+  Object.freeze({ range: "0", rgba: "#22C55EFF" }),
+  Object.freeze({ range: "1", rgba: "#84CC16FF" }),
+  Object.freeze({ range: "2–3", rgba: "#FACC15FF" }),
+  Object.freeze({ range: "4–7", rgba: "#F59E0BFF" }),
+  Object.freeze({ range: "8–15", rgba: "#F97316FF" }),
+  Object.freeze({ range: "16+", rgba: "#EF4444FF" }),
 ]);
 
 const BUILDING_GAP = 2;

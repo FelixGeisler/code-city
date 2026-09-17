@@ -33,7 +33,6 @@ const PRESENTATION_FAILURE = { kind: "failure", category: "Presentation failed",
 
 const GL = Object.freeze({
   NO_ERROR: 0,
-  LINES: 0x0001,
   TRIANGLES: 0x0004,
   DEPTH_BUFFER_BIT: 0x0100,
   LESS: 0x0201,
@@ -54,7 +53,6 @@ const GL = Object.freeze({
   ARRAY_BUFFER: 0x8892,
   ELEMENT_ARRAY_BUFFER: 0x8893,
   STATIC_DRAW: 0x88e4,
-  DYNAMIC_DRAW: 0x88e8,
   FRAGMENT_SHADER: 0x8b30,
   VERTEX_SHADER: 0x8b31,
   COMPILE_STATUS: 0x8b81,
@@ -63,11 +61,11 @@ const GL = Object.freeze({
 });
 
 const CLOSED_GL_METHODS = new Set([
-  "attachShader", "bindBuffer", "bindVertexArray", "bufferData", "bufferSubData", "clear", "clearColor", "clearDepth", "colorMask",
+  "attachShader", "bindBuffer", "bindVertexArray", "bufferData", "clear", "clearColor", "clearDepth", "colorMask",
   "compileShader", "createBuffer", "createProgram", "createShader", "createVertexArray", "cullFace", "deleteBuffer",
   "deleteProgram", "deleteShader", "deleteVertexArray", "depthFunc", "depthMask", "disable", "drawElementsInstanced",
   "enable", "enableVertexAttribArray", "frontFace", "getContextAttributes", "getError", "getProgramParameter",
-  "getShaderParameter", "getUniformLocation", "isContextLost", "linkProgram", "shaderSource", "uniformMatrix4fv",
+  "getShaderParameter", "getUniformLocation", "isContextLost", "linkProgram", "shaderSource", "uniform1i", "uniformMatrix4fv",
   "useProgram", "vertexAttribDivisor", "vertexAttribPointer", "viewport",
 ]);
 
@@ -115,6 +113,7 @@ class FakeGl {
   getUniformLocation(...args) { return this.call("getUniformLocation", args, this.options.nullUniform ? null : { kind: "Uniform", id: ++this.nextResource }); }
   useProgram(program) { this.call("useProgram", [program]); this.currentProgram = program; }
   uniformMatrix4fv(...args) { this.call("uniformMatrix4fv", [args[0], args[1], new Float32Array(args[2])]); }
+  uniform1i(...args) { this.call("uniform1i", args); }
   deleteProgram(...args) { this.call("deleteProgram", args); }
   createVertexArray() { return this.resource("VertexArray"); }
   bindVertexArray(vao) { this.call("bindVertexArray", [vao]); this.currentVao = vao; }
@@ -320,11 +319,8 @@ function matrices(gl) {
 }
 
 const RESOURCE_DELETE_METHODS = Object.freeze({
-  1: "deleteShader", 2: "deleteShader", 3: "deleteProgram", 5: "deleteVertexArray",
-  6: "deleteBuffer", 7: "deleteBuffer", 8: "deleteBuffer", 9: "deleteShader",
-  10: "deleteShader", 11: "deleteProgram", 13: "deleteVertexArray", 14: "deleteBuffer",
-  15: "deleteBuffer", 16: "deleteBuffer", 17: "deleteShader", 18: "deleteShader",
-  19: "deleteProgram", 21: "deleteVertexArray", 22: "deleteBuffer", 23: "deleteBuffer", 24: "deleteBuffer",
+  1: "deleteShader", 2: "deleteShader", 3: "deleteProgram", 7: "deleteVertexArray",
+  8: "deleteBuffer", 9: "deleteBuffer", 10: "deleteBuffer",
 });
 function resourceDeletes(gl) {
   return gl.calls
@@ -343,11 +339,11 @@ function expectedInstanceBytes() {
   const bytes = new Uint8Array(28);
   const view = new DataView(bytes.buffer);
   for (const [index, value] of [-1.5, -2, -1.5, 3, 4, 3].entries()) view.setFloat32(index * 4, value, true);
-  bytes.set([0xa7, 0x8b, 0xfa, 0xff], 24);
+  bytes.set([0x22, 0xc5, 0x5e, 0xff], 24);
   return bytes;
 }
 
-function expectedDrawCalls({ width, height, matrix, count, program, vao, uniform }) {
+function expectedDrawCalls({ width, height, matrix, count, program, vao, matrixUniform, hoverUniform, selectionUniform, hover = -1, selection = -1 }) {
   return [
     ["isContextLost"],
     ["getError"],
@@ -372,7 +368,9 @@ function expectedDrawCalls({ width, height, matrix, count, program, vao, uniform
     ["clear", GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT],
     ["useProgram", program],
     ["bindVertexArray", vao],
-    ["uniformMatrix4fv", uniform, false, new Float32Array(matrix)],
+    ["uniformMatrix4fv", matrixUniform, false, new Float32Array(matrix)],
+    ["uniform1i", hoverUniform, hover],
+    ["uniform1i", selectionUniform, selection],
     ["drawElementsInstanced", GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, count],
     ["isContextLost"],
     ["getError"],
@@ -383,30 +381,14 @@ function expectedInitialCalls() {
   const vertexShader = { kind: "Shader", type: GL.VERTEX_SHADER, id: 1 };
   const fragmentShader = { kind: "Shader", type: GL.FRAGMENT_SHADER, id: 2 };
   const program = { kind: "Program", id: 3 };
-  const uniform = { kind: "Uniform", id: 4 };
-  const vao = { kind: "VertexArray", id: 5 };
-  const positionBuffer = { kind: "Buffer", id: 6 };
-  const indexBuffer = { kind: "Buffer", id: 7 };
-  const instanceBuffer = { kind: "Buffer", id: 8 };
-  const outlineVertexShader = { kind: "Shader", type: GL.VERTEX_SHADER, id: 9 };
-  const outlineFragmentShader = { kind: "Shader", type: GL.FRAGMENT_SHADER, id: 10 };
-  const outlineProgram = { kind: "Program", id: 11 };
-  const outlineUniform = { kind: "Uniform", id: 12 };
-  const outlineVao = { kind: "VertexArray", id: 13 };
-  const outlinePositionBuffer = { kind: "Buffer", id: 14 };
-  const outlineIndexBuffer = { kind: "Buffer", id: 15 };
-  const outlineInstanceBuffer = { kind: "Buffer", id: 16 };
-  const hoverVertexShader = { kind: "Shader", type: GL.VERTEX_SHADER, id: 17 };
-  const hoverFragmentShader = { kind: "Shader", type: GL.FRAGMENT_SHADER, id: 18 };
-  const hoverProgram = { kind: "Program", id: 19 };
-  const hoverUniform = { kind: "Uniform", id: 20 };
-  const hoverVao = { kind: "VertexArray", id: 21 };
-  const hoverPositionBuffer = { kind: "Buffer", id: 22 };
-  const hoverIndexBuffer = { kind: "Buffer", id: 23 };
-  const hoverInstanceBuffer = { kind: "Buffer", id: 24 };
+  const matrixUniform = { kind: "Uniform", id: 4 };
+  const hoverUniform = { kind: "Uniform", id: 5 };
+  const selectionUniform = { kind: "Uniform", id: 6 };
+  const vao = { kind: "VertexArray", id: 7 };
+  const positionBuffer = { kind: "Buffer", id: 8 };
+  const indexBuffer = { kind: "Buffer", id: 9 };
+  const instanceBuffer = { kind: "Buffer", id: 10 };
   const positionBytes = new Uint8Array(new Float32Array(literals.cubePositions).buffer);
-  const selectionPositionBytes = new Uint8Array(new Float32Array(literals.selectionBoxPositions).buffer);
-  const hoverPositionBytes = new Uint8Array(new Float32Array(literals.hoverBoxPositions).buffer);
   return [
     ["getContextAttributes"],
     ["isContextLost"], ["getError"],
@@ -431,17 +413,16 @@ function expectedInitialCalls() {
     ["isContextLost"], ["getError"],
     ["getUniformLocation", program, "u_clipFromTarget"],
     ["isContextLost"], ["getError"],
-    ["deleteShader", vertexShader],
-    ["deleteShader", fragmentShader],
+    ["getUniformLocation", program, "u_hoverIndex"],
     ["isContextLost"], ["getError"],
-    ["createVertexArray"],
+    ["getUniformLocation", program, "u_selectionIndex"],
     ["isContextLost"], ["getError"],
-    ["createBuffer"],
+    ["deleteShader", vertexShader], ["deleteShader", fragmentShader],
     ["isContextLost"], ["getError"],
-    ["createBuffer"],
-    ["isContextLost"], ["getError"],
-    ["createBuffer"],
-    ["isContextLost"], ["getError"],
+    ["createVertexArray"], ["isContextLost"], ["getError"],
+    ["createBuffer"], ["isContextLost"], ["getError"],
+    ["createBuffer"], ["isContextLost"], ["getError"],
+    ["createBuffer"], ["isContextLost"], ["getError"],
     ["bindVertexArray", vao],
     ["bindBuffer", GL.ARRAY_BUFFER, positionBuffer],
     ["bufferData", GL.ARRAY_BUFFER, positionBytes, GL.STATIC_DRAW],
@@ -466,109 +447,7 @@ function expectedInitialCalls() {
     ["vertexAttribPointer", 3, 4, GL.UNSIGNED_BYTE, true, 28, 24],
     ["vertexAttribDivisor", 3, 1],
     ["isContextLost"], ["getError"],
-    ["createShader", GL.VERTEX_SHADER],
-    ["isContextLost"], ["getError"],
-    ["shaderSource", outlineVertexShader, literals.outlineVertexShader],
-    ["compileShader", outlineVertexShader],
-    ["getShaderParameter", outlineVertexShader, GL.COMPILE_STATUS],
-    ["isContextLost"], ["getError"],
-    ["createShader", GL.FRAGMENT_SHADER],
-    ["isContextLost"], ["getError"],
-    ["shaderSource", outlineFragmentShader, literals.selectionFragmentShader],
-    ["compileShader", outlineFragmentShader],
-    ["getShaderParameter", outlineFragmentShader, GL.COMPILE_STATUS],
-    ["isContextLost"], ["getError"],
-    ["createProgram"],
-    ["isContextLost"], ["getError"],
-    ["attachShader", outlineProgram, outlineVertexShader],
-    ["attachShader", outlineProgram, outlineFragmentShader],
-    ["linkProgram", outlineProgram],
-    ["getProgramParameter", outlineProgram, GL.LINK_STATUS],
-    ["isContextLost"], ["getError"],
-    ["getUniformLocation", outlineProgram, "u_clipFromTarget"],
-    ["isContextLost"], ["getError"],
-    ["deleteShader", outlineVertexShader],
-    ["deleteShader", outlineFragmentShader],
-    ["isContextLost"], ["getError"],
-    ["createVertexArray"],
-    ["isContextLost"], ["getError"],
-    ["createBuffer"],
-    ["isContextLost"], ["getError"],
-    ["createBuffer"],
-    ["isContextLost"], ["getError"],
-    ["createBuffer"],
-    ["isContextLost"], ["getError"],
-    ["bindVertexArray", outlineVao],
-    ["bindBuffer", GL.ARRAY_BUFFER, outlinePositionBuffer],
-    ["bufferData", GL.ARRAY_BUFFER, selectionPositionBytes, GL.STATIC_DRAW],
-    ["isContextLost"], ["getError"],
-    ["enableVertexAttribArray", 0],
-    ["vertexAttribPointer", 0, 3, GL.FLOAT, false, 0, 0],
-    ["bindBuffer", GL.ELEMENT_ARRAY_BUFFER, outlineIndexBuffer],
-    ["bufferData", GL.ELEMENT_ARRAY_BUFFER, new Uint8Array(literals.selectionIndices), GL.STATIC_DRAW],
-    ["isContextLost"], ["getError"],
-    ["bindBuffer", GL.ARRAY_BUFFER, outlineInstanceBuffer],
-    ["bufferData", GL.ARRAY_BUFFER, new Uint8Array(24), GL.DYNAMIC_DRAW],
-    ["isContextLost"], ["getError"],
-    ["enableVertexAttribArray", 1],
-    ["vertexAttribPointer", 1, 3, GL.FLOAT, false, 24, 0],
-    ["vertexAttribDivisor", 1, 1],
-    ["enableVertexAttribArray", 2],
-    ["vertexAttribPointer", 2, 3, GL.FLOAT, false, 24, 12],
-    ["vertexAttribDivisor", 2, 1],
-    ["isContextLost"], ["getError"],
-    ["createShader", GL.VERTEX_SHADER],
-    ["isContextLost"], ["getError"],
-    ["shaderSource", hoverVertexShader, literals.outlineVertexShader],
-    ["compileShader", hoverVertexShader],
-    ["getShaderParameter", hoverVertexShader, GL.COMPILE_STATUS],
-    ["isContextLost"], ["getError"],
-    ["createShader", GL.FRAGMENT_SHADER],
-    ["isContextLost"], ["getError"],
-    ["shaderSource", hoverFragmentShader, literals.hoverFragmentShader],
-    ["compileShader", hoverFragmentShader],
-    ["getShaderParameter", hoverFragmentShader, GL.COMPILE_STATUS],
-    ["isContextLost"], ["getError"],
-    ["createProgram"],
-    ["isContextLost"], ["getError"],
-    ["attachShader", hoverProgram, hoverVertexShader],
-    ["attachShader", hoverProgram, hoverFragmentShader],
-    ["linkProgram", hoverProgram],
-    ["getProgramParameter", hoverProgram, GL.LINK_STATUS],
-    ["isContextLost"], ["getError"],
-    ["getUniformLocation", hoverProgram, "u_clipFromTarget"],
-    ["isContextLost"], ["getError"],
-    ["deleteShader", hoverVertexShader],
-    ["deleteShader", hoverFragmentShader],
-    ["isContextLost"], ["getError"],
-    ["createVertexArray"],
-    ["isContextLost"], ["getError"],
-    ["createBuffer"],
-    ["isContextLost"], ["getError"],
-    ["createBuffer"],
-    ["isContextLost"], ["getError"],
-    ["createBuffer"],
-    ["isContextLost"], ["getError"],
-    ["bindVertexArray", hoverVao],
-    ["bindBuffer", GL.ARRAY_BUFFER, hoverPositionBuffer],
-    ["bufferData", GL.ARRAY_BUFFER, hoverPositionBytes, GL.STATIC_DRAW],
-    ["isContextLost"], ["getError"],
-    ["enableVertexAttribArray", 0],
-    ["vertexAttribPointer", 0, 3, GL.FLOAT, false, 0, 0],
-    ["bindBuffer", GL.ELEMENT_ARRAY_BUFFER, hoverIndexBuffer],
-    ["bufferData", GL.ELEMENT_ARRAY_BUFFER, new Uint8Array(literals.hoverIndices), GL.STATIC_DRAW],
-    ["isContextLost"], ["getError"],
-    ["bindBuffer", GL.ARRAY_BUFFER, hoverInstanceBuffer],
-    ["bufferData", GL.ARRAY_BUFFER, new Uint8Array(24), GL.DYNAMIC_DRAW],
-    ["isContextLost"], ["getError"],
-    ["enableVertexAttribArray", 1],
-    ["vertexAttribPointer", 1, 3, GL.FLOAT, false, 24, 0],
-    ["vertexAttribDivisor", 1, 1],
-    ["enableVertexAttribArray", 2],
-    ["vertexAttribPointer", 2, 3, GL.FLOAT, false, 24, 12],
-    ["vertexAttribDivisor", 2, 1],
-    ["isContextLost"], ["getError"],
-    ...expectedDrawCalls({ width: 200, height: 100, matrix: literals.unitAspectTwoMatrix, count: 1, program, vao, uniform }),
+    ...expectedDrawCalls({ width: 200, height: 100, matrix: literals.unitAspectTwoMatrix, count: 1, program, vao, matrixUniform, hoverUniform, selectionUniform }),
   ];
 }
 
@@ -591,7 +470,7 @@ test("cube, indices, shaders, context request, complete setup/draw calls, matrix
   assert.deepEqual([...canvas.gl.uploads[1].bytes], literals.cubeIndices);
   assert.equal(canvas.gl.uploads[1].byteLength, 36);
   const shaderSources = canvas.gl.calls.filter((call) => call[0] === "shaderSource").map((call) => call[2]);
-  assert.deepEqual(shaderSources, [literals.vertexShader, literals.fragmentShader, literals.outlineVertexShader, literals.selectionFragmentShader, literals.outlineVertexShader, literals.hoverFragmentShader]);
+  assert.deepEqual(shaderSources, [literals.vertexShader, literals.fragmentShader]);
   assert(shaderSources.every((source) => source.charCodeAt(source.length - 1) === 10));
   assert.equal(canvas.contextRequest.kind, "webgl2");
   assert.deepEqual(canvas.contextRequest.attributes, { alpha: false, antialias: false, depth: true, desynchronized: false, failIfMajorPerformanceCaveat: false, powerPreference: "default", premultipliedAlpha: false, preserveDrawingBuffer: false, stencil: false, xrCompatible: false });
@@ -635,18 +514,16 @@ test("one instance uses exact target-relative float staging, state, and one inst
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, "g", oneBuilding()), COMMITTED);
   const gl = environment.canvases[0].gl;
-  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 28, 96, 24, 24, 96, 24, 24]);
+  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 28]);
   const instance = gl.uploads[2].bytes;
   const view = new DataView(instance.buffer, instance.byteOffset, instance.byteLength);
   assert.deepEqual(Array.from({ length: 6 }, (_, index) => view.getFloat32(index * 4, true)), [-1.5, -2, -1.5, 3, 4, 3]);
-  assert.deepEqual([...instance.slice(24)], [0xa7, 0x8b, 0xfa, 0xff]);
+  assert.deepEqual([...instance.slice(24)], [0x22, 0xc5, 0x5e, 0xff]);
   const pointers = gl.calls.filter((call) => call[0] === "vertexAttribPointer").map((call) => call.slice(1));
   assert.deepEqual(pointers, [
     [0, 3, GL.FLOAT, false, 16, 0], [4, 1, GL.FLOAT, false, 16, 12], [1, 3, GL.FLOAT, false, 28, 0], [2, 3, GL.FLOAT, false, 28, 12], [3, 4, GL.UNSIGNED_BYTE, true, 28, 24],
-    [0, 3, GL.FLOAT, false, 0, 0], [1, 3, GL.FLOAT, false, 24, 0], [2, 3, GL.FLOAT, false, 24, 12],
-    [0, 3, GL.FLOAT, false, 0, 0], [1, 3, GL.FLOAT, false, 24, 0], [2, 3, GL.FLOAT, false, 24, 12],
   ]);
-  assert.deepEqual(gl.calls.filter((call) => call[0] === "vertexAttribDivisor").map((call) => call.slice(1)), [[1, 1], [2, 1], [3, 1], [1, 1], [2, 1], [1, 1], [2, 1]]);
+  assert.deepEqual(gl.calls.filter((call) => call[0] === "vertexAttribDivisor").map((call) => call.slice(1)), [[1, 1], [2, 1], [3, 1]]);
   assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").map((call) => call.slice(1)), [[GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 1]]);
   assert.deepEqual(gl.calls.find((call) => call[0] === "clear").slice(1), [GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT]);
   for (const disabled of [GL.BLEND, GL.DITHER, GL.STENCIL_TEST, GL.SCISSOR_TEST, GL.POLYGON_OFFSET_FILL, GL.RASTERIZER_DISCARD, GL.SAMPLE_COVERAGE, GL.SAMPLE_ALPHA_TO_COVERAGE]) assert(gl.calls.some((call) => call[0] === "disable" && call[1] === disabled));
@@ -654,7 +531,7 @@ test("one instance uses exact target-relative float staging, state, and one inst
   assert.equal(environment.observers[0].observed, true);
 });
 
-test("selection and hover use exact nested 12-edge cues with stable program and VAO identities", () => {
+test("surface focus uses two integer uniforms on every single immutable fill redraw", () => {
   const model = buildCity([
     { canonicalPath: "a.js", S: 0, U: 0, M: 0 },
     { canonicalPath: "b.js", S: 3, U: 2, M: 7 },
@@ -662,101 +539,42 @@ test("selection and hover use exact nested 12-edge cues with stable program and 
   const environment = fakeEnvironment();
   const { presenter, failures } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, 1, model), COMMITTED);
-  const canvas = environment.canvases[0];
-  const gl = canvas.gl;
+  const gl = environment.canvases[0].gl;
   const immutableUploads = gl.uploads.map(({ bytes }) => [...bytes]);
-  const exactPositions = [
-    0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0,
-    0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1,
+  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 56]);
+  assert.equal(names(gl).filter((name) => name === "createProgram").length, 1);
+  assert.equal(names(gl).filter((name) => name === "createVertexArray").length, 1);
+  assert.equal(names(gl).filter((name) => name === "createBuffer").length, 3);
+  assert.deepEqual(gl.calls.filter(([name]) => name === "uniform1i").map((call) => call[2]), [-1, -1]);
+  assert.match(literals.vertexShader, /uniform int u_hoverIndex;/u);
+  assert.match(literals.vertexShader, /uniform int u_selectionIndex;/u);
+  assert(literals.vertexShader.includes("displayed = 0.70 * ordinary;"));
+  assert(literals.vertexShader.includes("mix(displayed, ordinary, 0.15)"));
+  assert(literals.vertexShader.includes("mix(ordinary, vec3(1.0), 0.15)"));
+  assert(literals.vertexShader.includes("gl_InstanceID != u_selectionIndex"));
+  assert(literals.vertexShader.includes("v_color = vec4(displayed, 1.0);"));
+
+  const states = [
+    { hover: 0, selection: null, uniforms: [0, -1] },
+    { hover: 0, selection: 0, uniforms: [0, 0] },
+    { hover: 1, selection: 0, uniforms: [1, 0] },
+    { hover: null, selection: 0, uniforms: [-1, 0] },
+    { hover: null, selection: null, uniforms: [-1, -1] },
   ];
-  const expandedPositions = exactPositions.map((coordinate) => coordinate === 0 ? -1 / 64 : 65 / 64);
-  const completeEdges = [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7];
-  assert.deepEqual(literals.selectionBoxPositions, expandedPositions);
-  assert.deepEqual(literals.hoverBoxPositions, exactPositions);
-  assert.deepEqual(literals.selectionIndices, completeEdges);
-  assert.deepEqual(literals.hoverIndices, completeEdges);
-  assert(literals.selectionBoxPositions.every(Number.isFinite));
-  assert(literals.hoverBoxPositions.every(Number.isFinite));
-  assert.deepEqual([...new Float32Array(gl.uploads[3].bytes.buffer)], expandedPositions);
-  assert.deepEqual([...new Float32Array(gl.uploads[6].bytes.buffer)], exactPositions);
-  assert.deepEqual([...gl.uploads[4].bytes], completeEdges);
-  assert.deepEqual([...gl.uploads[7].bytes], completeEdges);
-  assert.deepEqual(gl.uploads.slice(3).map(({ byteLength }) => byteLength), [96, 24, 24, 96, 24, 24]);
-  const edgeKeys = completeEdges.reduce((keys, vertex, index) => {
-    if (index % 2 === 0) return keys;
-    keys.push([completeEdges[index - 1], vertex].sort((left, right) => left - right).join("-"));
-    return keys;
-  }, []);
-  assert.equal(new Set(edgeKeys).size, 12);
-  assert.deepEqual(Array.from({ length: 8 }, (_, vertex) => completeEdges.filter((value) => value === vertex).length), new Array(8).fill(3));
-  for (let index = 0; index < exactPositions.length; index += 1) {
-    assert(expandedPositions[index] < exactPositions[index] || expandedPositions[index] > exactPositions[index]);
+  for (const state of states) {
+    const callStart = gl.calls.length;
+    const drawStart = gl.drawObservations.length;
+    assert.deepEqual(presenter.setVisualState(1, state.hover, state.selection), APPLIED);
+    const calls = gl.calls.slice(callStart);
+    assert.deepEqual(calls.filter(([name]) => name === "uniform1i").map((call) => call[2]), state.uniforms);
+    assert.equal(gl.drawObservations.length - drawStart, 1);
+    assert.deepEqual(gl.drawObservations.at(-1).args, [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 2]);
   }
-  assert.match(literals.selectionFragmentShader, /vec4\(248\.0 \/ 255\.0, 250\.0 \/ 255\.0, 252\.0 \/ 255\.0, 1\.0\)/u);
-  assert.match(literals.hoverFragmentShader, /vec4\(148\.0 \/ 255\.0, 163\.0 \/ 255\.0, 184\.0 \/ 255\.0, 1\.0\)/u);
-
-  const drawsFor = (programId, vaoId) => gl.drawObservations.filter(({ program, vao }) => program?.id === programId && vao?.id === vaoId);
-  const cityDrawCount = () => drawsFor(3, 5).length;
-  const selectionDrawCount = () => drawsFor(11, 13).length;
-  const hoverDrawCount = () => drawsFor(19, 21).length;
-  const cityDraws = cityDrawCount();
-  const selectionDraws = selectionDrawCount();
-  const callsBefore = gl.calls.length;
-
-  assert.deepEqual(presenter.setVisualState(1, null, 1), APPLIED);
-  assert.equal(gl.subUploads.length, 1);
-  assert.equal(gl.subUploads[0].byteLength, 24);
-  assert.deepEqual([...gl.subUploads[0].bytes], [...gl.uploads[2].bytes.slice(28, 52)]);
-  assert.deepEqual(gl.uploads.map(({ bytes }) => [...bytes]), immutableUploads);
-  const selectionCalls = gl.calls.slice(callsBefore);
-  const cityDraw = selectionCalls.findIndex((call) => call[0] === "drawElementsInstanced" && call[1] === GL.TRIANGLES);
-  const selectionDraw = selectionCalls.findIndex((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES);
-  assert(cityDraw >= 0 && selectionDraw > cityDraw);
-  assert.deepEqual(selectionCalls[selectionDraw], ["drawElementsInstanced", GL.LINES, 24, GL.UNSIGNED_BYTE, 0, 1]);
-  assert.deepEqual(selectionCalls[selectionDraw - 4], ["disable", GL.DEPTH_TEST]);
-  assert.deepEqual(selectionCalls[selectionDraw - 3], ["useProgram", { kind: "Program", id: 11 }]);
-  assert.deepEqual(selectionCalls[selectionDraw - 2], ["bindVertexArray", { kind: "VertexArray", id: 13 }]);
-  assert.deepEqual(selectionCalls[selectionDraw + 1], ["enable", GL.DEPTH_TEST]);
-  assert.equal(selectionCalls.slice(cityDraw + 1).some((call) => call[0] === "disable" && call[1] === GL.POLYGON_OFFSET_FILL), false);
-
-  assert.deepEqual(presenter.setVisualState(1, 0, 1), APPLIED);
-  assert.equal(cityDrawCount(), cityDraws + 2);
-  assert.equal(selectionDrawCount(), selectionDraws + 2);
-  assert.equal(hoverDrawCount(), 1);
-  assert.equal(gl.subUploads.length, 2);
-  assert.deepEqual([...gl.subUploads[1].bytes], [...gl.uploads[2].bytes.slice(0, 24)]);
-  const differentCueDraws = gl.drawObservations.slice(-3);
-  assert.deepEqual(differentCueDraws.map(({ program, vao, args }) => [program.id, vao.id, ...args.slice(0, 2)]), [
-    [3, 5, GL.TRIANGLES, 36], [11, 13, GL.LINES, 24], [19, 21, GL.LINES, 24],
-  ]);
-
-  const sameCueStart = gl.calls.length;
-  assert.deepEqual(presenter.setVisualState(1, 1, 1), APPLIED);
-  assert.deepEqual([...gl.subUploads[2].bytes], [...gl.uploads[2].bytes.slice(28, 52)]);
-  const sameCueCalls = gl.calls.slice(sameCueStart);
-  assert.deepEqual(sameCueCalls.filter((call) => call[0] === "drawElementsInstanced").map((call) => call.slice(1, 3)), [
-    [GL.TRIANGLES, 36], [GL.LINES, 24], [GL.LINES, 24],
-  ]);
-  assert.deepEqual(sameCueCalls.filter((call) => (call[0] === "enable" || call[0] === "disable") && call[1] === GL.DEPTH_TEST), [
-    ["enable", GL.DEPTH_TEST], ["disable", GL.DEPTH_TEST], ["enable", GL.DEPTH_TEST],
-  ]);
-  assert.deepEqual(gl.drawObservations.slice(-3).map(({ program, vao }) => [program.id, vao.id]), [[3, 5], [11, 13], [19, 21]]);
-
-  canvas.dispatch("keydown", inputEvent({ key: "d" }));
-  environment.host.width = 240;
-  environment.observers[0].callback();
-  environment.resetControl.dispatch();
-  assert.equal(cityDrawCount(), cityDraws + 6);
-  assert.equal(selectionDrawCount(), selectionDraws + 6);
-  assert.equal(hoverDrawCount(), 5);
-  assert.equal(gl.subUploads.length, 3);
-
+  const noOpCalls = gl.calls.length;
   assert.deepEqual(presenter.setVisualState(1, null, null), APPLIED);
-  assert.equal(cityDrawCount(), cityDraws + 7);
-  assert.equal(selectionDrawCount(), selectionDraws + 6);
-  assert.equal(hoverDrawCount(), 5);
-  assert.equal(gl.subUploads.length, 3);
-  assert.deepEqual(gl.uploads[2].bytes, new Uint8Array(immutableUploads[2]));
+  assert.equal(gl.calls.length, noOpCalls);
+  assert.deepEqual(gl.uploads.map(({ bytes }) => [...bytes]), immutableUploads);
+  assert.deepEqual(gl.subUploads, []);
   assert.deepEqual(failures, []);
 });
 
@@ -881,109 +699,29 @@ test("context loss and disposal cancel pending hover exactly once and retained f
     assert.deepEqual(events, [], stimulus);
     assert.equal(failures.length, terminalFailures, stimulus);
     assert.equal(canvas.removeCount, 1, stimulus);
-    assert.deepEqual(resourceDeletes(canvas.gl), expectedResourceDeletesThrough(24), stimulus);
+    assert.deepEqual(resourceDeletes(canvas.gl), expectedResourceDeletesThrough(10), stimulus);
     presenter.dispose();
     assert.deepEqual(environment.cancelledFrames, [frame], stimulus);
   }
 });
 
-test("outline update, draw, and depth restoration failures revoke the complete session", () => {
-  for (const failure of ["bufferSubData", "drawElements", "depth restoration"]) {
+test("surface uniform and fill draw failures revoke the complete session", () => {
+  for (const failure of ["hover uniform", "selection uniform", "fill draw", "post-draw error"]) {
     const environment = fakeEnvironment();
     const { presenter, failures } = failuresCollector(environment);
     assert.deepEqual(present(environment, presenter, failure, oneBuilding()), COMMITTED);
     const canvas = environment.canvases[0];
     const gl = canvas.gl;
-    if (failure === "depth restoration") {
-      const enable = gl.enable.bind(gl);
-      let calls = 0;
-      gl.enable = (...args) => {
-        if (args[0] === GL.DEPTH_TEST) calls += 1;
-        enable(...args);
-        if (args[0] === GL.DEPTH_TEST && calls === 2) throw new Error("injected outline depth restoration");
-      };
-    } else if (failure === "drawElements") {
-      const draw = gl.drawElementsInstanced.bind(gl);
-      gl.drawElementsInstanced = (...args) => {
-        draw(...args);
-        if (args[0] === GL.LINES) throw new Error("injected outline draw");
-      };
-    } else {
-      gl.options.throwMethod = failure;
-    }
-    assert.deepEqual(presenter.setVisualState(failure, null, 0), PRESENTATION_FAILURE, failure);
-    assert.deepEqual(failures, [[failure, "Presentation failed", "M1-PRES-1"]], failure);
-    assert.equal(canvas.removeCount, 1, failure);
-    assert.equal(environment.host.child, undefined, failure);
-    if (failure !== "bufferSubData") {
-      const outlineDraw = gl.calls.findIndex((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES);
-      assert(outlineDraw >= 0, failure);
-      assert.deepEqual(gl.calls[outlineDraw + 1], ["enable", GL.DEPTH_TEST], failure);
-    }
-    assert.equal(names(gl).filter((name) => name === "deleteShader").length, 6, failure);
-    assert.equal(names(gl).filter((name) => name === "deleteProgram").length, 3, failure);
-    assert.equal(names(gl).filter((name) => name === "deleteBuffer").length, 9, failure);
-    assert.equal(names(gl).filter((name) => name === "deleteVertexArray").length, 3, failure);
-    assert.deepEqual(presenter.setVisualState(failure, null, 0), STALE, failure);
-  }
-});
-
-test("hover upload, whole-box draw, and depth restoration failures revoke the complete session", () => {
-  for (const failure of ["bufferSubData", "hover draw", "depth restoration"]) {
-    const environment = fakeEnvironment();
-    const { presenter, failures } = failuresCollector(environment);
-    assert.deepEqual(present(environment, presenter, failure, oneBuilding()), COMMITTED);
-    const canvas = environment.canvases[0];
-    const gl = canvas.gl;
-    if (failure === "bufferSubData") gl.options.throwMethod = "bufferSubData";
-    if (failure === "hover draw") {
-      const draw = gl.drawElementsInstanced.bind(gl);
-      gl.drawElementsInstanced = (...args) => {
-        draw(...args);
-        if (args[0] === GL.LINES && gl.currentProgram?.id === 19 && gl.currentVao?.id === 21) throw new Error("injected hover draw");
-      };
-    }
-    if (failure === "depth restoration") {
-      const enable = gl.enable.bind(gl);
-      let depthEnables = 0;
-      gl.enable = (...args) => {
-        if (args[0] === GL.DEPTH_TEST) depthEnables += 1;
-        enable(...args);
-        if (args[0] === GL.DEPTH_TEST && depthEnables === 2) throw new Error("injected hover depth restoration");
-      };
-    }
+    if (failure === "hover uniform") gl.options.callFault = { method: "uniform1i", occurrence: 3 };
+    if (failure === "selection uniform") gl.options.callFault = { method: "uniform1i", occurrence: 4 };
+    if (failure === "fill draw") gl.options.callFault = { method: "drawElementsInstanced", occurrence: 2 };
+    if (failure === "post-draw error") gl.options.glError = true;
     assert.deepEqual(presenter.setVisualState(failure, 0, null), PRESENTATION_FAILURE, failure);
     assert.deepEqual(failures, [[failure, "Presentation failed", "M1-PRES-1"]], failure);
     assert.equal(canvas.removeCount, 1, failure);
-    assert.deepEqual(resourceDeletes(gl), expectedResourceDeletesThrough(24), failure);
-  }
-});
-
-test("falsy outline exceptions survive depth restoration and revoke the complete session", () => {
-  for (const [id, thrown] of [
-    ["undefined", undefined], ["null", null], ["false", false], ["zero", 0],
-    ["empty string", ""], ["NaN", Number.NaN], ["zero bigint", 0n],
-  ]) {
-    const environment = fakeEnvironment();
-    const { presenter, failures } = failuresCollector(environment);
-    assert.deepEqual(present(environment, presenter, id, oneBuilding()), COMMITTED);
-    const canvas = environment.canvases[0];
-    const gl = canvas.gl;
-    const draw = gl.drawElementsInstanced.bind(gl);
-    gl.drawElementsInstanced = (...args) => {
-      draw(...args);
-      if (args[0] === GL.LINES) throw thrown;
-    };
-
-    assert.deepEqual(presenter.setVisualState(id, null, 0), PRESENTATION_FAILURE, id);
-    assert.deepEqual(failures, [[id, "Presentation failed", "M1-PRES-1"]], id);
-    const outlineDraw = gl.calls.findIndex((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES);
-    assert(outlineDraw >= 0, id);
-    assert.deepEqual(gl.calls[outlineDraw + 1], ["enable", GL.DEPTH_TEST], id);
-    assert.equal(canvas.removeCount, 1, id);
-    assert.equal(environment.host.child, undefined, id);
-    assert.deepEqual(resourceDeletes(gl), expectedResourceDeletesThrough(24), id);
-    assert.deepEqual(presenter.setVisualState(id, null, 0), STALE, id);
+    assert.equal(environment.host.child, undefined, failure);
+    assert.deepEqual(resourceDeletes(gl), expectedResourceDeletesThrough(10), failure);
+    assert.deepEqual(presenter.setVisualState(failure, null, null), STALE, failure);
   }
 });
 
@@ -1555,7 +1293,8 @@ test("the complete 4,000-building model uploads exactly 112,000 bytes and draws 
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, 4000, model), COMMITTED);
   const gl = environment.canvases[0].gl;
-  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 112000, 96, 24, 24, 96, 24, 24]);
+  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 112000]);
+  assert.equal(gl.uploads.reduce((total, { byteLength }) => total + byteLength, 0), 112420);
   assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").at(-1).slice(1), [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 4000]);
 });
 
@@ -1573,7 +1312,7 @@ test("final dimension reread redraws the detached candidate before commit", () =
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
   const canvas = environment.canvases[0];
-  assert.equal(canvas.gl.uploads.length, 9);
+  assert.equal(canvas.gl.uploads.length, 3);
   assert.equal(canvas.gl.calls.filter((call) => call[0] === "drawElementsInstanced").length, 2);
   assert.equal(canvas.width, 200);
 });
@@ -1592,7 +1331,8 @@ test("changed resize repeats the exact draw state with a literal matrix and unch
 
   environment.host.width = 300;
   environment.observers[0].callback();
-  assert.equal(gl.uploads.length, 9);
+  assert.equal(gl.uploads.length, 3);
+  const initialIntegerUniforms = gl.calls.filter((call) => call[0] === "uniform1i").map((call) => call[1]);
   assert.deepEqual(gl.calls.slice(callCount), expectedDrawCalls({
     width: 300,
     height: 100,
@@ -1600,7 +1340,9 @@ test("changed resize repeats the exact draw state with a literal matrix and unch
     count: 1,
     program,
     vao,
-    uniform,
+    matrixUniform: uniform,
+    hoverUniform: initialIntegerUniforms[0],
+    selectionUniform: initialIntegerUniforms[1],
   }));
   assert.deepEqual(canvas.contextDataReads.slice(dataReadCount), ["drawingBufferWidth", "drawingBufferHeight"]);
   assert.deepEqual(canvas.forbiddenContextReads, []);
@@ -1610,7 +1352,7 @@ test("changed resize repeats the exact draw state with a literal matrix and unch
   environment.observers[0].callback();
   assert.equal(gl.calls.length, unchangedCallCount);
   assert.equal(canvas.contextDataReads.length, unchangedDataReadCount);
-  assert.equal(gl.uploads.length, 9);
+  assert.equal(gl.uploads.length, 3);
 });
 
 test("committed context loss and resize failures notify controller before idempotent token cleanup", () => {
@@ -1654,9 +1396,9 @@ test("committed context loss and resize failures notify controller before idempo
     assert.equal(environment.host.child, undefined);
     assert.equal(canvas.removeCount, 1);
     assert.equal(environment.observers[0].disconnected, 1);
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteProgram").length, 3);
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteBuffer").length, 9);
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteVertexArray").length, 3);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteProgram").length, 1);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteBuffer").length, 3);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteVertexArray").length, 1);
     assert.deepEqual(callbacks, [[stimulus, "Presentation failed", "M1-PRES-1"]]);
     presenter.rollback(environment.lastToken);
     retained();
@@ -1712,79 +1454,48 @@ test("closed failure stimuli fail synchronously after cleanup with no publicatio
   }
 });
 
-test("later selection and hover allocation faults map to M1-PRES-1 and exactly revoke usable and lost-context ownership", () => {
+test("required uniform and partial allocation failures clean exactly the acquired resources", () => {
   const faults = [
-    { id: "outline vertex shader", method: "createShader", occurrence: 3, nullResult: true, lastOwnedResource: 8, releasedBeforeLoss: [1, 2] },
-    { id: "outline fragment shader", method: "createShader", occurrence: 4, nullResult: true, lastOwnedResource: 9, releasedBeforeLoss: [1, 2] },
-    { id: "outline program", method: "createProgram", occurrence: 2, nullResult: true, lastOwnedResource: 10, releasedBeforeLoss: [1, 2] },
-    { id: "outline uniform", method: "getUniformLocation", occurrence: 2, nullResult: true, lastOwnedResource: 11, releasedBeforeLoss: [1, 2] },
-    { id: "outline VAO", method: "createVertexArray", occurrence: 2, nullResult: true, lastOwnedResource: 12, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "outline position buffer", method: "createBuffer", occurrence: 4, nullResult: true, lastOwnedResource: 13, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "outline index buffer", method: "createBuffer", occurrence: 5, nullResult: true, lastOwnedResource: 14, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "outline instance buffer", method: "createBuffer", occurrence: 6, nullResult: true, lastOwnedResource: 15, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "outline position upload", method: "bufferData", occurrence: 4, nullResult: false, lastOwnedResource: 16, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "outline index upload", method: "bufferData", occurrence: 5, nullResult: false, lastOwnedResource: 16, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "outline instance upload", method: "bufferData", occurrence: 6, nullResult: false, lastOwnedResource: 16, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "hover vertex shader", method: "createShader", occurrence: 5, nullResult: true, lastOwnedResource: 16, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "hover fragment shader", method: "createShader", occurrence: 6, nullResult: true, lastOwnedResource: 17, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "hover program", method: "createProgram", occurrence: 3, nullResult: true, lastOwnedResource: 18, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "hover uniform", method: "getUniformLocation", occurrence: 3, nullResult: true, lastOwnedResource: 19, releasedBeforeLoss: [1, 2, 9, 10] },
-    { id: "hover VAO", method: "createVertexArray", occurrence: 3, nullResult: true, lastOwnedResource: 20, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
-    { id: "hover position buffer", method: "createBuffer", occurrence: 7, nullResult: true, lastOwnedResource: 21, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
-    { id: "hover index buffer", method: "createBuffer", occurrence: 8, nullResult: true, lastOwnedResource: 22, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
-    { id: "hover instance buffer", method: "createBuffer", occurrence: 9, nullResult: true, lastOwnedResource: 23, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
-    { id: "hover position upload", method: "bufferData", occurrence: 7, nullResult: false, lastOwnedResource: 24, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
-    { id: "hover index upload", method: "bufferData", occurrence: 8, nullResult: false, lastOwnedResource: 24, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
-    { id: "hover instance upload", method: "bufferData", occurrence: 9, nullResult: false, lastOwnedResource: 24, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
+    { id: "hover uniform", method: "getUniformLocation", occurrence: 2, result: null, deletes: { shader: 2, program: 1, vao: 0, buffer: 0 } },
+    { id: "selection uniform", method: "getUniformLocation", occurrence: 3, result: null, deletes: { shader: 2, program: 1, vao: 0, buffer: 0 } },
+    { id: "vao", method: "createVertexArray", occurrence: 1, result: null, deletes: { shader: 2, program: 1, vao: 0, buffer: 0 } },
+    { id: "position buffer", method: "createBuffer", occurrence: 1, result: null, deletes: { shader: 2, program: 1, vao: 1, buffer: 0 } },
+    { id: "index buffer", method: "createBuffer", occurrence: 2, result: null, deletes: { shader: 2, program: 1, vao: 1, buffer: 1 } },
+    { id: "instance buffer", method: "createBuffer", occurrence: 3, result: null, deletes: { shader: 2, program: 1, vao: 1, buffer: 2 } },
+    { id: "position upload", method: "bufferData", occurrence: 1, deletes: { shader: 2, program: 1, vao: 1, buffer: 3 } },
+    { id: "index upload", method: "bufferData", occurrence: 2, deletes: { shader: 2, program: 1, vao: 1, buffer: 3 } },
+    { id: "instance upload", method: "bufferData", occurrence: 3, deletes: { shader: 2, program: 1, vao: 1, buffer: 3 } },
   ];
-
-  for (const faultCase of faults) {
+  for (const fault of faults) {
     for (const context of ["usable", "lost"]) {
-      const id = `${faultCase.id}:${context}`;
+      const id = fault.id + ":" + context;
       const environment = fakeEnvironment();
       const { presenter, failures } = failuresCollector(environment);
       assert.deepEqual(present(environment, presenter, "current", oneBuilding()), COMMITTED, id);
-      const currentCanvas = environment.canvases[0];
-      const callFault = {
-        method: faultCase.method,
-        occurrence: faultCase.occurrence,
+      const current = environment.canvases[0];
+      const candidate = new FakeCanvas(environment.host, { callFault: {
+        method: fault.method,
+        occurrence: fault.occurrence,
         loseContext: context === "lost",
-        ...(faultCase.nullResult ? { result: null } : {}),
-      };
-      const candidateCanvas = new FakeCanvas(environment.host, { callFault });
-      environment.platform.createCanvas = () => {
-        environment.canvases.push(candidateCanvas);
-        return candidateCanvas;
-      };
-
+        ...(Object.hasOwn(fault, "result") ? { result: fault.result } : {}),
+      } });
+      environment.platform.createCanvas = () => { environment.canvases.push(candidate); return candidate; };
       assert.deepEqual(present(environment, presenter, id, oneBuilding()), PRESENTATION_FAILURE, id);
       assert.deepEqual(failures, [], id);
       assert.equal(environment.host.child, undefined, id);
-      assert.equal(currentCanvas.removeCount, 1, id);
-      assert.equal(candidateCanvas.removeCount, 1, id);
-      assert.deepEqual(resourceDeletes(currentCanvas.gl), expectedResourceDeletesThrough(24), id);
-      assert.notEqual(candidateCanvas.gl.faultCallIndex, undefined, id);
+      assert.equal(current.removeCount, 1, id);
+      assert.equal(candidate.removeCount, 1, id);
+      assert.deepEqual(resourceDeletes(current.gl), expectedResourceDeletesThrough(10), id);
+      const deletes = names(candidate.gl).filter((name) => name.startsWith("delete"));
       if (context === "usable") {
-        assert.deepEqual(resourceDeletes(candidateCanvas.gl), expectedResourceDeletesThrough(faultCase.lastOwnedResource), id);
+        assert.equal(deletes.filter((name) => name === "deleteShader").length, fault.deletes.shader, id);
+        assert.equal(deletes.filter((name) => name === "deleteProgram").length, fault.deletes.program, id);
+        assert.equal(deletes.filter((name) => name === "deleteVertexArray").length, fault.deletes.vao, id);
+        assert.equal(deletes.filter((name) => name === "deleteBuffer").length, fault.deletes.buffer, id);
       } else {
-        assert.deepEqual(
-          resourceDeletes(candidateCanvas.gl),
-          expectedResourceDeletesThrough(24).filter(([, resourceId]) => faultCase.releasedBeforeLoss.includes(resourceId)),
-          id,
-        );
-        assert.equal(
-          candidateCanvas.gl.calls.slice(candidateCanvas.gl.faultCallIndex + 1).some(([name]) => name.startsWith("delete")),
-          false,
-          id,
-        );
+        assert.equal(candidate.gl.calls.slice(candidate.gl.faultCallIndex + 1).some(([name]) => name.startsWith("delete")), false, id);
       }
       assert.deepEqual(presenter.setVisualState("current", null, 0), STALE, id);
-      const deletes = [resourceDeletes(currentCanvas.gl), resourceDeletes(candidateCanvas.gl)];
-      presenter.dispose();
-      presenter.dispose();
-      assert.deepEqual([resourceDeletes(currentCanvas.gl), resourceDeletes(candidateCanvas.gl)], deletes, id);
-      assert.equal(currentCanvas.removeCount, 1, id);
-      assert.equal(candidateCanvas.removeCount, 1, id);
     }
   }
 });
@@ -1815,9 +1526,9 @@ test("cleanup contains release throws, attempts every resource, and skips driver
     const remove = canvas.remove.bind(canvas);
     canvas.remove = () => { remove(); throw new Error("canvas removal"); };
     assert.doesNotThrow(() => presenter.dispose());
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteProgram").length, 3);
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteBuffer").length, 9);
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteVertexArray").length, 3);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteProgram").length, 1);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteBuffer").length, 3);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteVertexArray").length, 1);
     assert.equal(canvas.removeCount, 1);
     assert.deepEqual(failures, []);
   }
