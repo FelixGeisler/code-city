@@ -17,6 +17,7 @@ const fixture = JSON.parse(await readFile(path.join(root, "test/fixtures/camera-
 const cityFixture = JSON.parse(await readFile(path.join(root, "test/fixtures/city-cases.json"), "utf8"));
 const policy = await import("../src/domain/camera-picking-policy.ts");
 const { buildCity } = await import("../src/domain/city-model.ts");
+const { validateCityPayload } = await import("../src/application/city-payload.ts");
 const overviewFixture = fixture.fitCases[0];
 
 const {
@@ -533,14 +534,15 @@ test("overview and moved-camera center rays pick validated world AABBs", () => {
 });
 
 test("native picking misses both intra-group and inter-group whitespace in grouped geometry", () => {
-  const city = buildCity([
+  const city = validateCityPayload(buildCity([
     { canonicalPath: "a/x/one.ts", S: 1, U: 0, M: 0 },
     { canonicalPath: "a/x/two.ts", S: 1, U: 0, M: 0 },
     { canonicalPath: "b/x/one.ts", S: 1, U: 0, M: 0 },
-  ]);
+  ]));
   assert.deepEqual([...city.geometry.origins], [0, 0, 0, 5, 0, 0, 0, 0, 17]);
+  assert.deepEqual(city.presentation.sceneBounds, [-3, -0.5, -3, 11, 8, 23]);
   const dimensions = { width: 1000, height: 800 };
-  const view = success(resetCamera(city.geometry.bounds, dimensions)).view;
+  const view = success(resetCamera(city.presentation.sceneBounds, dimensions)).view;
   const projectGround = (x, z) => {
     const relative = [x - view.centre[0], -view.centre[1], z - view.centre[2]];
     const matrix = view.matrix;
@@ -552,7 +554,7 @@ test("native picking misses both intra-group and inter-group whitespace in group
     return { x: (ndcX + 1) * dimensions.width / 2, y: (1 - ndcY) * dimensions.height / 2 };
   };
   const rectangle = { left: 0, top: 0, width: dimensions.width, height: dimensions.height };
-  for (const [id, point] of [["intra-group", [3.5, 2.5]], ["inter-group", [4, 10]]]) {
+  for (const [id, point] of [["plate-padding", [-2, 1]], ["intra-group", [3.5, 2.5]], ["inter-group", [4, 10]]]) {
     const canvas = projectGround(...point);
     assert.deepEqual(success(pickAtCanvasPoint(view, canvas.x, canvas.y, rectangle, dimensions, city.geometry), id), { kind: "success", index: null, tEnter: null });
   }
@@ -588,11 +590,17 @@ test("both full 4,000-city envelopes keep immutable origin-C endpoints and stric
       canonicalPath: canonicalPath(index),
       ...(index < envelope.largeFactCount ? envelope.largeFact : envelope.smallFact),
     }));
-    const city = buildCity(facts);
+    const city = validateCityPayload(buildCity(facts));
     assert.deepEqual([...city.geometry.bounds], envelope[id].expectedBounds, id);
+    const expectedScene = id === "concentrated"
+      ? [-3, -0.5, -3, 331, 40, 341]
+      : [-3, -0.5, -3, 1077, 40, 1075];
+    assert.deepEqual(city.presentation.sceneBounds, expectedScene, `${id}: scene bounds`);
+    assert.deepEqual(city.presentation.centre, id === "concentrated" ? [164, 19.75, 169] : [537, 19.75, 536]);
+    assert.equal(city.presentation.plates.length, id === "concentrated" ? 1 : 4000);
     const originalOrigins = Buffer.from(bytes(city.geometry.origins));
     const originalSizes = Buffer.from(bytes(city.geometry.sizes));
-    const centre = [city.geometry.bounds[3] / 2, city.geometry.bounds[4] / 2, city.geometry.bounds[5] / 2];
+    const centre = city.presentation.centre;
     for (let index = 0; index < city.geometry.count; index += 1) {
       const offset = index * 3;
       for (let axis = 0; axis < 3; axis += 1) {
@@ -602,20 +610,35 @@ test("both full 4,000-city envelopes keep immutable origin-C endpoints and stric
         assert.equal(Math.fround(endpoint - centre[axis]), endpoint - centre[axis]);
       }
     }
-    let camera = success(resetCamera(city.geometry.bounds, { width: 4096, height: 2160 }));
+    for (const plate of city.presentation.plates) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        const origin = plate.minimum[axis];
+        const endpoint = origin + plate.dimensions[axis];
+        assert.equal(Math.fround(origin - centre[axis]), origin - centre[axis], `${id}: plate origin axis ${axis}`);
+        assert.equal(Math.fround(endpoint - centre[axis]), endpoint - centre[axis], `${id}: plate endpoint axis ${axis}`);
+      }
+    }
+    const sceneBounds = city.presentation.sceneBounds;
+    let camera = success(resetCamera(sceneBounds, { width: 4096, height: 2160 }));
     for (let index = 0; index < 32; index += 1) {
       const action = index % 4;
       camera = success(action === 0
-        ? panCameraByPointer(camera.state, city.geometry.bounds, { width: 4096, height: 2160 }, index - 16, 16 - index, 4096, 2160)
+        ? panCameraByPointer(camera.state, sceneBounds, { width: 4096, height: 2160 }, index - 16, 16 - index, 4096, 2160)
         : action === 1
-          ? orbitCameraByKeyboard(camera.state, city.geometry.bounds, { width: 4096, height: 2160 }, index % 2 ? "a" : "w")
+          ? orbitCameraByKeyboard(camera.state, sceneBounds, { width: 4096, height: 2160 }, index % 2 ? "a" : "w")
           : action === 2
-            ? zoomCamera(camera.state, city.geometry.bounds, { width: 4096, height: 2160 }, index % 2 ? "out" : "in")
-            : resizeCamera(camera.state, city.geometry.bounds, { width: 2160, height: 4096 }));
+            ? zoomCamera(camera.state, sceneBounds, { width: 4096, height: 2160 }, index % 2 ? "out" : "in")
+            : resizeCamera(camera.state, sceneBounds, { width: 2160, height: 4096 }));
       assert(camera.view.oracleClipW.every((clipW) => clipW > 0), `${id}: positive W`);
       assert(camera.view.oracleDepths.every((depth) => -1 < depth && depth < 1), `${id}: strict depth`);
     }
-    camera = success(resetCamera(city.geometry.bounds, { width: 4096, height: 2160 }));
+    for (const elevationDelta of [-100 * Math.PI, 100 * Math.PI]) {
+      camera = success(orbitCamera(camera.state, sceneBounds, { width: 2160, height: 4096 }, 2 * Math.PI, elevationDelta));
+      assert(camera.view.oracleClipW.every((clipW) => clipW > 0), `${id}: elevation-extreme positive W`);
+      assert(camera.view.oracleDepths.every((depth) => -1 < depth && depth < 1), `${id}: elevation-extreme strict depth`);
+    }
+    camera = success(resetCamera(sceneBounds, { width: 4096, height: 2160 }));
+    assert.deepEqual(camera.view.centre, city.presentation.centre);
     assert.equal(camera.state.magnification, 1);
     assert.deepEqual(bytes(city.geometry.origins), originalOrigins);
     assert.deepEqual(bytes(city.geometry.sizes), originalSizes);
@@ -624,9 +647,9 @@ test("both full 4,000-city envelopes keep immutable origin-C endpoints and stric
 
 test("accepted ADR history and current perspective requirements stay synchronized without ADR 0013", async () => {
   const adrFiles = [
-    ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 4_058, "10c512a85b2f10ececbe27dc27721e609c41ebb40a88617c2fbf0f90641251dc"],
-    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 19_763, "a8a694b789218ebf3007432bba89e5ce19977bafb6ee5487e896533d0b9d368a"],
-    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 13_557, "4becbc89d4392634f63e6582cfc21daf75245fa85d44bfb54747f9968cc7db67"],
+    ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 4_579, "f618aca466b02a45399fb9f9d625b1e4c941cfdb3570a118b68b2fa09ccf348d"],
+    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 20_522, "3631b0e7fd71d3562115d5ae2fd07e5748a39161b1f05d5c97da7536921e09bc"],
+    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 14_268, "71cb8e73ad60cfa4819d183db7dc464c59bfd46f586893aabe989a904ba3115c"],
   ];
   const adrs = [];
   for (const [file, expectedLength, expectedHash] of adrFiles) {
@@ -643,6 +666,7 @@ test("accepted ADR history and current perspective requirements stay synchronize
   assert(adrs[2].includes("Subsequent refinement (issue 569)"));
   assert(adrs[1].includes("Subsequent refinement (issue 571)"));
   assert(adrs[2].includes("Subsequent refinement (issue 571)"));
+  assert(adrs.every((adr) => adr.includes("issues/573")));
   assert.equal(await readFile(path.join(root, "docs/modules/architecture/nav.adoc"), "utf8").then((text) => text.includes("0013")), false);
   const requirements = await readFile(path.join(root, "docs/modules/requirements/pages/city-and-failures.adoc"), "utf8");
   const normalized = requirements.replace(/\s+/g, " ");
@@ -653,10 +677,10 @@ test("accepted ADR history and current perspective requirements stay synchronize
     "not a claim of bit-identical WebGL/GLSL operation ordering or GPU depth",
     "Any violation rejects the complete transition atomically as *Presentation failed* / `M1-PRES-1`",
     "#22C55EFF", "#84CC16FF", "#FACC15FF", "#F59E0BFF", "#F97316FF", "#EF4444FF",
-    "D = 0.70", "H = 0.15", "u_hoverIndex", "u_selectionIndex", "112420",
-    "Complexity: low → high", "M = 16+", "One program, one VAO, three immutable buffers",
+    "D = 0.70", "H = 0.15", "u_passKind", "u_hoverIndex", "u_selectionIndex", "208420",
+    "Complexity: low → high", "M = 16+", "one program, two VAOs, and four immutable buffers", "#182A43FF",
   ]) assert(normalized.includes(statement), statement);
-  for (const superseded of ["#F8FAFCFF", "#94A3B8FF", "-1/64", "65/64", "Selection draws first and hover second"]) {
+  for (const superseded of ["#F8FAFCFF", "#94A3B8FF", "-1/64", "65/64", "Selection draws first and hover second", "visible group plate"]) {
     assert.equal(normalized.includes(superseded), false, superseded);
   }
   const source = await readFile(path.join(root, "src/domain/camera-picking-policy.ts"), "utf8");

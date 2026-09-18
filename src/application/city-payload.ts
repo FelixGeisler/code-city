@@ -17,10 +17,19 @@ export type CityPayload = City;
 
 declare const validatedGeometryBrand: unique symbol;
 export type ValidatedGeometry = Readonly<PresentationModel & { readonly [validatedGeometryBrand]: true }>;
+export type DistrictPlate = Readonly<{
+  minimum: readonly [number, number, number];
+  dimensions: readonly [number, number, number];
+}>;
+export type NumericPresentation = Readonly<{
+  plates: readonly DistrictPlate[];
+  sceneBounds: readonly [number, number, number, number, number, number];
+  centre: readonly [number, number, number];
+}>;
 export type ValidatedCity = Readonly<{
   geometry: ValidatedGeometry;
   inspection: readonly InspectionFact[];
-  centre: readonly [number, number, number];
+  presentation: NumericPresentation;
 }>;
 
 type DataRecord = Record<string, unknown>;
@@ -145,6 +154,8 @@ function reconstructExpected(inspection: readonly InspectionFact[]): Readonly<{
   sizes: readonly number[];
   rgba: readonly number[];
   bounds: readonly number[];
+  plates: readonly Readonly<{ minimumX: number; minimumZ: number; width: number; depth: number }>[];
+  sceneBounds: readonly number[];
 }> {
   const count = inspection.length;
   const sizes = new Array<number>(count * 3);
@@ -228,12 +239,14 @@ function reconstructExpected(inspection: readonly InspectionFact[]): Readonly<{
   let rowDepth = 0;
   let minimumX = Number.POSITIVE_INFINITY;
   let minimumZ = Number.POSITIVE_INFINITY;
+  const packedCells: Array<{ minimumX: number; minimumZ: number; width: number; depth: number }> = [];
   for (const group of groups) {
     if (cursorX !== 0 && checkedAdd(cursorX, group.width) > target) {
       cursorX = 0;
       cursorZ = checkedAdd(cursorZ, checkedAdd(rowDepth, GROUP_GAP));
       rowDepth = 0;
     }
+    packedCells.push({ minimumX: cursorX, minimumZ: cursorZ, width: group.width, depth: group.depth });
     for (const building of group.buildings) {
       const x = checkedAdd(cursorX, building.x);
       const z = checkedAdd(cursorZ, building.z);
@@ -258,7 +271,30 @@ function reconstructExpected(inspection: readonly InspectionFact[]): Readonly<{
     maximumX = Math.max(maximumX, checkedAdd(x, sides[index]!));
     maximumZ = Math.max(maximumZ, checkedAdd(z, sides[index]!));
   }
-  return { origins, sizes, rgba, bounds: [0, 0, 0, maximumX, maximumY, maximumZ] };
+  const plates = packedCells.map((cell) => ({
+    minimumX: cell.minimumX - minimumX,
+    minimumZ: cell.minimumZ - minimumZ,
+    width: cell.width,
+    depth: cell.depth,
+  }));
+  let sceneMinimumX = 0;
+  let sceneMinimumZ = 0;
+  let sceneMaximumX = maximumX;
+  let sceneMaximumZ = maximumZ;
+  for (const plate of plates) {
+    sceneMinimumX = Math.min(sceneMinimumX, plate.minimumX);
+    sceneMinimumZ = Math.min(sceneMinimumZ, plate.minimumZ);
+    sceneMaximumX = Math.max(sceneMaximumX, checkedAdd(plate.minimumX, plate.width));
+    sceneMaximumZ = Math.max(sceneMaximumZ, checkedAdd(plate.minimumZ, plate.depth));
+  }
+  return {
+    origins,
+    sizes,
+    rgba,
+    bounds: [0, 0, 0, maximumX, maximumY, maximumZ],
+    plates,
+    sceneBounds: [sceneMinimumX, -0.5, sceneMinimumZ, sceneMaximumX, maximumY, sceneMaximumZ],
+  };
 }
 
 function exactTypedArray<T extends Float32Array | Uint8Array>(
@@ -394,20 +430,29 @@ export function validateCityPayload(value: unknown): ValidatedCity {
     for (let index = 0; index < geometry.bounds.length; index += 1) {
       if (!sameNumber(geometry.bounds[index]!, expected.bounds[index]!)) invalid();
     }
+    const sceneBounds = Object.freeze([...expected.sceneBounds]) as NumericPresentation["sceneBounds"];
     const centre = Object.freeze([
-      geometry.bounds[0]! + (geometry.bounds[3]! - geometry.bounds[0]!) / 2,
-      geometry.bounds[1]! + (geometry.bounds[4]! - geometry.bounds[1]!) / 2,
-      geometry.bounds[2]! + (geometry.bounds[5]! - geometry.bounds[2]!) / 2,
-    ]) as readonly [number, number, number];
+      sceneBounds[0] + (sceneBounds[3] - sceneBounds[0]) / 2,
+      sceneBounds[1] + (sceneBounds[4] - sceneBounds[1]) / 2,
+      sceneBounds[2] + (sceneBounds[5] - sceneBounds[2]) / 2,
+    ]) as NumericPresentation["centre"];
+    const plates = Object.freeze(expected.plates.map((plate) => Object.freeze({
+      minimum: Object.freeze([plate.minimumX, -0.5, plate.minimumZ]) as DistrictPlate["minimum"],
+      dimensions: Object.freeze([plate.width, 0.5, plate.depth]) as DistrictPlate["dimensions"],
+    })));
+    const exactRelativeBox = (minimum: ArrayLike<number>, dimensions: ArrayLike<number>): void => {
+      for (let axis = 0; axis < 3; axis += 1) {
+        const endpoint = minimum[axis]! + dimensions[axis]!;
+        if (!exactTargetRelative(minimum[axis]! - centre[axis]) || !exactTargetRelative(endpoint - centre[axis])) invalid();
+      }
+    };
     for (let index = 0; index < geometry.count; index += 1) {
       const offset = index * 3;
-      for (let axis = 0; axis < 3; axis += 1) {
-        const origin = geometry.origins[offset + axis]!;
-        const endpoint = checkedAdd(origin, geometry.sizes[offset + axis]!);
-        if (!exactTargetRelative(origin - centre[axis]) || !exactTargetRelative(endpoint - centre[axis])) invalid();
-      }
+      exactRelativeBox(geometry.origins.subarray(offset, offset + 3), geometry.sizes.subarray(offset, offset + 3));
     }
-    return Object.freeze({ geometry, inspection, centre });
+    for (const plate of plates) exactRelativeBox(plate.minimum, plate.dimensions);
+    const presentation = Object.freeze({ plates, sceneBounds, centre });
+    return Object.freeze({ geometry, inspection, presentation });
   } catch (error) {
     if (error instanceof Error && error.message === "M1-CITY-1") throw error;
     invalid();

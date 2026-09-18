@@ -91,11 +91,15 @@ cell depth, `outerTarget`, and gap `8`. A row opens only when nonempty and
 The world origin of each building is its cell origin plus its padded local
 origin.
 
-After packing, translate all actual building minima by the same horizontal
-vector so the minimum actual `x` and `z` are exactly `0`. Compute city bounds
-from actual building boxes only. Virtual padding, cells, rows, and groups are
-layout calculations only: they are not payload geometry, visible plates, or
-pick targets.
+After packing, translate all actual building minima and every virtual cell by
+the same horizontal vector so the minimum actual building `x` and `z` are
+exactly `0`. Geometry payload bounds remain computed from actual building boxes
+only. Independently retain each translated virtual cell, in outer-pack order,
+as one numeric district plate with minimum `(cellMinX,-0.5,cellMinZ)` and
+dimensions `(cellWidth,0.5,cellDepth)`. The plate top is exactly `y=0`; group
+gap `8` is excluded. `sceneBounds` is the union of all plates and real building
+AABBs, and its immutable centre is shared by camera and instance uploads.
+Plates are presentation-only and are not payload geometry or pick targets.
 
 Payload arrays remain in increasing canonical-path index order. Packing writes
 one computed position back to that index; it does not reorder identity,
@@ -104,9 +108,13 @@ keyboard traversal, selection, inspection, or exact-tie ownership.
 == Scene and fixed face display
 
 The WebGL clear colour and the matching CSS city host background are
-`#07111F`. Every building remains one instance in the existing single city
-fill draw. Fixed trusted face display derives normalized RGB channels from the
-instance base colour as follows, retaining alpha `1`:
+`#07111F`. Each redraw clears once, draws all district plates first, then draws
+every building with canonical building instance IDs still starting at zero.
+Both instanced `TRIANGLES` draws use one trusted program and shared cube/index
+buffers. Required integer `u_passKind` is `0` immediately before the plate draw
+and `1` immediately before the building draw. Fixed trusted building-face
+display derives normalized RGB channels from the instance base colour as
+follows, retaining alpha `1`:
 
 [source,text]
 ----
@@ -115,9 +123,13 @@ instance base colour as follows, retaining alpha `1`:
 +Z, -Z, and -Y: c' = 0.62 * c
 ----
 
-The base colour remains identifiable through these fixed transforms. There is
-no configurable lighting, normal or material input, texture, fog, shadow,
-blending, antialiasing promise, or static edge pass.
+The plate branch never consults building colour or focus. Its `+Y` face is
+`#182A43FF`, its `+X/-X` faces are `#142237FF`, and its `+Z/-Z` and bottom faces
+are `#0F1A2AFF`. Plates are opaque with CCW front faces, back-face culling,
+depth `LESS`, and depth writes enabled. The building base colour remains
+identifiable through its fixed transforms. There is no configurable lighting,
+normal or material input, texture, fog, shadow, blending, polygon offset,
+antialiasing promise, outline, or static edge pass.
 
 == Camera and controls
 
@@ -132,8 +144,10 @@ V      = D × R
 R × V  = D
 ....
 
-The camera looks along `-D`. Overview uses target `T=C`, where `C` is the
-immutable bounds centre, and the existing M1 vectors:
+The camera looks along `-D`. Camera reset, resize, orbit, pan, zoom, matrices,
+and strict W/depth admission use plate-inclusive `sceneBounds`. Overview uses
+target `T=C`, where `C` is the immutable `sceneBounds` centre, and the existing
+M1 vectors:
 
 [source,text]
 ....
@@ -396,6 +410,11 @@ The direction is intentionally unnormalised. Every candidate for one pick uses
 the same ray parameter, so nearest ordering and exact distance ties remain
 unchanged without an additional rounding step.
 
+Only real building AABBs are ray candidates; plates, padding, and group gaps
+never enter picking. A ray through a building retains its existing hit even
+where a plate lies below it. Exposed plate, padding, and gap rays are empty, and
+empty activation retains the existing selection-clear rule.
+
 Each building uses an inclusive ray/AABB slab test. A direction component
 exactly zero is parallel: it misses only when the origin is outside that axis's
 closed bounds and otherwise imposes no interval. Nonparallel divisions must be
@@ -431,13 +450,16 @@ amount `H = 0.15`, and alpha fixed at `1`:
 |===
 
 Selection wins and retains ordinary face colours. A different hovered building
-lifts only toward its own ordinary colour. The trusted fill shader receives
-required integer uniforms `u_hoverIndex` and `u_selectionIndex` on every redraw;
-`-1` is null and every other value is controller- and presenter-validated in
-`0..count-1`. One program, one VAO, three immutable buffers, and one instanced
-`TRIANGLES` draw remain. Exact uploads are `384 + 36 + 28N` bytes, at most
-`112420` bytes for `N=4000`. There is no line cue, extra pass, buffer sub-upload,
-readback, animation, or change to metric RGBA, real AABBs, or CPU picking.
+lifts only toward its own ordinary colour. The trusted fill shader receives required integer uniforms `u_passKind`,
+`u_hoverIndex`, and `u_selectionIndex` on every redraw; `-1` is null and every
+other focus value is controller- and presenter-validated in `0..count-1`.
+Plate instances never participate in focus. A session has exactly one program,
+two VAOs, and four immutable buffers: shared cube, shared index, building
+instances at `28N` bytes, and plate instances at `24G` bytes. Exact uploads are
+`420 + 28N + 24G <= 208420` bytes for `1 <= G <= N <= 4000`. Each redraw has
+exactly the plate and building draws above. There is no line cue, buffer
+sub-upload, readback, animation, or change to metric RGBA, real AABBs, or CPU
+picking.
 
 == Inspector and visual quality
 
@@ -476,9 +498,13 @@ This documentation baseline captures no screenshot and makes no visual verdict.
 == Atomic lifecycle
 
 A successful worker outcome contains one aligned, source-free city with
-geometry and inspection facts. The controller validates it once, snapshots it,
-stages presentation and detached semantic content, rechecks the current
-generation, commits the presenter, and performs one publication-root commit.
+geometry and inspection facts. The controller validates it once and creates
+non-aliasing geometry, inspection, and immutable numeric-presentation snapshots.
+The latter contains only plate minima/dimensions, `sceneBounds`, and centre; it
+has no group identity, path, label, anchor, projection, callback, or observer
+field. The controller stages presentation and detached semantic content,
+rechecks the current generation, commits the presenter, and performs one
+publication-root commit.
 Geometry, facts, revision, canvas, inspector container, persistent legend, and
 empty hover and selection become current together.
 
@@ -549,8 +575,11 @@ empty hover and selection become current together.
 
 Presenter disposal is exactly-once and idempotent: invalidate frame work,
 release pointer capture, remove input, Reset, context-loss, lifecycle, and
-resize listeners, delete the one fill program, one VAO, and three buffers,
-clear staging, camera, and visual state, and remove the canvas.
+resize listeners, delete the one fill program, two VAOs, and four buffers,
+clear both instance staging arrays, numeric district state, camera, and visual
+state, and remove the canvas. After actual context loss, cleanup makes no WebGL
+deletion or restoration call but still releases every JavaScript owner and
+reference.
 
 == Failures and privacy
 
@@ -595,8 +624,8 @@ hash, serialise, log, packetise, wrap, or retain inspection facts.
 This baseline adds no source viewing or download, dependency view, search,
 filtering, history, authentication, private-repository support, metric
 configuration, export, finding, AI guidance, touch-specific gesture, preset,
-first-person movement, minimap, visible group plate, road, parcel, persistent
-group or building label, tooltip, static building edge, animation, saved view,
+first-person movement, minimap, road, parcel, persistent group or building
+label, tooltip, static building edge, animation, saved view,
 sharing, or telemetry.
 
 This perspective change changes no admission, syntax, raw metric, source limit,

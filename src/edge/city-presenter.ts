@@ -1,4 +1,4 @@
-import type { ValidatedGeometry } from "../application/city-payload";
+import type { NumericPresentation, ValidatedGeometry } from "../application/city-payload";
 import {
   orbitCameraByKeyboard,
   orbitCameraByPointer,
@@ -13,8 +13,8 @@ import {
   type CameraView,
 } from "../domain/camera-picking-policy";
 
-// Face-local vertices keep the fixed display transform in the trusted shader
-// while every building remains one instance in the single fill draw. The
+// Face-local vertices keep both fixed display branches in the trusted shader
+// while every plate and building remains one instance in its fixed pass. The
 // fourth component is the face class: 0 = ±Z/-Y, 1 = ±X, 2 = +Y.
 const CUBE_VERTEX_DATA = new Float32Array([
   0, 0, 0, 0,  0, 1, 0, 0,  1, 1, 0, 0,  1, 0, 0, 0,
@@ -40,6 +40,7 @@ layout(location = 3) in vec4 a_color;
 layout(location = 4) in float a_faceClass;
 
 uniform mat4 u_clipFromTarget;
+uniform int u_passKind;
 uniform int u_hoverIndex;
 uniform int u_selectionIndex;
 
@@ -48,20 +49,29 @@ flat out vec4 v_color;
 void main() {
   vec3 targetRelativePosition = a_targetRelativeMinimum + a_unitPosition * a_dimensions;
   gl_Position = u_clipFromTarget * vec4(targetRelativePosition, 1.0);
-  vec3 base = a_color.rgb;
-  vec3 ordinary = a_faceClass > 1.5
-    ? base + 0.12 * (vec3(1.0) - base)
-    : a_faceClass > 0.5 ? 0.82 * base : 0.62 * base;
-  vec3 displayed = ordinary;
-  if (u_selectionIndex >= 0) {
-    if (gl_InstanceID != u_selectionIndex) {
-      displayed = 0.70 * ordinary;
-      if (gl_InstanceID == u_hoverIndex) displayed = mix(displayed, ordinary, 0.15);
+  if (u_passKind == 0) {
+    vec3 plate = a_faceClass > 1.5
+      ? vec3(24.0, 42.0, 67.0) / 255.0
+      : a_faceClass > 0.5
+        ? vec3(20.0, 34.0, 55.0) / 255.0
+        : vec3(15.0, 26.0, 42.0) / 255.0;
+    v_color = vec4(plate, 1.0);
+  } else {
+    vec3 base = a_color.rgb;
+    vec3 ordinary = a_faceClass > 1.5
+      ? base + 0.12 * (vec3(1.0) - base)
+      : a_faceClass > 0.5 ? 0.82 * base : 0.62 * base;
+    vec3 displayed = ordinary;
+    if (u_selectionIndex >= 0) {
+      if (gl_InstanceID != u_selectionIndex) {
+        displayed = 0.70 * ordinary;
+        if (gl_InstanceID == u_hoverIndex) displayed = mix(displayed, ordinary, 0.15);
+      }
+    } else if (gl_InstanceID == u_hoverIndex) {
+      displayed = mix(ordinary, vec3(1.0), 0.15);
     }
-  } else if (gl_InstanceID == u_hoverIndex) {
-    displayed = mix(ordinary, vec3(1.0), 0.15);
+    v_color = vec4(displayed, 1.0);
   }
-  v_color = vec4(displayed, 1.0);
 }
 `;
 
@@ -183,7 +193,12 @@ export type CityPresenterOptions<G> = Readonly<{
 }>;
 
 export type CityPresenter<G> = Readonly<{
-  stage(generation: G, geometry: ValidatedGeometry, eventSink: PresenterEventSink<G>): PresenterStageResult;
+  stage(
+    generation: G,
+    geometry: ValidatedGeometry,
+    presentation: NumericPresentation,
+    eventSink: PresenterEventSink<G>,
+  ): PresenterStageResult;
   commit(token: PresenterToken): PresenterCommitResult;
   rollback(token: PresenterToken): void;
   setVisualState(generation: G, hover: number | null, selection: number | null): PresenterVisualResult;
@@ -235,25 +250,31 @@ type Session<G> = {
   vertexShader?: WebGLShader;
   fragmentShader?: WebGLShader;
   program?: WebGLProgram;
-  vao?: WebGLVertexArrayObject;
+  buildingVao?: WebGLVertexArrayObject;
+  plateVao?: WebGLVertexArrayObject;
   positionBuffer?: WebGLBuffer;
   indexBuffer?: WebGLBuffer;
-  instanceBuffer?: WebGLBuffer;
+  buildingInstanceBuffer?: WebGLBuffer;
+  plateInstanceBuffer?: WebGLBuffer;
   matrixUniform?: WebGLUniformLocation;
+  passUniform?: WebGLUniformLocation;
   hoverUniform?: WebGLUniformLocation;
   selectionUniform?: WebGLUniformLocation;
-  staging?: Uint8Array;
+  buildingStaging?: Uint8Array;
+  plateStaging?: Uint8Array;
   pointer?: HoverPosition;
   requestEpoch: number;
   pendingFrame?: number;
   cancelAnimationFrame: (handle: number) => void;
   model?: ValidatedGeometry;
+  presentation?: NumericPresentation;
   committed: boolean;
   active: boolean;
   notified: boolean;
 };
 
-const INSTANCE_STRIDE = 28;
+const BUILDING_INSTANCE_STRIDE = 28;
+const PLATE_INSTANCE_STRIDE = 24;
 
 // Trusted WebGL 2 values from the Khronos WebGL specification. Keeping these
 // local closes the context data-property surface to drawing-buffer dimensions.
@@ -342,17 +363,21 @@ function requireResource<T>(resource: T | null, gl: WebGL2RenderingContext, own:
   return resource;
 }
 
-function createInstanceStaging(model: ValidatedGeometry, centre: readonly number[]): Uint8Array {
-  const staging = new Uint8Array(model.count * INSTANCE_STRIDE);
+function exactRelative(value: number, centre: number): number {
+  const relative = value - centre;
+  if (Math.fround(relative) !== relative) throw new Error("Inexact target-relative origin");
+  return relative;
+}
+
+function createBuildingStaging(model: ValidatedGeometry, centre: readonly number[]): Uint8Array {
+  const staging = new Uint8Array(model.count * BUILDING_INSTANCE_STRIDE);
   const view = new DataView(staging.buffer);
   for (let index = 0; index < model.count; index += 1) {
     const vectorOffset = index * 3;
     const colourOffset = index * 4;
-    const byteOffset = index * INSTANCE_STRIDE;
+    const byteOffset = index * BUILDING_INSTANCE_STRIDE;
     for (let axis = 0; axis < 3; axis += 1) {
-      const relative = model.origins[vectorOffset + axis]! - centre[axis]!;
-      if (Math.fround(relative) !== relative) throw new Error("Inexact target-relative origin");
-      view.setFloat32(byteOffset + axis * 4, relative, true);
+      view.setFloat32(byteOffset + axis * 4, exactRelative(model.origins[vectorOffset + axis]!, centre[axis]!), true);
       view.setFloat32(byteOffset + 12 + axis * 4, model.sizes[vectorOffset + axis]!, true);
     }
     for (let channel = 0; channel < 4; channel += 1) staging[byteOffset + 24 + channel] = model.rgba[colourOffset + channel]!;
@@ -360,9 +385,27 @@ function createInstanceStaging(model: ValidatedGeometry, centre: readonly number
   return staging;
 }
 
+function createPlateStaging(presentation: NumericPresentation): Uint8Array {
+  const staging = new Uint8Array(presentation.plates.length * PLATE_INSTANCE_STRIDE);
+  const view = new DataView(staging.buffer);
+  for (let index = 0; index < presentation.plates.length; index += 1) {
+    const plate = presentation.plates[index]!;
+    const byteOffset = index * PLATE_INSTANCE_STRIDE;
+    for (let axis = 0; axis < 3; axis += 1) {
+      view.setFloat32(byteOffset + axis * 4, exactRelative(plate.minimum[axis], presentation.centre[axis]), true);
+      view.setFloat32(byteOffset + 12 + axis * 4, plate.dimensions[axis], true);
+    }
+  }
+  return staging;
+}
+
 function draw(session: Session<unknown>, size: Dimensions, view: CameraView): void {
-  const { canvas, gl, program, vao, matrixUniform, hoverUniform, selectionUniform, model } = session;
-  if (!canvas || !gl || !program || !vao || !matrixUniform || !hoverUniform || !selectionUniform || !model) {
+  const {
+    canvas, gl, program, buildingVao, plateVao, matrixUniform, passUniform,
+    hoverUniform, selectionUniform, model, presentation,
+  } = session;
+  if (!canvas || !gl || !program || !buildingVao || !plateVao || !matrixUniform || !passUniform
+    || !hoverUniform || !selectionUniform || !model || !presentation) {
     throw new Error("Incomplete presentation session");
   }
   if (canvas.width !== size.width || canvas.height !== size.height
@@ -390,10 +433,14 @@ function draw(session: Session<unknown>, size: Dimensions, view: CameraView): vo
     gl.viewport(0, 0, size.width, size.height);
     gl.clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
     gl.useProgram(program);
-    gl.bindVertexArray(vao);
     gl.uniformMatrix4fv(matrixUniform, false, matrix);
     gl.uniform1i(hoverUniform, session.hover ?? -1);
     gl.uniform1i(selectionUniform, session.selection ?? -1);
+    gl.bindVertexArray(plateVao);
+    gl.uniform1i(passUniform, 0);
+    gl.drawElementsInstanced(TRIANGLES, 36, UNSIGNED_BYTE, 0, presentation.plates.length);
+    gl.bindVertexArray(buildingVao);
+    gl.uniform1i(passUniform, 1);
     gl.drawElementsInstanced(TRIANGLES, 36, UNSIGNED_BYTE, 0, model.count);
     requireNoError(gl);
   } finally {
@@ -429,11 +476,13 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   if (linked !== true) throw new Error("WebGL2 program link failed");
   session.matrixUniform = gl.getUniformLocation(session.program, "u_clipFromTarget") ?? undefined;
   requireNoError(gl);
+  session.passUniform = gl.getUniformLocation(session.program, "u_passKind") ?? undefined;
+  requireNoError(gl);
   session.hoverUniform = gl.getUniformLocation(session.program, "u_hoverIndex") ?? undefined;
   requireNoError(gl);
   session.selectionUniform = gl.getUniformLocation(session.program, "u_selectionIndex") ?? undefined;
   requireNoError(gl);
-  if (!session.matrixUniform || !session.hoverUniform || !session.selectionUniform) {
+  if (!session.matrixUniform || !session.passUniform || !session.hoverUniform || !session.selectionUniform) {
     throw new Error("WebGL2 uniform is unavailable");
   }
 
@@ -445,12 +494,14 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   gl.deleteShader(fragmentShader);
   requireNoError(gl);
 
-  session.vao = requireResource(gl.createVertexArray(), gl, (vao) => { session.vao = vao; });
+  session.buildingVao = requireResource(gl.createVertexArray(), gl, (vao) => { session.buildingVao = vao; });
+  session.plateVao = requireResource(gl.createVertexArray(), gl, (vao) => { session.plateVao = vao; });
   session.positionBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.positionBuffer = buffer; });
   session.indexBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.indexBuffer = buffer; });
-  session.instanceBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.instanceBuffer = buffer; });
+  session.buildingInstanceBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.buildingInstanceBuffer = buffer; });
+  session.plateInstanceBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.plateInstanceBuffer = buffer; });
 
-  gl.bindVertexArray(session.vao);
+  gl.bindVertexArray(session.buildingVao);
   gl.bindBuffer(ARRAY_BUFFER, session.positionBuffer);
   gl.bufferData(ARRAY_BUFFER, CUBE_VERTEX_DATA, STATIC_DRAW);
   requireNoError(gl);
@@ -458,28 +509,48 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   gl.vertexAttribPointer(0, 3, FLOAT, false, 16, 0);
   gl.enableVertexAttribArray(4);
   gl.vertexAttribPointer(4, 1, FLOAT, false, 16, 12);
-
   gl.bindBuffer(ELEMENT_ARRAY_BUFFER, session.indexBuffer);
   gl.bufferData(ELEMENT_ARRAY_BUFFER, CUBE_INDICES, STATIC_DRAW);
   requireNoError(gl);
 
-  const initialCamera = resetCamera(session.model!.bounds, size);
+  const initialCamera = resetCamera(session.presentation!.sceneBounds, size);
   if (initialCamera.kind === "failure") throw new Error("Initial camera failed");
+  for (let axis = 0; axis < 3; axis += 1) {
+    if (initialCamera.view.centre[axis] !== session.presentation!.centre[axis]) throw new Error("Presentation centre differs");
+  }
   session.cameraState = initialCamera.state;
   session.cameraView = initialCamera.view;
-  session.staging = createInstanceStaging(session.model!, initialCamera.view.centre);
-  gl.bindBuffer(ARRAY_BUFFER, session.instanceBuffer);
-  gl.bufferData(ARRAY_BUFFER, session.staging, STATIC_DRAW);
+  session.buildingStaging = createBuildingStaging(session.model!, session.presentation!.centre);
+  gl.bindBuffer(ARRAY_BUFFER, session.buildingInstanceBuffer);
+  gl.bufferData(ARRAY_BUFFER, session.buildingStaging, STATIC_DRAW);
   requireNoError(gl);
   gl.enableVertexAttribArray(1);
-  gl.vertexAttribPointer(1, 3, FLOAT, false, INSTANCE_STRIDE, 0);
+  gl.vertexAttribPointer(1, 3, FLOAT, false, BUILDING_INSTANCE_STRIDE, 0);
   gl.vertexAttribDivisor(1, 1);
   gl.enableVertexAttribArray(2);
-  gl.vertexAttribPointer(2, 3, FLOAT, false, INSTANCE_STRIDE, 12);
+  gl.vertexAttribPointer(2, 3, FLOAT, false, BUILDING_INSTANCE_STRIDE, 12);
   gl.vertexAttribDivisor(2, 1);
   gl.enableVertexAttribArray(3);
-  gl.vertexAttribPointer(3, 4, UNSIGNED_BYTE, true, INSTANCE_STRIDE, 24);
+  gl.vertexAttribPointer(3, 4, UNSIGNED_BYTE, true, BUILDING_INSTANCE_STRIDE, 24);
   gl.vertexAttribDivisor(3, 1);
+
+  gl.bindVertexArray(session.plateVao);
+  gl.bindBuffer(ARRAY_BUFFER, session.positionBuffer);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, FLOAT, false, 16, 0);
+  gl.enableVertexAttribArray(4);
+  gl.vertexAttribPointer(4, 1, FLOAT, false, 16, 12);
+  gl.bindBuffer(ELEMENT_ARRAY_BUFFER, session.indexBuffer);
+  session.plateStaging = createPlateStaging(session.presentation!);
+  gl.bindBuffer(ARRAY_BUFFER, session.plateInstanceBuffer);
+  gl.bufferData(ARRAY_BUFFER, session.plateStaging, STATIC_DRAW);
+  requireNoError(gl);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 3, FLOAT, false, PLATE_INSTANCE_STRIDE, 0);
+  gl.vertexAttribDivisor(1, 1);
+  gl.enableVertexAttribArray(2);
+  gl.vertexAttribPointer(2, 3, FLOAT, false, PLATE_INSTANCE_STRIDE, 12);
+  gl.vertexAttribDivisor(2, 1);
   requireNoError(gl);
 
   draw(session as Session<unknown>, size, initialCamera.view);
@@ -567,30 +638,38 @@ function cleanup<G>(session: Session<G>): boolean {
       session.program && (() => gl.deleteProgram(session.program!)),
       session.positionBuffer && (() => gl.deleteBuffer(session.positionBuffer!)),
       session.indexBuffer && (() => gl.deleteBuffer(session.indexBuffer!)),
-      session.instanceBuffer && (() => gl.deleteBuffer(session.instanceBuffer!)),
-      session.vao && (() => gl.deleteVertexArray(session.vao!)),
+      session.buildingInstanceBuffer && (() => gl.deleteBuffer(session.buildingInstanceBuffer!)),
+      session.plateInstanceBuffer && (() => gl.deleteBuffer(session.plateInstanceBuffer!)),
+      session.buildingVao && (() => gl.deleteVertexArray(session.buildingVao!)),
+      session.plateVao && (() => gl.deleteVertexArray(session.plateVao!)),
     ];
     for (const release of releases) {
       try { release?.(); } catch { complete = false; }
     }
   }
   try { canvas?.remove(); } catch { complete = false; }
-  session.staging?.fill(0);
+  session.buildingStaging?.fill(0);
+  session.plateStaging?.fill(0);
   session.canvas = undefined;
   session.gl = undefined;
   session.vertexShader = undefined;
   session.fragmentShader = undefined;
   session.program = undefined;
-  session.vao = undefined;
+  session.buildingVao = undefined;
+  session.plateVao = undefined;
   session.positionBuffer = undefined;
   session.indexBuffer = undefined;
-  session.instanceBuffer = undefined;
+  session.buildingInstanceBuffer = undefined;
+  session.plateInstanceBuffer = undefined;
   session.matrixUniform = undefined;
+  session.passUniform = undefined;
   session.hoverUniform = undefined;
   session.selectionUniform = undefined;
-  session.staging = undefined;
+  session.buildingStaging = undefined;
+  session.plateStaging = undefined;
   session.pointer = undefined;
   session.model = undefined;
+  session.presentation = undefined;
   session.eventSink = undefined;
   session.cameraState = undefined;
   session.cameraView = undefined;
@@ -744,15 +823,15 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         const size = dimensions(host);
         let transition: CameraTransitionResult | undefined;
         if (!event.shiftKey && (event.key === "w" || event.key === "a" || event.key === "s" || event.key === "d")) {
-          transition = orbitCameraByKeyboard(session.cameraState!, session.model!.bounds, size, event.key);
+          transition = orbitCameraByKeyboard(session.cameraState!, session.presentation!.sceneBounds, size, event.key);
         } else if (event.shiftKey && (event.key === "W" || event.key === "A" || event.key === "S" || event.key === "D")) {
-          transition = panCameraByKeyboard(session.cameraState!, session.model!.bounds, size, event.key);
+          transition = panCameraByKeyboard(session.cameraState!, session.presentation!.sceneBounds, size, event.key);
         } else if (event.key === "+") {
-          transition = zoomCamera(session.cameraState!, session.model!.bounds, size, "in");
+          transition = zoomCamera(session.cameraState!, session.presentation!.sceneBounds, size, "in");
         } else if (event.key === "-") {
-          transition = zoomCamera(session.cameraState!, session.model!.bounds, size, "out");
+          transition = zoomCamera(session.cameraState!, session.presentation!.sceneBounds, size, "out");
         } else if (event.key === "0") {
-          transition = resetCamera(session.model!.bounds, size);
+          transition = resetCamera(session.presentation!.sceneBounds, size);
         }
         if (!transition) return;
         event.preventDefault();
@@ -768,7 +847,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!direction) return;
         event.preventDefault();
         const size = dimensions(host);
-        applyCameraAndRenewHover(session, zoomCamera(session.cameraState!, session.model!.bounds, size, direction), size);
+        applyCameraAndRenewHover(session, zoomCamera(session.cameraState!, session.presentation!.sceneBounds, size, direction), size);
       } catch {
         failSession(session);
       }
@@ -817,8 +896,8 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         const rectangle = canvas.getBoundingClientRect();
         const size = dimensions(host);
         const transition = gesture.button === 0
-          ? orbitCameraByPointer(session.cameraState!, session.model!.bounds, size, dx, dy, rectangle.width, rectangle.height)
-          : panCameraByPointer(session.cameraState!, session.model!.bounds, size, dx, dy, rectangle.width, rectangle.height);
+          ? orbitCameraByPointer(session.cameraState!, session.presentation!.sceneBounds, size, dx, dy, rectangle.width, rectangle.height)
+          : panCameraByPointer(session.cameraState!, session.presentation!.sceneBounds, size, dx, dy, rectangle.width, rectangle.height);
         applyCameraAndRenewHover(session, transition, size);
         if (!session.active) return;
         gesture.lastX = event.clientX;
@@ -918,7 +997,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!callbackEligible(session)) return;
         releaseGesture(session);
         const size = dimensions(host);
-        applyCameraAndRenewHover(session, resetCamera(session.model!.bounds, size), size);
+        applyCameraAndRenewHover(session, resetCamera(session.presentation!.sceneBounds, size), size);
       } catch {
         failSession(session);
       }
@@ -964,7 +1043,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         const next = dimensions(host);
         const canvas = session.canvas!;
         if (canvas.width === next.width && canvas.height === next.height) return;
-        const transition = resizeCamera(session.cameraState!, session.model!.bounds, next);
+        const transition = resizeCamera(session.cameraState!, session.presentation!.sceneBounds, next);
         if (transition.kind === "failure") { failSession(session); return; }
         canvas.width = next.width;
         canvas.height = next.height;
@@ -980,7 +1059,12 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
   };
 
   return Object.freeze({
-    stage(generation: G, model: ValidatedGeometry, eventSink: PresenterEventSink<G>): PresenterStageResult {
+    stage(
+      generation: G,
+      model: ValidatedGeometry,
+      presentation: NumericPresentation,
+      eventSink: PresenterEventSink<G>,
+    ): PresenterStageResult {
       if (disposed) return PRESENTATION_FAILURE;
       const affected = current;
       let candidate: Session<G> | undefined;
@@ -996,6 +1080,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           selection: null,
           canvas,
           model,
+          presentation,
           resetControl,
           requestEpoch: 0,
           cancelAnimationFrame: (handle) => platform.cancelAnimationFrame(handle),
@@ -1028,7 +1113,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         observe(candidate);
         const finalSize = dimensions(host);
         if (!sameDimensions(initial, finalSize)) {
-          const transition = resizeCamera(candidate.cameraState!, model.bounds, finalSize);
+          const transition = resizeCamera(candidate.cameraState!, presentation.sceneBounds, finalSize);
           if (transition.kind === "failure") throw new Error("Final camera resize failed");
           canvas.width = finalSize.width;
           canvas.height = finalSize.height;

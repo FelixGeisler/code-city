@@ -358,6 +358,19 @@ deployment wording, but adds no evidence field or schema change; any future
 extension requires renewed
 architecture review and synchronized versioning.
 
+== Subsequent refinement (issue 573)
+
+Issue https://github.com/FelixGeisler/code-city/issues/573[#573] extends the
+controller-owned validated snapshot with numeric plate cells, plate-inclusive
+`sceneBounds`, and their immutable centre. Camera, matrices, controls, and both
+immutable instance uploads use that centre; CPU picking still ranges over real
+building AABBs only. One required `u_passKind` selects the plate-first and
+building-second draws in the existing trusted program. The current session owns
+two VAOs and four buffers. Usable-context cleanup deletes each exactly once;
+after actual context loss it performs no WebGL deletion or restoration while
+releasing all JavaScript ownership. No semantic district identity or label
+enters the presenter.
+
 == Consequences
 
 A current success has one aligned geometry-and-inspection identity, one

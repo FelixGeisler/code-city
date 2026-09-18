@@ -14,7 +14,8 @@ image::runtime.svg[Successful aligned city validation, staging, commit, and inte
   `{geometry,inspection}` city.
 . Return one generation-tagged, source-free success.
 . The controller's sole validator creates non-aliasing geometry, inspection, and
-  immutable-centre snapshots.
+  immutable numeric-presentation snapshots: ordered plate cells, plate-inclusive
+  `sceneBounds`, and centre.
 . Stage an interactive presenter token and detached semantic publication,
   recheck current-generation eligibility, commit the token, and perform exactly
   one publication-root `replaceChildren`.
@@ -29,7 +30,7 @@ publishes no partial city.
 
 [source,text]
 ----
-presenter.stage(generation, validatedGeometry, eventSink)
+presenter.stage(generation, validatedGeometry, numericPresentation, eventSink)
   -> staged(token, canvas) | stale | M1-PRES-1
 presenter.commit(token) -> committed | stale
 presenter.rollback(token) -> idempotent
@@ -102,9 +103,11 @@ or token can mutate or fail a newer generation.
 Presenter disposal is exactly-once and idempotent: increment the request epoch,
 cancel frame work, release pointer capture, remove pointer, wheel, keyboard,
 context-menu, context-loss, Reset, blur, visibility, `pagehide`, and resize
-listeners, delete the single fill program, VAO, and three immutable buffers,
-clear the instance staging array, camera, and visual indices, and remove the
-canvas. On `pagehide`, the controller clears
+listeners, delete the single trusted program, two VAOs, and four immutable
+buffers, clear building/plate staging and numeric district state, camera, and
+visual indices, and remove the canvas. If the WebGL context is actually lost,
+the same cleanup skips all driver deletion/restoration calls while releasing
+every JavaScript owner. On `pagehide`, the controller clears
 its state first, revokes publication, terminally disposes the presenter, and
 terminates the worker without cancellation semantics.
 
@@ -129,17 +132,19 @@ observation stream is active at a time.
 source-free aligned city or terminal failure cross to the main context.
 
 |Validation
-|Only controller-owned geometry, inspection, and immutable centre snapshots
-remain from a successful payload. Inspection never enters the presenter.
+|Only controller-owned geometry, inspection, and immutable numeric presentation
+snapshots remain from a successful payload. Inspection and district identity
+never enter the presenter.
 
 |Staging
 |One detached presenter candidate and detached semantic publication exist. They
 have no callback or publication rights.
 
 |Presentation
-|One committed presenter session with one fill program, one VAO, three immutable
-buffers, controller semantic snapshot and legend, and opaque visual indices is
-current. Camera and focus changes never rewrite city buffers.
+|One committed presenter session with one program, two VAOs, four immutable
+buffers, two fixed instanced draws, controller semantic snapshot and legend,
+and opaque building visual indices is current. Camera and focus changes never
+rewrite building or plate buffers.
 
 |Terminal
 |Owned facts, inspector content, listeners, capture, frame work, buffers, parser

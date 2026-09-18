@@ -129,9 +129,9 @@ function fixture({
     presentation.hooks = hooks;
     return {
       dispose() { presentation.disposes += 1; },
-      stage(generation, geometry, eventSink) {
+      stage(generation, geometry, numericPresentation, eventSink) {
         events.push("stage");
-        presentation.calls.push({ generation, geometry, eligible: hooks.isEligible(generation) });
+        presentation.calls.push({ generation, geometry, numericPresentation, eligible: hooks.isEligible(generation) });
         presentation.eventSinks.push(eventSink);
         onStage?.({ generation, eventSink, hooks });
         if (presentResult.kind !== "committed") return presentResult;
@@ -214,6 +214,12 @@ test("success is accepted once after the barrier, staged before one publication 
   assert.equal(f.presentation.calls[0].eligible, true);
   assert.deepEqual([...f.presentation.calls[0].geometry.origins], [...CITY.geometry.origins]);
   assert.notEqual(f.presentation.calls[0].geometry.origins, CITY.geometry.origins);
+  assert.deepEqual(f.presentation.calls[0].numericPresentation, {
+    plates: [{ minimum: [-3, -0.5, -3], dimensions: [10, 0.5, 10] }],
+    sceneBounds: [-3, -0.5, -3, 7, 8, 7],
+    centre: [2, 3.75, 2],
+  });
+  assert.equal(Object.isFrozen(f.presentation.calls[0].numericPresentation), true);
   assert.deepEqual(f.events.slice(-6), ["stage", "semantic:stage", "presenter:commit", "visual", "publication:commit", `view:success:${SHA}`]);
   assert.deepEqual(f.presentation.visual, [{ generation: 1, hover: null, selection: null }]);
   transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });

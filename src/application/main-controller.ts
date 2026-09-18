@@ -1,5 +1,5 @@
 import { parseWorkerMessage, readGeneration, type ParsedWorkerMessage, type WorkerCommand } from "./protocol";
-import type { InspectionFact, ValidatedCity, ValidatedGeometry } from "./city-payload";
+import type { InspectionFact, NumericPresentation, ValidatedCity, ValidatedGeometry } from "./city-payload";
 import type { FailureCode } from "./resolution";
 import { parseRepositoryReference } from "../domain/repository-reference";
 
@@ -51,7 +51,12 @@ export type ControllerEventSink<G> = Readonly<{
 }>;
 
 export type ControllerPresenter<G, T = object, C extends ControllerCanvas = ControllerCanvas> = Readonly<{
-  stage(generation: G, geometry: ValidatedGeometry, eventSink: ControllerEventSink<G>): ControllerPresenterStageResult<T, C>;
+  stage(
+    generation: G,
+    geometry: ValidatedGeometry,
+    presentation: NumericPresentation,
+    eventSink: ControllerEventSink<G>,
+  ): ControllerPresenterStageResult<T, C>;
   commit(token: T): ControllerCommitResult;
   rollback(token: T): void;
   setVisualState(generation: G, hover: number | null, selection: number | null): ControllerVisualResult;
@@ -339,7 +344,12 @@ export function createMainController(
     transaction = candidate;
     let callbackToken: unknown;
     try {
-      const staged = presenter.stage(bridge.generation, message.city.geometry, eventSink(() => callbackToken));
+      const staged = presenter.stage(
+        bridge.generation,
+        message.city.geometry,
+        message.city.presentation,
+        eventSink(() => callbackToken),
+      );
       if (staged.kind === "failure") {
         failPresentation(bridge.generation);
         return;

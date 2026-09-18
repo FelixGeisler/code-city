@@ -23,17 +23,19 @@ partial one
 maxima with dense and deep valid syntax and no private lower limit
 
 |Atomicity
-|Geometry, inspection, semantics, canvas, persistent complexity legend, and
-revision publish as one transaction; replacement, cancellation, failure,
-resize, context loss, or stale interaction cannot publish partial or stale output
+|Geometry, inspection, numeric district presentation, canvas, persistent
+complexity legend, and revision publish as one transaction; replacement,
+cancellation, failure, resize, context loss, or stale interaction cannot publish
+partial or stale output
 
 |Resource ownership
 |Provider, parser, worker, presentation, and listener resources follow the
 lifetime and exactly-once cleanup rules
 
 |Numeric correctness
-|Full-envelope scenes renew interactive camera, clipping, picking, bounds, and
-immutable-centre exact `float32` representation
+|Concentrated and `N=G=4000` scenes renew plate-inclusive camera, clipping,
+building-only picking, shared-centre exact `float32` representation, and the
+`420+28N+24G <= 208420` upload envelope
 
 |Accessibility
 |Keyboard users can navigate and select every building without pointer

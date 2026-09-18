@@ -92,7 +92,7 @@ function lineIntervalThroughBox(anchor, direction, origin, size) {
   return { minimum, maximum };
 }
 
-function deriveInteractiveJourneyPoints({ message, matrix, rectangle, orderedPaths, targetPath }) {
+function deriveInteractiveJourneyPoints({ message, matrix, rectangle, buildingUpload, orderedPaths, targetPath }) {
   assert.equal(matrix.length, 16);
   const origins = float32Values(message.buffers[0]);
   const sizes = float32Values(message.buffers[1]);
@@ -106,11 +106,16 @@ function deriveInteractiveJourneyPoints({ message, matrix, rectangle, orderedPat
     origin: origins.slice(index * 3, index * 3 + 3),
     size: sizes.slice(index * 3, index * 3 + 3),
   }));
-  const centre = [
-    (bounds[0] + bounds[3]) / 2,
-    (bounds[1] + bounds[4]) / 2,
-    (bounds[2] + bounds[5]) / 2,
-  ];
+  assert.equal(buildingUpload.length, message.count * 28);
+  const buildingInstanceBytes = Uint8Array.from(buildingUpload);
+  const buildingInstanceView = new DataView(buildingInstanceBytes.buffer);
+  const centre = origins.slice(0, 3).map((origin, axis) => origin - buildingInstanceView.getFloat32(axis * 4, true));
+  for (let index = 0; index < message.count; index += 1) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      assert.equal(origins[index * 3 + axis] - buildingInstanceView.getFloat32(index * 28 + axis * 4, true), centre[axis],
+        `building ${index} did not use the shared scene centre`);
+    }
+  }
   const directionRow = [-matrix[3], -matrix[7], -matrix[11]];
   const directionLength = Math.hypot(...directionRow);
   assert(directionLength > 0);
@@ -352,7 +357,7 @@ function pageObservationSource() {
     HTMLCanvasElement.prototype.getContext = function(kind, attributes) {
       const actual = acquire.call(this, kind, attributes);
       if (kind !== "webgl2" || !actual) return actual;
-      const record = { uploads: [], subUploads: [], matrices: [], selectionFocusMatrices: [], hoverFocusMatrices: [], draws: [], selectionFocusDraws: [], hoverFocusDraws: [], focusStates: [], uniformUpdates: [], shaderSources: [], clearColors: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, hoverIndex: -1, selectionIndex: -1, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
+      const record = { uploads: [], subUploads: [], matrices: [], plateMatrices: [], draws: [], plateDraws: [], selectionFocusMatrices: [], hoverFocusMatrices: [], selectionFocusDraws: [], hoverFocusDraws: [], focusStates: [], uniformUpdates: [], passKinds: [], shaderSources: [], clearColors: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, passKind: null, hoverIndex: -1, selectionIndex: -1, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
       const programKinds = new Map();
       const vaoKinds = new Map();
       const uniformNames = new Map();
@@ -360,17 +365,18 @@ function pageObservationSource() {
       let vaoCount = 0;
       let currentProgram = null;
       let currentVao = null;
-      const resourceKind = (count) => count === 1 ? "city" : "unexpected";
+      const programKind = (count) => count === 1 ? "city" : "unexpected";
+      const vaoKind = (count) => count === 1 ? "building" : count === 2 ? "plate" : "unexpected";
       evidence.contexts.push(record);
       return new Proxy(actual, { get(target, property) {
         if (property === "createProgram") return () => {
           const program = target.createProgram();
-          if (program) programKinds.set(program, resourceKind(++programCount));
+          if (program) programKinds.set(program, programKind(++programCount));
           return program;
         };
         if (property === "createVertexArray") return () => {
           const vao = target.createVertexArray();
-          if (vao) vaoKinds.set(vao, resourceKind(++vaoCount));
+          if (vao) vaoKinds.set(vao, vaoKind(++vaoCount));
           return vao;
         };
         if (property === "useProgram") return (program) => {
@@ -400,7 +406,8 @@ function pageObservationSource() {
         };
         if (property === "uniform1i") return (location, value) => {
           const name = uniformNames.get(location);
-          record.uniformUpdates.push({ name, value });
+          if (name === "u_passKind") { record.passKind = value; record.passKinds.push(value); }
+          else record.uniformUpdates.push({ name, value });
           if (name === "u_hoverIndex") record.hoverIndex = value;
           if (name === "u_selectionIndex") record.selectionIndex = value;
           return target.uniform1i(location, value);
@@ -416,15 +423,21 @@ function pageObservationSource() {
         if (property === "drawElementsInstanced") return (...args) => {
           const program = programKinds.get(currentProgram);
           const vao = vaoKinds.get(currentVao);
-          if (program !== "city" || vao !== "city" || args[0] !== 0x0004) throw new Error("Non-fill draw identity");
+          const expectedVao = record.passKind === 0 ? "plate" : record.passKind === 1 ? "building" : "unexpected";
+          if (program !== "city" || vao !== expectedVao || args[0] !== 0x0004) throw new Error("Non-fill draw identity");
           const draw = args.slice(1);
-          const focus = { hover: record.hoverIndex, selection: record.selectionIndex };
-          record.draws.push(draw);
-          record.matrices.push(record.lastMatrix);
-          record.focusStates.push(focus);
-          if (focus.hover >= 0) { record.hoverFocusDraws.push(draw); record.hoverFocusMatrices.push(record.lastMatrix); }
-          if (focus.selection >= 0) { record.selectionFocusDraws.push(draw); record.selectionFocusMatrices.push(record.lastMatrix); }
-          record.operations.push("city");
+          if (record.passKind === 0) {
+            record.plateDraws.push(draw);
+            record.plateMatrices.push(record.lastMatrix);
+          } else {
+            const focus = { hover: record.hoverIndex, selection: record.selectionIndex };
+            record.draws.push(draw);
+            record.matrices.push(record.lastMatrix);
+            record.focusStates.push(focus);
+            if (focus.hover >= 0) { record.hoverFocusDraws.push(draw); record.hoverFocusMatrices.push(record.lastMatrix); }
+            if (focus.selection >= 0) { record.selectionFocusDraws.push(draw); record.selectionFocusMatrices.push(record.lastMatrix); }
+            record.operations.push("city");
+          }
           return target.drawElementsInstanced(...args);
         };
         if (property === "disable") return (...args) => {
@@ -632,11 +645,11 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(cleared.inspectors, 0);
     assert.equal(cleared.legends, 0);
     assert.equal(cleared.children, 0);
-    assert.deepEqual(cleared.deletes, { shader: 2, program: 1, buffer: 3, vao: 1 });
+    assert.deepEqual(cleared.deletes, { shader: 2, program: 1, buffer: 4, vao: 2 });
 
     await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===2&&globalThis.__codeCitySuccessEvidence.contexts.length===2`, "second successful city");
     await Promise.all(childInstallations);
-    await waitFor("globalThis.__codeCitySuccessEvidence.contexts.every((entry)=>entry.draws.length===1)&&globalThis.__codeCitySuccessEvidence.messages.length===2", "presentation evidence");
+    await waitFor("globalThis.__codeCitySuccessEvidence.contexts.every((entry)=>entry.draws.length===1&&entry.plateDraws.length===1)&&globalThis.__codeCitySuccessEvidence.messages.length===2", "presentation evidence");
     await waitFor("globalThis.__codeCitySuccessEvidence.workers.length===2&&globalThis.__codeCitySuccessEvidence.workers.every((worker)=>worker.terminateCalls===1&&!worker.usable)&&globalThis.__codeCitySuccessEvidence.liveWorkers===0", "successful worker cleanup");
 
     await evaluate(`(() => {
@@ -865,7 +878,12 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     }
     const presentationDigests = observed.contexts.map((context) => createHash("sha256").update(JSON.stringify({ uploads: context.uploads, matrices: context.matrices.slice(0, 1), draws: context.draws.slice(0, 1) })).digest("hex"));
     assert.equal(presentationDigests[0], presentationDigests[1]);
-    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [384, 36, 28]);
+    for (const context of observed.contexts) {
+      assert.deepEqual(context.uploads.map((bytes) => bytes.length), [384, 36, 28, 24]);
+      assert.equal(context.plateDraws.length, context.draws.length);
+      assert(context.plateDraws.every((draw) => JSON.stringify(draw) === JSON.stringify([36, 5121, 0, 1])));
+      assert.deepEqual(context.passKinds, Array.from({ length: context.draws.length }, () => [0, 1]).flat());
+    }
     assert.equal(observed.contexts[0].matrices.length, 1);
     assert.deepEqual(observed.contexts[0].draws, [[36, 5121, 0, 1]]);
     assert.deepEqual(observed.contexts[1].matrices[0], observed.contexts[0].matrices[0]);
@@ -1236,7 +1254,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     await waitFor("document.readyState==='complete'&&document.querySelector('form')&&globalThis.__codeCitySuccessEvidence", "interactive fixture startup");
     await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(repositoryUrl)};document.querySelector('form').requestSubmit();true`);
     await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(selected)}&&globalThis.__codeCitySuccessEvidence.messages.length===1&&globalThis.__codeCitySuccessEvidence.contexts.length===1`, "interactive fixture city");
-    await waitFor("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length===1", "interactive fixture fill draw");
+    await waitFor("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length===1&&globalThis.__codeCitySuccessEvidence.contexts[0].plateDraws.length===1", "interactive fixture two-pass draw");
     const orderedPaths = rawRecords.filter(({ path: sourcePath }) => !sourcePath.endsWith("package.json"))
       .map(({ path: sourcePath }) => sourcePath)
       .sort((left, right) => Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
@@ -1257,15 +1275,17 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     const initial = await evaluate(`(() => {
       const message=globalThis.__codeCitySuccessEvidence.messages[0];
       const context=globalThis.__codeCitySuccessEvidence.contexts[0];
-      return {message,uploads:context.uploads.map(bytes=>bytes.length),exactUploads:JSON.stringify(context.uploads),draws:context.draws,shaderSources:context.shaderSources,clearColors:context.clearColors,background:getComputedStyle(document.querySelector('[data-city]')).backgroundColor};
+      return {message,uploads:context.uploads.map(bytes=>bytes.length),exactUploads:JSON.stringify(context.uploads),draws:context.draws,plateDraws:context.plateDraws,passKinds:context.passKinds,shaderSources:context.shaderSources,clearColors:context.clearColors,background:getComputedStyle(document.querySelector('[data-city]')).backgroundColor};
     })()`);
     assert.deepEqual(gets, [revisionUrl, commitUrl, treeUrl, ...rawRecords.filter(({ path: sourcePath }) => !sourcePath.endsWith("package.json")).map(({ url }) => url)]);
     assert.equal(failures.length, 0);
     assert.equal(browserExceptions.length, 0);
     assert.equal(failedRequests.length, 0);
     assert.equal(initial.message.count, 18);
-    assert.deepEqual(initial.uploads, [384, 36, 504]);
+    assert.deepEqual(initial.uploads, [384, 36, 504, 72]);
+    assert.deepEqual(initial.plateDraws, [[36, 5121, 0, 3]]);
     assert.deepEqual(initial.draws, [[36, 5121, 0, 18]]);
+    assert.deepEqual(initial.passKinds, [0, 1]);
     assert(initial.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")));
     assert(initial.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])));
     assert.equal(initial.background, "rgb(7, 17, 31)");
@@ -1283,7 +1303,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       const context=evidence.contexts[0];
       const canvas=document.querySelector('[data-city] canvas');
       const rectangle=canvas.getBoundingClientRect();
-      return {message:evidence.messages[0],matrix:context.matrices.at(-1),rectangle:{left:rectangle.left,top:rectangle.top,width:rectangle.width,height:rectangle.height},draws:context.draws.length,clearColors:context.clearColors.length,hoverFocusDraws:context.hoverFocusDraws.length,subUploads:context.subUploads.length,frameRequests:evidence.hoverFrames.requests,canvasSize:{width:canvas.width,height:canvas.height},viewport:{width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio}};
+      return {message:evidence.messages[0],matrix:context.matrices.at(-1),buildingUpload:context.uploads[2],rectangle:{left:rectangle.left,top:rectangle.top,width:rectangle.width,height:rectangle.height},draws:context.draws.length,clearColors:context.clearColors.length,hoverFocusDraws:context.hoverFocusDraws.length,subUploads:context.subUploads.length,frameRequests:evidence.hoverFrames.requests,canvasSize:{width:canvas.width,height:canvas.height},viewport:{width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio}};
     })()`);
     const settlePointer = async (point, label) => {
       const before = await evaluate("globalThis.__codeCitySuccessEvidence.hoverFrames.requests");
@@ -1350,7 +1370,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       await assertCleared(`${label} inter-group whitespace selected geometry`);
       const end = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {draws:context.draws.slice(${start.draws}),matrices:context.matrices.slice(${start.draws}),clearColors:context.clearColors.slice(${start.clearColors}),shaderSources:context.shaderSources,exactUploads:JSON.stringify(context.uploads)}; })()`);
       assert(end.draws.length > 0, `${label} produced no native frames`);
-      assert(end.draws.every((draw) => JSON.stringify(draw) === JSON.stringify([36, 5121, 0, 18])), `${label} changed the single 18-instance fill draw`);
+      assert(end.draws.every((draw) => JSON.stringify(draw) === JSON.stringify([36, 5121, 0, 18])), `${label} changed the 18-instance building pass`);
       assert(end.matrices.every((matrix) => JSON.stringify(matrix) === JSON.stringify(start.matrix)), `${label} focus diverged from the camera matrix`);
       assert.equal(end.clearColors.length, end.draws.length, `${label} shading frames did not clear exactly once`);
       assert(end.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])), `${label} background changed`);
@@ -1415,7 +1435,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     await assertPhase("Reset");
 
     const finalDraws = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length");
-    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; native-phases=${phaseEvidence.map(({ label }) => label).join(",")}; geometric-target-and-gap-picking=true; one-instanced-fill-draw-per-frame=true; observed-frames=${finalDraws}.`);
+    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; native-phases=${phaseEvidence.map(({ label }) => label).join(",")}; geometric-target-and-gap-picking=true; plate-first-two-pass-per-frame=true; observed-frames=${finalDraws}.`);
   } finally {
     cdp.listeners.delete(listener);
     try { await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId); } catch {}
@@ -1479,33 +1499,40 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(result.complexityMatrixRuns[0].densePackedByteLength, result.complexityMatrixRuns[1].densePackedByteLength);
   assert.equal(result.complexityMatrixRuns[0].runDigest, result.complexityMatrixRuns[1].runDigest);
   assert.equal(result.complexityMatrixRuns[0].observed.factsDigest, result.complexityMatrixRuns[1].observed.factsDigest);
-  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "focus", "accessibility", "inputCleanup", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
+  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "focus", "maximum", "accessibility", "inputCleanup", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
   const focus = result.presentation.focus;
   exactKeys(focus, ["allocationUploads", "initialUniforms", "selection", "same", "hover", "clear", "camera", "reset", "immutableUploads", "subUploads", "shaderFocus", "faceShading", "polygonOffsetEnables", "cleanup"], "Surface focus");
-  assert.deepEqual(focus.allocationUploads, [384, 36, 28, 384, 36, 28]);
+  assert.deepEqual(focus.allocationUploads, [384, 36, 28, 24, 384, 36, 28, 24]);
   assert.deepEqual(focus.initialUniforms, [
     [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }],
     [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }],
   ]);
-  assert.deepEqual(focus.selection, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: 0 }] });
-  assert.deepEqual(focus.same, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: 0 }, { name: "u_selectionIndex", value: 0 }] });
-  assert.deepEqual(focus.hover, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: 0 }, { name: "u_selectionIndex", value: -1 }] });
-  assert.deepEqual(focus.clear, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }] });
-  assert.deepEqual(focus.camera, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }] });
-  assert.deepEqual(focus.reset, { draws: 1, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }] });
+  const passUniforms = [{ name: "u_passKind", value: 0 }, { name: "u_passKind", value: 1 }];
+  assert.deepEqual(focus.selection, { draws: 2, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: 0 }, ...passUniforms] });
+  assert.deepEqual(focus.same, { draws: 2, uniforms: [{ name: "u_hoverIndex", value: 0 }, { name: "u_selectionIndex", value: 0 }, ...passUniforms] });
+  assert.deepEqual(focus.hover, { draws: 2, uniforms: [{ name: "u_hoverIndex", value: 0 }, { name: "u_selectionIndex", value: -1 }, ...passUniforms] });
+  assert.deepEqual(focus.clear, { draws: 2, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }, ...passUniforms] });
+  assert.deepEqual(focus.camera, { draws: 2, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }] });
+  assert.deepEqual(focus.reset, { draws: 2, uniforms: [{ name: "u_hoverIndex", value: -1 }, { name: "u_selectionIndex", value: -1 }] });
   assert.equal(focus.immutableUploads, true);
   assert.equal(focus.subUploads, 0);
   assert.equal(focus.shaderFocus, true);
   assert.equal(focus.faceShading, true);
   assert.equal(focus.polygonOffsetEnables, 0);
-  assert.deepEqual(focus.cleanup, { deleteShader: 4, deleteProgram: 2, deleteBuffer: 6, deleteVertexArray: 2 });
+  assert.deepEqual(focus.cleanup, { deleteShader: 6, deleteProgram: 3, deleteBuffer: 12, deleteVertexArray: 6 });
+  assert.deepEqual(result.presentation.maximum, {
+    result: { kind: "committed" }, groups: 4000,
+    uploads: [384, 36, 112000, 96000], draws: 2, passKinds: [0, 1],
+  });
+  const expectedLifecycleListeners = ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"];
   assert.deepEqual(result.presentation, {
     webgl2Available: true,
-    actualContexts: 4,
-    initialDraws: 1,
-    repeatDraws: 1,
-    resizeDraws: 1,
+    actualContexts: 5,
+    initialDraws: 2,
+    repeatDraws: 2,
+    resizeDraws: 2,
     focus,
+    maximum: result.presentation.maximum,
     accessibility: {
       tabIndex: 0,
       label: "Interactive code city",
@@ -1514,9 +1541,9 @@ function validateBrowserResult(result, expectedAssets) {
       resetText: "Reset view",
     },
     inputCleanup: {
-      listenerAdds: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide", "webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"],
-      listenerRemoves: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide", "webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"],
-      reset: { adds: 2, removes: 2 },
+      listenerAdds: Array.from({ length: 3 }, () => expectedLifecycleListeners).flat(),
+      listenerRemoves: Array.from({ length: 3 }, () => expectedLifecycleListeners).flat(),
+      reset: { adds: 3, removes: 3 },
     },
     lossDefaultPrevented: false,
     lossDraws: 0,
