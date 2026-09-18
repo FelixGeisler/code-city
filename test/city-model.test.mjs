@@ -14,7 +14,7 @@ registerHooks({
 
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const fixture = JSON.parse(await readFile(path.join(projectRoot, "test", "fixtures", "city-cases.json"), "utf8"));
-const { buildCity, deriveView } = await import("../src/domain/city-model.ts");
+const { buildCity } = await import("../src/domain/city-model.ts");
 const { validateCityPayload } = await import("../src/application/city-payload.ts");
 
 function exactKeys(value, keys) {
@@ -50,22 +50,6 @@ function cloneModel(model) {
 
 function assertCityFailure(action, id) {
   assert.throws(action, (error) => error instanceof Error && error.message === "M1-CITY-1", id);
-}
-
-function assertNear(actual, expected, id) {
-  const tolerance = 1e-9 * Math.max(1, Math.abs(expected));
-  assert(Math.abs(actual - expected) <= tolerance, `${id}: ${actual} != ${expected} within ${tolerance}`);
-}
-
-function assertView(actual, expected, id) {
-  exactKeys(actual, ["target", "D", "R", "V", "E_r", "E_v", "H", "verticalHalf", "horizontalHalf", "E_d", "camera", "near", "far"]);
-  for (const key of ["target", "D", "R", "V", "camera"]) {
-    assert.equal(actual[key].length, 3, `${id}:${key}`);
-    for (let index = 0; index < 3; index += 1) assertNear(actual[key][index], expected[key][index], `${id}:${key}[${index}]`);
-  }
-  for (const key of ["E_r", "E_v", "H", "verticalHalf", "horizontalHalf", "E_d", "near", "far"]) {
-    assertNear(actual[key], expected[key], `${id}:${key}`);
-  }
 }
 
 function adversarialTypedArrays(source) {
@@ -152,11 +136,11 @@ function adversarialTypedArrays(source) {
 
 const REQUIRED_MALFORMED_IDS = [
   "wrong-kind", "count-zero", "short-origins", "non-palette", "zero-width", "depth-mismatch",
-  "origin-layout", "bounds-mismatch", "fractional-size", "float-limit", "equal-x", "bad-aspect",
+  "origin-layout", "bounds-mismatch", "fractional-size", "float-limit",
 ];
 
-test("the literal city fixture is closed and covers mapping, layout, permutations, malformed data, view, and the full envelope", () => {
-  exactKeys(fixture, ["schemaVersion", "paletteBoundaries", "cityCases", "permutations", "viewCases", "malformedCases", "fullEnvelope"]);
+test("the literal city fixture is closed and covers mapping, layout, permutations, malformed data, and the full envelope", () => {
+  exactKeys(fixture, ["schemaVersion", "paletteBoundaries", "cityCases", "permutations", "malformedCases", "fullEnvelope"]);
   assert.equal(fixture.schemaVersion, 1);
   assert.deepEqual(fixture.cityCases.map(({ id }) => id), ["n1-zero", "n2-unsorted", "n4-varying-rows", "n5-varying-depths"]);
   assert.deepEqual(fixture.paletteBoundaries.map(({ M }) => M), [0, 1, 2, 3, 4, 7, 8, 15, 16, Number.MAX_SAFE_INTEGER]);
@@ -346,46 +330,6 @@ test("every geometry array requires an exact intrinsic typed-array and ordinary 
   }
 });
 
-test("view derivation matches every literal double-precision component and exercises both fit branches", () => {
-  for (const entry of fixture.viewCases) {
-    const actual = deriveView(entry.bounds, entry.aspect);
-    assertView(actual, entry.expected, entry.id);
-    assert.equal(Object.isFrozen(actual), true);
-    for (const key of ["target", "D", "R", "V", "camera"]) assert.equal(Object.isFrozen(actual[key]), true);
-  }
-  const landscape = fixture.viewCases.find(({ id }) => id === "landscape-vertical-branch");
-  const portrait = fixture.viewCases.find(({ id }) => id === "portrait-horizontal-branch");
-  assert(landscape.expected.E_v > landscape.expected.E_r / landscape.aspect);
-  assert(portrait.expected.E_r / portrait.aspect > portrait.expected.E_v);
-  const precise = fixture.viewCases.find(({ id }) => id === "offset-double-precision");
-  assert.notEqual(deriveView(precise.bounds, precise.aspect).H, Math.fround(precise.expected.H));
-  assertView(deriveView(new Float32Array([0, 0, 0, 7, 5, 8]), 2), landscape.expected, "Float32 bounds");
-});
-
-test("view derivation rejects degenerate, non-finite, malformed bounds and non-positive aspects", () => {
-  const equalX = fixture.malformedCases.find(({ id }) => id === "equal-x");
-  const badAspect = fixture.malformedCases.find(({ id }) => id === "bad-aspect");
-  assertCityFailure(() => deriveView(equalX.literal, 1), equalX.id);
-  assertCityFailure(() => deriveView([0, 0, 0, 1, 1, 1], badAspect.literal), badAspect.id);
-  for (const bounds of [
-    [0, 0, 0, 0, 1, 1], [0, 0, 0, 1, 0, 1], [0, 0, 0, 1, 1, 0],
-    [0, 0, 0, -1, 1, 1], [0, 0, 0, 1, Number.NaN, 1], [0, 0, 0, 1, 1],
-    Object.assign([0, 0, 0, 1, 1, 1], { extra: true }), new Float64Array([0, 0, 0, 1, 1, 1]),
-  ]) assertCityFailure(() => deriveView(bounds, 1));
-  const accessorBounds = [0, 0, 0, 1, 1, 1];
-  Object.defineProperty(accessorBounds, "0", { enumerable: true, get: () => 0 });
-  assertCityFailure(() => deriveView(accessorBounds, 1));
-  for (const aspect of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-    assertCityFailure(() => deriveView([0, 0, 0, 1, 1, 1], aspect));
-  }
-});
-
-test("typed view bounds reject branded fakes, proxies, wrong views, subclasses, extras, and unsafe buffers without active reads", () => {
-  const adversarial = adversarialTypedArrays(new Float32Array([0, 0, 0, 1, 1, 1]));
-  for (const [id, value] of adversarial.attacks) assertCityFailure(() => deriveView(value, 1), id);
-  adversarial.assertNoReads();
-});
-
 test("the concentrated and G=4,000 full envelopes have literal bounds and renewed exact float proofs", () => {
   const envelope = fixture.fullEnvelope;
   const cases = [
@@ -417,9 +361,4 @@ test("the concentrated and G=4,000 full envelopes have literal bounds and renewe
     }
     assert.equal(validateCityPayload(city).geometry.count, 4000);
   }
-  const distributed = buildCity(Array.from({ length: envelope.count }, (_, index) => ({
-    canonicalPath: `g${String(index).padStart(4, "0")}/src/file.ts`,
-    ...(index < envelope.largeFactCount ? envelope.largeFact : envelope.smallFact),
-  })));
-  assertView(deriveView(distributed.geometry.bounds, fixture.viewCases.at(-1).aspect), fixture.viewCases.at(-1).expected, "full envelope view");
 });

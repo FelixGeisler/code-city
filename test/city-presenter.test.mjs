@@ -13,7 +13,7 @@ registerHooks({
 
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const literals = JSON.parse(await readFile(path.join(projectRoot, "test/fixtures/presentation/literals.json"), "utf8"));
-const { buildCity, deriveView } = await import("../src/domain/city-model.ts");
+const { buildCity } = await import("../src/domain/city-model.ts");
 const {
   orbitCameraByKeyboard,
   orbitCameraByPointer,
@@ -452,12 +452,11 @@ function expectedInitialCalls() {
 }
 
 function transform(matrix, point) {
-  return [
-    matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2],
-    matrix[1] * point[0] + matrix[5] * point[1] + matrix[9] * point[2],
-    matrix[2] * point[0] + matrix[6] * point[1] + matrix[10] * point[2],
-    1,
-  ];
+  const clipX = matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2] + matrix[12];
+  const clipY = matrix[1] * point[0] + matrix[5] * point[1] + matrix[9] * point[2] + matrix[13];
+  const clipZ = matrix[2] * point[0] + matrix[6] * point[1] + matrix[10] * point[2] + matrix[14];
+  const clipW = matrix[3] * point[0] + matrix[7] * point[1] + matrix[11] * point[2] + matrix[15];
+  return [clipX / clipW, clipY / clipW, clipZ / clipW, clipW];
 }
 
 test("cube, indices, shaders, context request, complete setup/draw calls, matrix handedness, transpose, and depth are literal", () => {
@@ -479,18 +478,19 @@ test("cube, indices, shaders, context request, complete setup/draw calls, matrix
   assert.deepEqual(canvas.forbiddenContextReads, []);
   assert.deepEqual([...canvas.gl.calls.find((call) => call[0] === "uniformMatrix4fv")[3]], literals.unitAspectTwoMatrix);
   const matrix = literals.unitAspectTwoMatrix;
-  assert.deepEqual(transform(matrix, [0, 0, 0]).map((value) => value === 0 ? 0 : value), [0, 0, 0, 1]);
+  const centreProjection = transform(matrix, [0, 0, 0]).map((value) => value === 0 ? 0 : value);
+  assert.deepEqual(centreProjection, [0, 0, matrix[14] / matrix[15], matrix[15]]);
   const rightCorner = transform(matrix, [1.5, -2, -1.5]);
   const leftCorner = transform(matrix, [-1.5, -2, 1.5]);
   assert(rightCorner[0] > 0 && leftCorner[0] < 0, "literal column-major right vector lost handedness");
   const corners = [];
   for (const z of [-1.5, 1.5]) for (const y of [-2, 2]) for (const x of [-1.5, 1.5]) corners.push(transform(matrix, [x, y, z]).map((value) => value === 0 ? 0 : value));
   assert.deepEqual(corners, literals.unitTargetRelativeCorners);
-  assert(corners.every((corner) => corner[2] > -1 && corner[2] < 1));
-  const view = deriveView(oneBuilding().bounds, 2);
-  const expectedScalars = { target: [1.5, 2, 1.5], D: [0.5773502691896258, 0.5773502691896258, 0.5773502691896258], R: [0.7071067811865475, 0, -0.7071067811865475], V: [-0.4082482904638631, 0.8164965809277261, -0.4082482904638631], H: 3.143511836571746, E_d: 2.886751345948129, near: 2.886751345948129, far: 14.433756729740645 };
-  for (const key of ["H", "E_d", "near", "far"]) assert(Math.abs(view[key] - expectedScalars[key]) <= 1e-9 * Math.max(1, Math.abs(expectedScalars[key])));
-  for (const key of ["target", "D", "R", "V"]) for (let index = 0; index < 3; index += 1) assert(Math.abs(view[key][index] - expectedScalars[key][index]) <= 1e-9 * Math.max(1, Math.abs(expectedScalars[key][index])));
+  assert(corners.every((corner) => corner[2] > -1 && corner[2] < 1 && corner[3] > 0));
+  const view = resetCamera(oneBuilding().bounds, { width: 200, height: 100 }).view;
+  const expectedScalars = { target: [1.5, 2, 1.5], D: [0.5773502691896258, 0.5773502691896258, 0.5773502691896258], R: [0.7071067811865475, 0, -0.7071067811865475], V: [-0.4082482904638631, 0.8164965809277261, -0.4082482904638631], radius: 2.9154759474226504, baseDistance: 8.989836839021109, near: 3.05154274653649, far: 14.928130931505727 };
+  for (const key of ["radius", "baseDistance", "near", "far"]) assert(Math.abs(view[key] - expectedScalars[key]) <= 1e-9 * Math.max(1, Math.abs(expectedScalars[key])));
+  for (const key of ["target", "D", "R", "V"]) for (let index = 0; index < 3; index += 1) assert(Math.abs(view.state[key][index] - expectedScalars[key][index]) <= 1e-9 * Math.max(1, Math.abs(expectedScalars[key][index])));
 });
 
 test("production WebGL access is closed to exact methods and two dynamic data properties", async () => {
@@ -509,7 +509,7 @@ test("production WebGL access is closed to exact methods and two dynamic data pr
   assert.deepEqual(canvas.forbiddenContextReads, ["DEPTH_TEST"]);
 });
 
-test("one instance uses exact target-relative float staging, state, and one instanced draw", () => {
+test("one instance uses exact bounds-centre-relative float staging, state, and one instanced draw", () => {
   const environment = fakeEnvironment();
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, "g", oneBuilding()), COMMITTED);
