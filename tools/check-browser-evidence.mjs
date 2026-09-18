@@ -62,6 +62,125 @@ function groupIdentity(modulePath) {
   return segments.length >= 2 ? segments.slice(0, 2).join("/") : segments[0] ?? "_root";
 }
 
+function deriveDistrictGeometry({ message, buildingUpload, plateUpload, orderedPaths }) {
+  const origins = float32Values(message.buffers[0]);
+  const sizes = float32Values(message.buffers[1]);
+  const workerBounds = float32Values(message.buffers[3]);
+  assert.equal(origins.length, message.count * 3);
+  assert.equal(sizes.length, message.count * 3);
+  assert.equal(orderedPaths.length, message.count);
+  const boxes = orderedPaths.map((modulePath, index) => ({
+    index,
+    modulePath,
+    group: groupIdentity(modulePath),
+    origin: origins.slice(index * 3, index * 3 + 3),
+    size: sizes.slice(index * 3, index * 3 + 3),
+  }));
+  const sourceBounds = [
+    Math.min(...boxes.map(({ origin }) => origin[0])),
+    Math.min(...boxes.map(({ origin }) => origin[1])),
+    Math.min(...boxes.map(({ origin }) => origin[2])),
+    Math.max(...boxes.map(({ origin, size }) => origin[0] + size[0])),
+    Math.max(...boxes.map(({ origin, size }) => origin[1] + size[1])),
+    Math.max(...boxes.map(({ origin, size }) => origin[2] + size[2])),
+  ];
+  assert.deepEqual(workerBounds, sourceBounds, "worker building bounds differ from independently derived source bounds");
+
+  const grouped = new Map();
+  for (const box of boxes) {
+    const members = grouped.get(box.group) ?? [];
+    members.push(box);
+    grouped.set(box.group, members);
+  }
+  const groups = [...grouped.entries()].map(([identity, members]) => {
+    const interior = [
+      Math.min(...members.map(({ origin }) => origin[0])),
+      Math.min(...members.map(({ origin }) => origin[2])),
+      Math.max(...members.map(({ origin, size }) => origin[0] + size[0])),
+      Math.max(...members.map(({ origin, size }) => origin[2] + size[2])),
+    ];
+    return {
+      identity,
+      members,
+      interior,
+      minimum: [interior[0] - 3, -0.5, interior[1] - 3],
+      dimensions: [interior[2] - interior[0] + 6, 0.5, interior[3] - interior[1] + 6],
+    };
+  }).sort((left, right) => right.dimensions[0] * right.dimensions[2] - left.dimensions[0] * left.dimensions[2]
+    || Buffer.compare(Buffer.from(left.identity, "utf8"), Buffer.from(right.identity, "utf8")));
+  const sceneBounds = [
+    Math.min(sourceBounds[0], ...groups.map(({ minimum }) => minimum[0])),
+    Math.min(sourceBounds[1], ...groups.map(({ minimum }) => minimum[1])),
+    Math.min(sourceBounds[2], ...groups.map(({ minimum }) => minimum[2])),
+    Math.max(sourceBounds[3], ...groups.map(({ minimum, dimensions }) => minimum[0] + dimensions[0])),
+    Math.max(sourceBounds[4], ...groups.map(({ minimum, dimensions }) => minimum[1] + dimensions[1])),
+    Math.max(sourceBounds[5], ...groups.map(({ minimum, dimensions }) => minimum[2] + dimensions[2])),
+  ];
+  const centre = [
+    (sceneBounds[0] + sceneBounds[3]) / 2,
+    (sceneBounds[1] + sceneBounds[4]) / 2,
+    (sceneBounds[2] + sceneBounds[5]) / 2,
+  ];
+
+  assert.equal(buildingUpload.length, message.count * 28);
+  const buildingBytes = Uint8Array.from(buildingUpload);
+  const buildingView = new DataView(buildingBytes.buffer);
+  for (let index = 0; index < message.count; index += 1) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      assert.equal(buildingView.getFloat32(index * 28 + axis * 4, true), Math.fround(origins[index * 3 + axis] - centre[axis]),
+        `building ${index} did not use the independently derived shared scene centre`);
+      assert.equal(buildingView.getFloat32(index * 28 + 12 + axis * 4, true), sizes[index * 3 + axis],
+        `building ${index} dimensions changed in the native upload`);
+    }
+  }
+
+  assert.equal(plateUpload.length, groups.length * 24);
+  const plateBytes = Uint8Array.from(plateUpload);
+  const plateView = new DataView(plateBytes.buffer);
+  for (let index = 0; index < groups.length; index += 1) {
+    const group = groups[index];
+    for (let axis = 0; axis < 3; axis += 1) {
+      assert.equal(plateView.getFloat32(index * 24 + axis * 4, true), Math.fround(group.minimum[axis] - centre[axis]),
+        `plate ${index} minimum did not match the independently derived district cell/shared centre`);
+      assert.equal(plateView.getFloat32(index * 24 + 12 + axis * 4, true), group.dimensions[axis],
+        `plate ${index} dimensions did not match the independently derived district cell`);
+    }
+  }
+  return { boxes, groups, sourceBounds, sceneBounds, centre };
+}
+
+function f32ClipComponent(matrix, corner, column) {
+  const first = Math.fround(Math.fround(matrix[column]) * Math.fround(corner[0]));
+  const second = Math.fround(Math.fround(matrix[column + 4]) * Math.fround(corner[1]));
+  const third = Math.fround(Math.fround(matrix[column + 8]) * Math.fround(corner[2]));
+  const fourth = Math.fround(matrix[column + 12]);
+  return Math.fround(Math.fround(Math.fround(first + second) + third) + fourth);
+}
+
+function assertSceneMatrix(matrix, bounds, centre, { label, lateralFit }) {
+  assert.equal(matrix.length, 16, `${label} matrix length`);
+  const corners = [];
+  for (const x of [bounds[0], bounds[3]]) {
+    for (const y of [bounds[1], bounds[4]]) {
+      for (const z of [bounds[2], bounds[5]]) corners.push([x - centre[0], y - centre[1], z - centre[2]]);
+    }
+  }
+  for (const corner of corners) {
+    const clipX = f32ClipComponent(matrix, corner, 0);
+    const clipY = f32ClipComponent(matrix, corner, 1);
+    const clipZ = f32ClipComponent(matrix, corner, 2);
+    const clipW = f32ClipComponent(matrix, corner, 3);
+    assert(clipW > 0, `${label} scene corner did not retain strict positive W`);
+    const depth = Math.fround(clipZ / clipW);
+    assert(-1 < depth && depth < 1, `${label} scene corner escaped strict depth`);
+    if (lateralFit) {
+      assert(-1 < clipX / clipW && clipX / clipW < 1, `${label} scene corner escaped the horizontal overview frame`);
+      assert(-1 < clipY / clipW && clipY / clipW < 1, `${label} scene corner escaped the vertical overview frame`);
+    }
+  }
+  return { corners: corners.length, positiveW: true, strictDepth: true, lateralFit };
+}
+
 function matrixDerivedElevation(matrix, label) {
   assert.equal(matrix.length, 16, `${label} matrix length`);
   const cameraDirection = [-matrix[3], -matrix[7], -matrix[11]];
@@ -92,30 +211,10 @@ function lineIntervalThroughBox(anchor, direction, origin, size) {
   return { minimum, maximum };
 }
 
-function deriveInteractiveJourneyPoints({ message, matrix, rectangle, buildingUpload, orderedPaths, targetPath }) {
+function deriveInteractiveJourneyPoints({ message, matrix, rectangle, buildingUpload, plateUpload, orderedPaths, targetPath }) {
   assert.equal(matrix.length, 16);
-  const origins = float32Values(message.buffers[0]);
-  const sizes = float32Values(message.buffers[1]);
-  const bounds = float32Values(message.buffers[3]);
-  assert.equal(origins.length, message.count * 3);
-  assert.equal(sizes.length, message.count * 3);
-  assert.equal(orderedPaths.length, message.count);
-  const boxes = orderedPaths.map((modulePath, index) => ({
-    modulePath,
-    group: groupIdentity(modulePath),
-    origin: origins.slice(index * 3, index * 3 + 3),
-    size: sizes.slice(index * 3, index * 3 + 3),
-  }));
-  assert.equal(buildingUpload.length, message.count * 28);
-  const buildingInstanceBytes = Uint8Array.from(buildingUpload);
-  const buildingInstanceView = new DataView(buildingInstanceBytes.buffer);
-  const centre = origins.slice(0, 3).map((origin, axis) => origin - buildingInstanceView.getFloat32(axis * 4, true));
-  for (let index = 0; index < message.count; index += 1) {
-    for (let axis = 0; axis < 3; axis += 1) {
-      assert.equal(origins[index * 3 + axis] - buildingInstanceView.getFloat32(index * 28 + axis * 4, true), centre[axis],
-        `building ${index} did not use the shared scene centre`);
-    }
-  }
+  const district = deriveDistrictGeometry({ message, buildingUpload, plateUpload, orderedPaths });
+  const { boxes, groups, centre } = district;
   const directionRow = [-matrix[3], -matrix[7], -matrix[11]];
   const directionLength = Math.hypot(...directionRow);
   assert(directionLength > 0);
@@ -171,15 +270,16 @@ function deriveInteractiveJourneyPoints({ message, matrix, rectangle, buildingUp
     const rightZ1 = right.origin[2] + right.size[2];
     const overlapZ0 = Math.max(left.origin[2], right.origin[2]);
     const overlapZ1 = Math.min(leftZ1, rightZ1);
+    const fractions = [0.1, 0.25, 0.5, 0.75, 0.9];
     if (overlapZ0 < overlapZ1) {
-      if (leftX1 < right.origin[0]) candidates.push([(leftX1 + right.origin[0]) / 2, (overlapZ0 + overlapZ1) / 2]);
-      if (rightX1 < left.origin[0]) candidates.push([(rightX1 + left.origin[0]) / 2, (overlapZ0 + overlapZ1) / 2]);
+      if (leftX1 < right.origin[0]) candidates.push(...fractions.map((fraction) => [(leftX1 + right.origin[0]) / 2, overlapZ0 + (overlapZ1 - overlapZ0) * fraction]));
+      if (rightX1 < left.origin[0]) candidates.push(...fractions.map((fraction) => [(rightX1 + left.origin[0]) / 2, overlapZ0 + (overlapZ1 - overlapZ0) * fraction]));
     }
     const overlapX0 = Math.max(left.origin[0], right.origin[0]);
     const overlapX1 = Math.min(leftX1, rightX1);
     if (overlapX0 < overlapX1) {
-      if (leftZ1 < right.origin[2]) candidates.push([(overlapX0 + overlapX1) / 2, (leftZ1 + right.origin[2]) / 2]);
-      if (rightZ1 < left.origin[2]) candidates.push([(overlapX0 + overlapX1) / 2, (rightZ1 + left.origin[2]) / 2]);
+      if (leftZ1 < right.origin[2]) candidates.push(...fractions.map((fraction) => [overlapX0 + (overlapX1 - overlapX0) * fraction, (leftZ1 + right.origin[2]) / 2]));
+      if (rightZ1 < left.origin[2]) candidates.push(...fractions.map((fraction) => [overlapX0 + (overlapX1 - overlapX0) * fraction, (rightZ1 + left.origin[2]) / 2]));
     }
     return candidates;
   };
@@ -193,24 +293,51 @@ function deriveInteractiveJourneyPoints({ message, matrix, rectangle, buildingUp
     }
     return candidates;
   };
-  const yCandidates = [...new Set([bounds[1], (bounds[1] + bounds[4]) / 2, bounds[4],
-    ...boxes.flatMap((box) => [box.origin[1] + box.size[1] / 2, box.origin[1] + box.size[1]])])];
-  const missPoints = (sameGroup, label) => {
+  const inside = ([x, z], minimumX, minimumZ, maximumX, maximumZ) => x > minimumX && x < maximumX && z > minimumZ && z < maximumZ;
+  const clearPoints = (horizontal, classify, label) => {
     const points = [];
     const unique = new Set();
-    for (const [x, z] of horizontalCandidates(sameGroup)) {
-      for (const y of yCandidates) {
-        const anchor = [x, y, z];
-        if (intersections(anchor).length !== 0) continue;
-        const point = project(anchor);
-        if (point === null) continue;
-        const key = `${point.x}:${point.y}`;
-        if (!unique.has(key)) { unique.add(key); points.push(point); }
-      }
+    for (const [x, z] of horizontal) {
+      if (!classify([x, z])) continue;
+      const anchor = [x, 0, z];
+      if (intersections(anchor).length !== 0) continue;
+      const point = project(anchor);
+      if (point === null) continue;
+      const key = `${point.x}:${point.y}`;
+      if (!unique.has(key)) { unique.add(key); points.push(point); }
     }
-    assert(points.length > 0, `no geometrically derived ${label} whitespace ray remained clear and inside the canvas`);
+    assert(points.length > 0, `no geometrically derived ${label} ray remained building-clear and inside the canvas`);
     return points;
   };
+  const lattice = (minimumX, minimumZ, maximumX, maximumZ) => Array.from({ length: 11 }, (_, xIndex) =>
+    Array.from({ length: 11 }, (_, zIndex) => [minimumX + (maximumX - minimumX) * (xIndex + 1) / 12,
+      minimumZ + (maximumZ - minimumZ) * (zIndex + 1) / 12])).flat();
+  const plateInteriorCandidates = [...horizontalCandidates(true), ...groups.flatMap(({ interior }) => lattice(...interior))];
+  const plateInterior = clearPoints(plateInteriorCandidates, ([x, z]) => groups.some((group) =>
+    inside([x, z], group.interior[0], group.interior[1], group.interior[2], group.interior[3])), "exposed plate/interior whitespace");
+  const paddingCandidates = groups.flatMap(({ minimum, dimensions }) => {
+    const x0 = minimum[0]; const z0 = minimum[2]; const x1 = x0 + dimensions[0]; const z1 = z0 + dimensions[2];
+    return [...lattice(x0, z0, x1, z1), [x0 + 1.5, (z0 + z1) / 2], [x1 - 1.5, (z0 + z1) / 2], [(x0 + x1) / 2, z0 + 1.5], [(x0 + x1) / 2, z1 - 1.5],
+      [x0 + 1.5, z0 + 1.5], [x1 - 1.5, z0 + 1.5], [x0 + 1.5, z1 - 1.5], [x1 - 1.5, z1 - 1.5]];
+  });
+  const platePadding = clearPoints(paddingCandidates, ([x, z]) => groups.some((group) => {
+    const x0 = group.minimum[0]; const z0 = group.minimum[2];
+    const onPlate = inside([x, z], x0, z0, x0 + group.dimensions[0], z0 + group.dimensions[2]);
+    const inInterior = inside([x, z], group.interior[0], group.interior[1], group.interior[2], group.interior[3]);
+    return onPlate && !inInterior;
+  }), "plate padding");
+  const interGroupCandidates = [];
+  for (let left = 0; left < groups.length; left += 1) {
+    for (let right = left + 1; right < groups.length; right += 1) {
+      const first = { origin: [groups[left].minimum[0], 0, groups[left].minimum[2]], size: [groups[left].dimensions[0], 0, groups[left].dimensions[2]] };
+      const second = { origin: [groups[right].minimum[0], 0, groups[right].minimum[2]], size: [groups[right].dimensions[0], 0, groups[right].dimensions[2]] };
+      interGroupCandidates.push(...pairGapCandidates(first, second));
+    }
+  }
+  const interGroupGap = clearPoints(interGroupCandidates, ([x, z]) => !groups.some((group) => {
+    const x0 = group.minimum[0]; const z0 = group.minimum[2];
+    return inside([x, z], x0, z0, x0 + group.dimensions[0], z0 + group.dimensions[2]);
+  }), "excluded inter-group gap");
   const target = project(targetAnchor);
   assert.notEqual(target, null, "canonical fixture target projected outside the canvas");
   const alternates = boxes.map((box, index) => {
@@ -220,12 +347,19 @@ function deriveInteractiveJourneyPoints({ message, matrix, rectangle, buildingUp
   }).filter(({ index, point }) => index !== targetIndex && point !== null
     && Math.hypot(point.x - target.x, point.y - target.y) > 2);
   assert(alternates.length > 0, "no second visible fixture building was available for distinct focus");
+  const targetGroup = groups.find(({ members }) => members.some(({ index }) => index === targetIndex));
+  assert(targetGroup && inside([targetAnchor[0], targetAnchor[2]], targetGroup.minimum[0], targetGroup.minimum[2],
+    targetGroup.minimum[0] + targetGroup.dimensions[0], targetGroup.minimum[2] + targetGroup.dimensions[2]),
+  "canonical building was not projected over its independently derived plate");
   return {
     targetIndex,
     target,
     alternates,
-    intraGroupMisses: missPoints(true, "intra-group"),
-    interGroupMisses: missPoints(false, "inter-group"),
+    plateInterior,
+    platePadding,
+    interGroupGap,
+    sceneBounds: district.sceneBounds,
+    centre,
   };
 }
 
@@ -1275,7 +1409,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     const initial = await evaluate(`(() => {
       const message=globalThis.__codeCitySuccessEvidence.messages[0];
       const context=globalThis.__codeCitySuccessEvidence.contexts[0];
-      return {message,uploads:context.uploads.map(bytes=>bytes.length),exactUploads:JSON.stringify(context.uploads),draws:context.draws,plateDraws:context.plateDraws,passKinds:context.passKinds,shaderSources:context.shaderSources,clearColors:context.clearColors,background:getComputedStyle(document.querySelector('[data-city]')).backgroundColor};
+      return {message,uploads:context.uploads.map(bytes=>bytes.length),exactUploads:JSON.stringify(context.uploads),buildingUpload:context.uploads[2],plateUpload:context.uploads[3],draws:context.draws,plateDraws:context.plateDraws,passKinds:context.passKinds,shaderSources:context.shaderSources,clearColors:context.clearColors,background:getComputedStyle(document.querySelector('[data-city]')).backgroundColor};
     })()`);
     assert.deepEqual(gets, [revisionUrl, commitUrl, treeUrl, ...rawRecords.filter(({ path: sourcePath }) => !sourcePath.endsWith("package.json")).map(({ url }) => url)]);
     assert.equal(failures.length, 0);
@@ -1295,6 +1429,10 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     assert.deepEqual(float32Values(initial.message.buffers[0]), [41,0,0,33,0,8,40,0,8,33,0,15,40,0,15,33,0,0,0,0,19,0,0,12,7,0,12,0,0,0,12,0,0,14,0,12,0,0,36,7,0,36,0,0,43,7,0,43,0,0,50,7,0,50]);
     assert.deepEqual(float32Values(initial.message.buffers[1]), [5,11,5,5,12,5,5,15,5,5,11,5,3,8,3,6,16,6,3,8,3,5,14,5,5,11,5,10,23,10,6,16,6,5,11,5,5,11,5,5,12,5,5,11,5,5,11,5,5,11,5,3,8,3]);
     assert.deepEqual(float32Values(initial.message.buffers[3]), [0,0,0,46,23,55]);
+    const initialDistrict = deriveDistrictGeometry({ message: initial.message, buildingUpload: initial.buildingUpload,
+      plateUpload: initial.plateUpload, orderedPaths });
+    assert.deepEqual(initialDistrict.sceneBounds, [-3,-0.5,-3,49,23,58]);
+    assert.deepEqual(initialDistrict.centre, [23,11.25,27.5]);
 
     await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); globalThis.__interactivePointerEvents=[]; for (const type of ['pointerdown','pointerup']) canvas.addEventListener(type,event=>globalThis.__interactivePointerEvents.push({type:event.type,pointerId:event.pointerId,button:event.button,clientX:event.clientX,clientY:event.clientY,defaultPrevented:event.defaultPrevented})); return true; })()`);
     const phaseEvidence = [];
@@ -1303,7 +1441,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       const context=evidence.contexts[0];
       const canvas=document.querySelector('[data-city] canvas');
       const rectangle=canvas.getBoundingClientRect();
-      return {message:evidence.messages[0],matrix:context.matrices.at(-1),buildingUpload:context.uploads[2],rectangle:{left:rectangle.left,top:rectangle.top,width:rectangle.width,height:rectangle.height},draws:context.draws.length,clearColors:context.clearColors.length,hoverFocusDraws:context.hoverFocusDraws.length,subUploads:context.subUploads.length,frameRequests:evidence.hoverFrames.requests,canvasSize:{width:canvas.width,height:canvas.height},viewport:{width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio}};
+      return {message:evidence.messages[0],matrix:context.matrices.at(-1),buildingUpload:context.uploads[2],plateUpload:context.uploads[3],rectangle:{left:rectangle.left,top:rectangle.top,width:rectangle.width,height:rectangle.height},draws:context.draws.length,plateDraws:context.plateDraws.length,clearColors:context.clearColors.length,hoverFocusDraws:context.hoverFocusDraws.length,subUploads:context.subUploads.length,frameRequests:evidence.hoverFrames.requests,canvasSize:{width:canvas.width,height:canvas.height},viewport:{width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio}};
     })()`);
     const settlePointer = async (point, label) => {
       const before = await evaluate("globalThis.__codeCitySuccessEvidence.hoverFrames.requests");
@@ -1331,6 +1469,9 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       await evaluate("document.querySelector('[data-city] canvas').scrollIntoView({block:'center'});true");
       const start = await observation();
       const points = deriveInteractiveJourneyPoints({ ...start, orderedPaths, targetPath });
+      const matrixOracle = assertSceneMatrix(start.matrix, points.sceneBounds, points.centre, {
+        label, lateralFit: label === "overview" || label === "Reset",
+      });
       const hoverUploadsBefore = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].subUploads.length");
       await settlePointer(points.target, `${label} canonical hover`);
       await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverFocusDraws.length>${start.hoverFocusDraws}`, `${label} hover focus`);
@@ -1360,23 +1501,33 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
         const differentBuildingFocus = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {operation:context.operations.at(-1),focus:context.focusStates.at(-1),subUploads:context.subUploads.length,uniforms:context.uniformUpdates.slice(-2)}; })()`);
         assert.deepEqual(differentBuildingFocus, { operation:"city", focus:{hover:alternate.index,selection:points.targetIndex}, subUploads:hoverUploadsBefore, uniforms:[{name:"u_hoverIndex",value:alternate.index},{name:"u_selectionIndex",value:points.targetIndex}] }, `${label} different-building surface focus lost selection precedence`);
       }
-      const intraGroupMiss = await visibleWhitespacePoint(points.intraGroupMisses, `${label} intra-group whitespace`);
-      await settleClick(intraGroupMiss, `${label} intra-group activation miss`);
-      await assertCleared(`${label} intra-group whitespace selected geometry`);
-      await settleClick(points.target, `${label} pointer reselection`);
-      await assertInspector(`${label} pointer reselected inspector`);
-      const interGroupMiss = await visibleWhitespacePoint(points.interGroupMisses, `${label} inter-group whitespace`);
-      await settleClick(interGroupMiss, `${label} inter-group activation miss`);
-      await assertCleared(`${label} inter-group whitespace selected geometry`);
-      const end = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {draws:context.draws.slice(${start.draws}),matrices:context.matrices.slice(${start.draws}),clearColors:context.clearColors.slice(${start.clearColors}),shaderSources:context.shaderSources,exactUploads:JSON.stringify(context.uploads)}; })()`);
+      const plateInteriorMiss = await visibleWhitespacePoint(points.plateInterior, `${label} exposed plate/interior whitespace`);
+      await settleClick(plateInteriorMiss, `${label} exposed plate/interior activation miss`);
+      await assertCleared(`${label} exposed plate/interior whitespace selected geometry`);
+      await settleClick(points.target, `${label} pointer reselection after plate-interior miss`);
+      await assertInspector(`${label} pointer reselected inspector after plate-interior miss`);
+      const paddingMiss = await visibleWhitespacePoint(points.platePadding, `${label} plate padding`);
+      await settleClick(paddingMiss, `${label} plate-padding activation miss`);
+      await assertCleared(`${label} plate padding selected geometry`);
+      await settleClick(points.target, `${label} pointer reselection after padding miss`);
+      await assertInspector(`${label} pointer reselected inspector after padding miss`);
+      const interGroupMiss = await visibleWhitespacePoint(points.interGroupGap, `${label} excluded inter-group gap`);
+      await settleClick(interGroupMiss, `${label} inter-group-gap activation miss`);
+      await assertCleared(`${label} inter-group gap selected geometry`);
+      const end = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {draws:context.draws.slice(${start.draws}),plateDraws:context.plateDraws.slice(${start.plateDraws}),matrices:context.matrices.slice(${start.draws}),plateMatrices:context.plateMatrices.slice(${start.plateDraws}),clearColors:context.clearColors.slice(${start.clearColors}),shaderSources:context.shaderSources,exactUploads:JSON.stringify(context.uploads)}; })()`);
       assert(end.draws.length > 0, `${label} produced no native frames`);
       assert(end.draws.every((draw) => JSON.stringify(draw) === JSON.stringify([36, 5121, 0, 18])), `${label} changed the 18-instance building pass`);
-      assert(end.matrices.every((matrix) => JSON.stringify(matrix) === JSON.stringify(start.matrix)), `${label} focus diverged from the camera matrix`);
+      assert(end.plateDraws.every((draw) => JSON.stringify(draw) === JSON.stringify([36, 5121, 0, 3])), `${label} changed the three-instance plate pass`);
+      assert.equal(end.plateDraws.length, end.draws.length, `${label} lost a plate/building pass pair`);
+      assert(end.matrices.every((matrix) => JSON.stringify(matrix) === JSON.stringify(start.matrix)), `${label} building focus diverged from the camera matrix`);
+      assert(end.plateMatrices.every((matrix) => JSON.stringify(matrix) === JSON.stringify(start.matrix)), `${label} plate focus diverged from the camera matrix`);
+      assert.deepEqual(end.plateMatrices, end.matrices, `${label} plate and building passes did not share the exact matrix`);
       assert.equal(end.clearColors.length, end.draws.length, `${label} shading frames did not clear exactly once`);
       assert(end.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])), `${label} background changed`);
       assert(end.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")), `${label} fixed face shading changed`);
       assert.equal(end.exactUploads, initial.exactUploads, `${label} camera interaction rewrote immutable model uploads`);
-      phaseEvidence.push({ label, frames: end.draws.length, targetIndex: points.targetIndex });
+      phaseEvidence.push({ label, frames: end.draws.length, targetIndex: points.targetIndex, matrixOracle,
+        missClasses: { plateInterior: true, platePadding: true, interGroupGap: true }, projectedPlateBuildingHit: true });
     };
 
     await assertPhase("overview");
@@ -1435,7 +1586,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     await assertPhase("Reset");
 
     const finalDraws = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length");
-    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; native-phases=${phaseEvidence.map(({ label }) => label).join(",")}; geometric-target-and-gap-picking=true; plate-first-two-pass-per-frame=true; observed-frames=${finalDraws}.`);
+    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; native-phases=${phaseEvidence.map(({ label }) => label).join(",")}; exact-plate-upload-and-shared-centre=true; strict-w-depth-every-phase=true; overview-reset-lateral-fit=true; plate-interior-padding-group-gap-misses=true; projected-plate-building-hit=true; plate-first-two-pass-per-frame=true; observed-frames=${finalDraws}.`);
   } finally {
     cdp.listeners.delete(listener);
     try { await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId); } catch {}
@@ -1520,9 +1671,14 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(focus.faceShading, true);
   assert.equal(focus.polygonOffsetEnables, 0);
   assert.deepEqual(focus.cleanup, { deleteShader: 6, deleteProgram: 3, deleteBuffer: 12, deleteVertexArray: 6 });
+  exactKeys(result.presentation.maximum, ["result", "groups", "uploads", "draws", "passKinds", "matrices", "sourceBounds", "sceneBounds", "centre", "matrixOracles", "exactPlateUpload"], "Maximum district presentation");
   assert.deepEqual(result.presentation.maximum, {
     result: { kind: "committed" }, groups: 4000,
-    uploads: [384, 36, 112000, 96000], draws: 2, passKinds: [0, 1],
+    uploads: [384, 36, 112000, 96000], draws: 12,
+    passKinds: Array.from({ length: 6 }, () => [0, 1]).flat(), matrices: 6,
+    sourceBounds: [0, 0, 0, 1057, 4, 1074], sceneBounds: [-3, -0.5, -3, 1060, 4, 1077], centre: [528.5, 1.75, 537],
+    matrixOracles: Array.from({ length: 6 }, (_, index) => ({ corners: 8, positiveW: true, strictDepth: true, lateralFit: index === 0 || index === 5 })),
+    exactPlateUpload: true,
   });
   const expectedLifecycleListeners = ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"];
   assert.deepEqual(result.presentation, {
