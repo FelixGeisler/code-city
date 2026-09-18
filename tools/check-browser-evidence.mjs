@@ -64,7 +64,7 @@ function groupIdentity(modulePath) {
 
 function matrixDerivedElevation(matrix, label) {
   assert.equal(matrix.length, 16, `${label} matrix length`);
-  const cameraDirection = [-matrix[2], -matrix[6], -matrix[10]];
+  const cameraDirection = [-matrix[3], -matrix[7], -matrix[11]];
   assert(cameraDirection.every(Number.isFinite), `${label} camera direction is non-finite`);
   const length = Math.hypot(...cameraDirection);
   assert(Number.isFinite(length) && length > 0, `${label} camera direction is degenerate`);
@@ -111,32 +111,51 @@ function deriveInteractiveJourneyPoints({ message, matrix, rectangle, orderedPat
     (bounds[1] + bounds[4]) / 2,
     (bounds[2] + bounds[5]) / 2,
   ];
-  const rawDirection = [-matrix[2], -matrix[6], -matrix[10]];
-  const directionLength = Math.hypot(...rawDirection);
+  const directionRow = [-matrix[3], -matrix[7], -matrix[11]];
+  const directionLength = Math.hypot(...directionRow);
   assert(directionLength > 0);
-  const direction = rawDirection.map((component) => component / directionLength);
+  const D = directionRow.map((component) => component / directionLength);
+  const rightRow = [matrix[0], matrix[4], matrix[8]];
+  const fx = Math.hypot(...rightRow);
+  assert(fx > 0);
+  const R = rightRow.map((component) => component / fx);
+  const verticalRow = [matrix[1], matrix[5], matrix[9]];
+  const fy = Math.hypot(...verticalRow);
+  assert(fy > 0);
+  const V = verticalRow.map((component) => component / fy);
+  const dr = matrix[12] / fx;
+  const dv = matrix[13] / fy;
+  const camera = centre.map((component, axis) => component - dr * R[axis] - dv * V[axis] + matrix[15] * D[axis]);
+  assert(camera.every(Number.isFinite));
   const project = (world) => {
     const relative = world.map((component, axis) => component - centre[axis]);
     const clipX = matrix[0] * relative[0] + matrix[4] * relative[1] + matrix[8] * relative[2] + matrix[12];
     const clipY = matrix[1] * relative[0] + matrix[5] * relative[1] + matrix[9] * relative[2] + matrix[13];
+    const clipW = matrix[3] * relative[0] + matrix[7] * relative[1] + matrix[11] * relative[2] + matrix[15];
+    assert(Number.isFinite(clipW) && clipW > 0, "fixture projection has non-positive W");
+    const ndcX = clipX / clipW;
+    const ndcY = clipY / clipW;
     const point = {
-      x: rectangle.left + (clipX + 1) * rectangle.width / 2,
-      y: rectangle.top + (1 - clipY) * rectangle.height / 2,
+      x: rectangle.left + (ndcX + 1) * rectangle.width / 2,
+      y: rectangle.top + (1 - ndcY) * rectangle.height / 2,
     };
     return point.x > rectangle.left && point.x < rectangle.left + rectangle.width
       && point.y > rectangle.top && point.y < rectangle.top + rectangle.height ? point : null;
   };
-  const intersections = (anchor) => boxes.map((box, index) => ({
-    index,
-    interval: lineIntervalThroughBox(anchor, direction, box.origin, box.size),
-  })).filter(({ interval }) => interval !== null);
+  const intersections = (anchor) => {
+    const direction = anchor.map((component, axis) => component - camera[axis]);
+    return boxes.map((box, index) => ({
+      index,
+      interval: lineIntervalThroughBox(camera, direction, box.origin, box.size),
+    })).filter(({ interval }) => interval !== null && interval.maximum >= 0);
+  };
   const targetIndex = orderedPaths.indexOf(targetPath);
   assert(targetIndex >= 0);
   const targetBox = boxes[targetIndex];
   const targetAnchor = targetBox.origin.map((component, axis) => component + targetBox.size[axis] / 2);
   const targetIntersections = intersections(targetAnchor);
   assert(targetIntersections.length > 0);
-  targetIntersections.sort((left, right) => right.interval.maximum - left.interval.maximum || left.index - right.index);
+  targetIntersections.sort((left, right) => Math.max(0, left.interval.minimum) - Math.max(0, right.interval.minimum) || left.index - right.index);
   assert.equal(targetIntersections[0].index, targetIndex, "canonical fixture target is occluded after a camera transition");
 
   const pairGapCandidates = (left, right) => {
@@ -191,7 +210,7 @@ function deriveInteractiveJourneyPoints({ message, matrix, rectangle, orderedPat
   assert.notEqual(target, null, "canonical fixture target projected outside the canvas");
   const alternates = boxes.map((box, index) => {
     const anchor = box.origin.map((component, axis) => component + box.size[axis] / 2);
-    const hits = intersections(anchor).sort((left, right) => right.interval.maximum - left.interval.maximum || left.index - right.index);
+    const hits = intersections(anchor).sort((left, right) => Math.max(0, left.interval.minimum) - Math.max(0, right.interval.minimum) || left.index - right.index);
     return { index, point: hits[0]?.index === index ? project(anchor) : null };
   }).filter(({ index, point }) => index !== targetIndex && point !== null
     && Math.hypot(point.x - target.x, point.y - target.y) > 2);

@@ -147,6 +147,14 @@ real-AABB CPU picking, controller authority, public presenter APIs, privacy,
 generation gates, and lifecycle remain unchanged. Semantic publication now
 atomically includes one persistent noninteractive numeric complexity legend.
 
+Subsequent refinement (issue 571)::
+Issue https://github.com/FelixGeisler/code-city/issues/571[#571] supersedes only
+the historical orthographic projection, fit, homogeneous-`W`, depth-oracle,
+ray, and pan-span policy below with the synchronized perspective policy in
+xref:requirements:city-and-failures.adoc[City and Failures]. Immutable
+bounds-centre-relative uploads, pure camera/picking ownership, controls,
+real-AABB slabs and ties, presenter lifecycle, failures, and privacy remain.
+
 === Immutable-centre camera and picking
 
 The validated bounds centre `C` is immutable for the session. Each instance

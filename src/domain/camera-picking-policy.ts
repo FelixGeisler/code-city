@@ -23,20 +23,32 @@ export type CameraView = Readonly<{
   centre: Vector3;
   lengths: Vector3;
   aspect: number;
-  H0: number;
-  verticalHalf: number;
-  horizontalHalf: number;
+  verticalFov: number;
+  radius: number;
+  limitingHalfFov: number;
+  baseDistance: number;
   E: number;
   delta: number;
   distance: number;
+  s0: number;
   camera: Vector3;
+  closest: number;
+  farthest: number;
   near: number;
   far: number;
-  tx: number;
-  ty: number;
-  tz: number;
-  zLinear: Vector3;
+  verticalSlope: number;
+  horizontalSlope: number;
+  verticalHalf: number;
+  horizontalHalf: number;
+  fx: number;
+  fy: number;
+  dr: number;
+  dv: number;
+  A: number;
+  B: number;
   matrix: readonly number[];
+  oracleClipZ: readonly number[];
+  oracleClipW: readonly number[];
   oracleDepths: readonly number[];
 }>;
 
@@ -55,11 +67,24 @@ export type PickingGeometry = Readonly<{
   sizes: Float32Array;
 }>;
 export type PickResult = Readonly<{ kind: "success"; index: number | null; tEnter: number | null }> | PresentationPolicyFailure;
-export type DepthValueResult = Readonly<{ kind: "success"; depth: number }> | PresentationPolicyFailure;
-export type DepthOracleResult = Readonly<{ kind: "success"; depths: readonly number[] }> | PresentationPolicyFailure;
+export type ProjectionValueResult = Readonly<{
+  kind: "success";
+  clipZ: number;
+  clipW: number;
+  quotient: number;
+  depth: number;
+}> | PresentationPolicyFailure;
+export type DepthOracleResult = Readonly<{
+  kind: "success";
+  clipZ: readonly number[];
+  clipW: readonly number[];
+  depths: readonly number[];
+}> | PresentationPolicyFailure;
 
 export const OVERVIEW_AZIMUTH = Math.PI / 4;
 export const OVERVIEW_ELEVATION = Math.asin(1 / Math.sqrt(3));
+export const OVERVIEW_VERTICAL_FOV = Math.PI / 4;
+export const SPHERE_FIT_PADDING = 1.18;
 export const MINIMUM_ELEVATION = Math.PI / 12;
 export const MAXIMUM_ELEVATION = 5 * Math.PI / 12;
 export const MINIMUM_MAGNIFICATION = 1 / 64;
@@ -70,6 +95,8 @@ export const ZOOM_FACTOR = 1.25;
 export const MAX_PICK_INSTANCES = 4_000;
 
 const TAU = 2 * Math.PI;
+const HALF_OVERVIEW_FOV = OVERVIEW_VERTICAL_FOV / 2;
+const OVERVIEW_SLOPE = Math.tan(HALF_OVERVIEW_FOV);
 const SQRT_2 = Math.sqrt(2);
 const SQRT_3 = Math.sqrt(3);
 const SQRT_6 = Math.sqrt(6);
@@ -81,6 +108,17 @@ const PRESENTATION_FAILURE: PresentationPolicyFailure = Object.freeze({
   category: "Presentation failed",
   code: "M1-PRES-1",
 });
+
+const ARRAY_BUFFER_IS_VIEW = ArrayBuffer.isView;
+const ARRAY_BUFFER_PROTOTYPE = ArrayBuffer.prototype;
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Float32Array.prototype) as object;
+type IntrinsicGetter = (this: unknown) => unknown;
+const TYPED_ARRAY_TAG = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, Symbol.toStringTag)!.get as IntrinsicGetter;
+const TYPED_ARRAY_BUFFER = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "buffer")!.get as IntrinsicGetter;
+const TYPED_ARRAY_BYTE_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "byteLength")!.get as IntrinsicGetter;
+const TYPED_ARRAY_BYTE_OFFSET = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "byteOffset")!.get as IntrinsicGetter;
+const TYPED_ARRAY_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "length")!.get as IntrinsicGetter;
+const ARRAY_BUFFER_BYTE_LENGTH = Object.getOwnPropertyDescriptor(ARRAY_BUFFER_PROTOTYPE, "byteLength")!.get as IntrinsicGetter;
 
 function finite(value: number): number {
   if (!Number.isFinite(value)) throw new Error("non-finite presentation calculation");
@@ -125,20 +163,54 @@ function cross(left: Vector3, right: Vector3): Vector3 {
   );
 }
 
-function snapshotBounds(value: readonly number[] | Float32Array): Bounds3 {
-  if (value.length !== 6) throw new Error("invalid bounds");
-  const bounds = [...value].map(finite) as number[];
-  if (!(bounds[3]! > bounds[0]!) || !(bounds[4]! > bounds[1]!) || !(bounds[5]! > bounds[2]!)) {
-    throw new Error("degenerate bounds");
+function exactFloat32Bounds(value: unknown): value is Float32Array {
+  if (typeof value !== "object" || value === null || !ARRAY_BUFFER_IS_VIEW(value)) return false;
+  try {
+    if (TYPED_ARRAY_TAG.call(value) !== "Float32Array"
+      || TYPED_ARRAY_LENGTH.call(value) !== 6
+      || TYPED_ARRAY_BYTE_OFFSET.call(value) !== 0
+      || TYPED_ARRAY_BYTE_LENGTH.call(value) !== 24
+      || Object.getPrototypeOf(value) !== Float32Array.prototype) return false;
+    const buffer = TYPED_ARRAY_BUFFER.call(value);
+    if (typeof buffer !== "object" || buffer === null
+      || Object.getPrototypeOf(buffer) !== ARRAY_BUFFER_PROTOTYPE
+      || ARRAY_BUFFER_BYTE_LENGTH.call(buffer) !== 24
+      || Reflect.ownKeys(buffer).length !== 0) return false;
+    const keys = Reflect.ownKeys(value);
+    return keys.length === 6 && keys.every((key, index) => key === String(index));
+  } catch {
+    return false;
   }
-  return Object.freeze(bounds) as unknown as Bounds3;
 }
 
-function boundsValues(boundsValue: readonly number[] | Float32Array): Readonly<{
-  bounds: Bounds3;
-  centre: Vector3;
-  lengths: Vector3;
-}> {
+function snapshotBounds(value: unknown): Bounds3 {
+  const snapshot: number[] = [];
+  try {
+    if (Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype) {
+      const descriptors = Object.getOwnPropertyDescriptors(value) as unknown as Record<PropertyKey, PropertyDescriptor>;
+      if (Reflect.ownKeys(descriptors).length !== 7 || descriptors.length?.value !== 6) throw new Error("invalid bounds");
+      for (let index = 0; index < 6; index += 1) {
+        const descriptor = descriptors[String(index)];
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable || typeof descriptor.value !== "number") {
+          throw new Error("invalid bounds");
+        }
+        snapshot.push(finite(descriptor.value));
+      }
+    } else if (exactFloat32Bounds(value)) {
+      for (let index = 0; index < 6; index += 1) snapshot.push(finite(value[index]!));
+    } else {
+      throw new Error("invalid bounds");
+    }
+  } catch {
+    throw new Error("invalid bounds");
+  }
+  if (!(snapshot[3]! > snapshot[0]!) || !(snapshot[4]! > snapshot[1]!) || !(snapshot[5]! > snapshot[2]!)) {
+    throw new Error("degenerate bounds");
+  }
+  return Object.freeze(snapshot) as unknown as Bounds3;
+}
+
+function boundsValues(boundsValue: unknown): Readonly<{ bounds: Bounds3; centre: Vector3; lengths: Vector3 }> {
   const bounds = snapshotBounds(boundsValue);
   const centre = vector(
     divide(add(bounds[0], bounds[3]), 2),
@@ -218,26 +290,42 @@ function corners(bounds: Bounds3, centre: Vector3, rounded: boolean): readonly V
   ]);
 }
 
-export function calculateOracleDepth(
+function snapshotFloat32Matrix(matrixValue: readonly number[] | Float32Array): readonly number[] {
+  if (matrixValue.length !== 16) throw new Error("invalid matrix length");
+  return Object.freeze(Array.from(matrixValue, (component) => {
+    const accepted = finite(component);
+    if (Math.fround(accepted) !== accepted) throw new Error("matrix component is not float32");
+    return accepted;
+  }));
+}
+
+export function calculateOracleProjection(
   matrixValue: readonly number[] | Float32Array,
   cornerValue: Vector3,
-): DepthValueResult {
+): ProjectionValueResult {
   try {
-    if (matrixValue.length !== 16) throw new Error("invalid matrix length");
-    const matrix = Array.from(matrixValue, (component) => {
-      const accepted = finite(component);
-      if (Math.fround(accepted) !== accepted) throw new Error("matrix component is not float32");
-      return accepted;
-    });
+    const matrix = snapshotFloat32Matrix(matrixValue);
     const [x, y, z] = vector(fround(cornerValue[0]), fround(cornerValue[1]), fround(cornerValue[2]));
-    const p0 = fround(multiply(matrix[2]!, x));
-    const p1 = fround(multiply(matrix[6]!, y));
-    const p2 = fround(multiply(matrix[10]!, z));
-    const p3 = fround(multiply(matrix[14]!, fround(1)));
-    const s0 = fround(add(p0, p1));
-    const s1 = fround(add(s0, p2));
-    const depth = fround(add(s1, p3));
-    return Object.freeze({ kind: "success", depth });
+
+    const zp0 = fround(multiply(matrix[2]!, x));
+    const zp1 = fround(multiply(matrix[6]!, y));
+    const zp2 = fround(multiply(matrix[10]!, z));
+    const zp3 = fround(multiply(matrix[14]!, fround(1)));
+    const zs0 = fround(add(zp0, zp1));
+    const zs1 = fround(add(zs0, zp2));
+    const clipZ = fround(add(zs1, zp3));
+
+    const wp0 = fround(multiply(matrix[3]!, x));
+    const wp1 = fround(multiply(matrix[7]!, y));
+    const wp2 = fround(multiply(matrix[11]!, z));
+    const wp3 = fround(multiply(matrix[15]!, fround(1)));
+    const ws0 = fround(add(wp0, wp1));
+    const ws1 = fround(add(ws0, wp2));
+    const clipW = fround(add(ws1, wp3));
+
+    const quotient = divide(clipZ, clipW);
+    const depth = fround(quotient);
+    return Object.freeze({ kind: "success", clipZ, clipW, quotient, depth });
   } catch {
     return PRESENTATION_FAILURE;
   }
@@ -251,15 +339,25 @@ export function evaluateStrictDepthOracle(
   try {
     const bounds = snapshotBounds(boundsValue);
     const centre = vector(centreValue[0], centreValue[1], centreValue[2]);
+    const clipZ: number[] = [];
+    const clipW: number[] = [];
     const depths: number[] = [];
     for (const corner of corners(bounds, centre, true)) {
-      const evaluated = calculateOracleDepth(matrixValue, corner);
-      if (evaluated.kind === "failure" || !(-1 < evaluated.depth && evaluated.depth < 1)) {
+      const evaluated = calculateOracleProjection(matrixValue, corner);
+      if (evaluated.kind === "failure" || !(evaluated.clipW > 0)
+        || !(-1 < evaluated.depth && evaluated.depth < 1)) {
         throw new Error("strict depth oracle rejected camera");
       }
+      clipZ.push(evaluated.clipZ);
+      clipW.push(evaluated.clipW);
       depths.push(evaluated.depth);
     }
-    return Object.freeze({ kind: "success", depths: Object.freeze(depths) });
+    return Object.freeze({
+      kind: "success",
+      clipZ: Object.freeze(clipZ),
+      clipW: Object.freeze(clipW),
+      depths: Object.freeze(depths),
+    });
   } catch {
     return PRESENTATION_FAILURE;
   }
@@ -271,13 +369,12 @@ function evaluate(candidate: CameraState, boundsValue: readonly number[] | Float
     const { bounds, centre, lengths } = boundsValues(boundsValue);
     const aspect = aspectOf(dimensions);
 
-    const Er = divide(add(lengths[0], lengths[2]), multiply(2, SQRT_2));
-    const Ev = divide(add(add(lengths[0], multiply(2, lengths[1])), lengths[2]), multiply(2, SQRT_6));
-    const horizontalFit = divide(Er, aspect);
-    const H0 = multiply(1.1, Math.max(Ev, horizontalFit));
-    const verticalHalf = divide(H0, acceptedState.magnification);
-    const horizontalHalf = divide(multiply(aspect, H0), acceptedState.magnification);
-    if (!(verticalHalf > 0) || !(horizontalHalf > 0)) throw new Error("invalid camera fit");
+    const radius = divide(finite(Math.hypot(lengths[0], lengths[1], lengths[2])), 2);
+    const horizontalHalfFov = finite(Math.atan(multiply(aspect, OVERVIEW_SLOPE)));
+    const limitingHalfFov = Math.min(HALF_OVERVIEW_FOV, horizontalHalfFov);
+    finite(limitingHalfFov);
+    const baseDistance = divide(multiply(SPHERE_FIT_PADDING, radius), finite(Math.sin(limitingHalfFov)));
+    if (!(radius > 0) || !(limitingHalfFov > 0) || !(baseDistance > 0)) throw new Error("invalid perspective fit");
 
     const weightedX = multiply(lengths[0], absolute(acceptedState.D[0]));
     const weightedY = multiply(lengths[1], absolute(acceptedState.D[1]));
@@ -287,37 +384,44 @@ function evaluate(candidate: CameraState, boundsValue: readonly number[] | Float
 
     const Delta = subtractVectors(centre, acceptedState.target);
     const delta = dot(Delta, acceptedState.D);
-    const distance = add(absolute(delta), multiply(3, E));
+    const distance = add(absolute(delta), baseDistance);
+    const s0 = subtract(distance, delta);
     const camera = addVectors(acceptedState.target, scale(acceptedState.D, distance));
-    const near = E;
-    const negativeDelta = finite(-delta);
-    const far = add(multiply(2, Math.max(0, negativeDelta)), multiply(5, E));
-    const depthRange = subtract(far, near);
+    const closest = subtract(s0, E);
+    const farthest = add(s0, E);
+    const near = divide(closest, 2);
+    const far = add(farthest, divide(closest, 2));
     if (!(near > 0) || !(far > near)) throw new Error("invalid clipping range");
 
-    const tx = divide(dot(Delta, acceptedState.R), horizontalHalf);
-    const ty = divide(dot(Delta, acceptedState.V), verticalHalf);
-    const distanceMinusDelta = subtract(distance, delta);
-    const twiceDistanceMinusDelta = multiply(2, distanceMinusDelta);
-    const farPlusNear = add(far, near);
-    const computedTz = divide(subtract(twiceDistanceMinusDelta, farPlusNear), depthRange);
-    const tz = delta === 0 ? 0 : computedTz;
-    const zLinear = vector(
-      divide(multiply(-2, acceptedState.D[0]), depthRange),
-      divide(multiply(-2, acceptedState.D[1]), depthRange),
-      divide(multiply(-2, acceptedState.D[2]), depthRange),
-    );
+    const verticalSlope = divide(OVERVIEW_SLOPE, acceptedState.magnification);
+    const horizontalSlope = multiply(aspect, verticalSlope);
+    const verticalFov = multiply(2, finite(Math.atan(verticalSlope)));
+    const verticalHalf = multiply(distance, verticalSlope);
+    const horizontalHalf = multiply(distance, horizontalSlope);
+    if (!(verticalSlope > 0) || !(horizontalSlope > 0) || !(verticalHalf > 0) || !(horizontalHalf > 0)) {
+      throw new Error("invalid perspective slope");
+    }
+
+    const fx = divide(1, horizontalSlope);
+    const fy = divide(1, verticalSlope);
+    const dr = dot(Delta, acceptedState.R);
+    const dv = dot(Delta, acceptedState.V);
+    const depthRange = subtract(far, near);
+    const A = divide(add(far, near), depthRange);
+    const B = divide(multiply(multiply(2, far), near), depthRange);
 
     const matrix = Object.freeze([
-      fround(divide(acceptedState.R[0], horizontalHalf)), fround(divide(acceptedState.V[0], verticalHalf)), fround(zLinear[0]), fround(0),
-      fround(divide(acceptedState.R[1], horizontalHalf)), fround(divide(acceptedState.V[1], verticalHalf)), fround(zLinear[1]), fround(0),
-      fround(divide(acceptedState.R[2], horizontalHalf)), fround(divide(acceptedState.V[2], verticalHalf)), fround(zLinear[2]), fround(0),
-      fround(tx), fround(ty), fround(tz), fround(1),
+      fround(multiply(fx, acceptedState.R[0])), fround(multiply(fy, acceptedState.V[0])), fround(multiply(-A, acceptedState.D[0])), fround(-acceptedState.D[0]),
+      fround(multiply(fx, acceptedState.R[1])), fround(multiply(fy, acceptedState.V[1])), fround(multiply(-A, acceptedState.D[1])), fround(-acceptedState.D[1]),
+      fround(multiply(fx, acceptedState.R[2])), fround(multiply(fy, acceptedState.V[2])), fround(multiply(-A, acceptedState.D[2])), fround(-acceptedState.D[2]),
+      fround(multiply(fx, dr)), fround(multiply(fy, dv)), fround(subtract(multiply(A, s0), B)), fround(s0),
     ]);
 
     for (const relative of corners(bounds, centre, false)) {
-      const pointDepth = subtract(distanceMinusDelta, dot(relative, acceptedState.D));
-      if (!(near < pointDepth && pointDepth < far)) throw new Error("camera-space depth rejected camera");
+      const pointDepth = subtract(s0, dot(relative, acceptedState.D));
+      if (!(pointDepth > 0) || !(near < pointDepth && pointDepth < far)) {
+        throw new Error("camera-space depth rejected camera");
+      }
     }
     const oracle = evaluateStrictDepthOracle(bounds, centre, matrix);
     if (oracle.kind === "failure") return oracle;
@@ -327,20 +431,32 @@ function evaluate(candidate: CameraState, boundsValue: readonly number[] | Float
       centre,
       lengths,
       aspect,
-      H0,
-      verticalHalf,
-      horizontalHalf,
+      verticalFov,
+      radius,
+      limitingHalfFov,
+      baseDistance,
       E,
       delta,
       distance,
+      s0,
       camera,
+      closest,
+      farthest,
       near,
       far,
-      tx,
-      ty,
-      tz,
-      zLinear,
+      verticalSlope,
+      horizontalSlope,
+      verticalHalf,
+      horizontalHalf,
+      fx,
+      fy,
+      dr,
+      dv,
+      A,
+      B,
       matrix,
+      oracleClipZ: oracle.clipZ,
+      oracleClipW: oracle.clipW,
       oracleDepths: oracle.depths,
     });
     return Object.freeze({ kind: "success", state: acceptedState, view });
@@ -415,7 +531,7 @@ export function orbitCameraByPointer(
     if (!(finite(cssWidth) > 0) || !(finite(cssHeight) > 0)) throw new Error("invalid pointer dimensions");
     const azimuthDelta = divide(multiply(TAU, finite(dx)), cssWidth);
     const elevationDelta = divide(multiply(Math.PI, finite(dy)), cssHeight);
-    return orbitCamera(current, bounds, dimensions, azimuthDelta, finite(elevationDelta));
+    return orbitCamera(current, bounds, dimensions, azimuthDelta, elevationDelta);
   } catch {
     return PRESENTATION_FAILURE;
   }
@@ -516,7 +632,7 @@ export function canvasToBackingPoint(
   }
 }
 
-export function createOrthographicRay(
+export function createPerspectiveRay(
   view: CameraView,
   clientX: number,
   clientY: number,
@@ -529,10 +645,12 @@ export function createOrthographicRay(
   try {
     const width = finite(backing.width);
     const height = finite(backing.height);
-    const sx = multiply(subtract(divide(multiply(2, conversion.point.x), width), 1), finite(view.horizontalHalf));
-    const sy = multiply(subtract(1, divide(multiply(2, conversion.point.y), height)), finite(view.verticalHalf));
-    const origin = addVectors(addVectors(vector(view.camera[0], view.camera[1], view.camera[2]), scale(view.state.R, sx)), scale(view.state.V, sy));
-    const direction = vector(-view.state.D[0], -view.state.D[1], -view.state.D[2]);
+    const nx = subtract(divide(multiply(2, conversion.point.x), width), 1);
+    const ny = subtract(1, divide(multiply(2, conversion.point.y), height));
+    const horizontal = scale(view.state.R, multiply(nx, finite(view.horizontalSlope)));
+    const vertical = scale(view.state.V, multiply(ny, finite(view.verticalSlope)));
+    const direction = addVectors(addVectors(vector(-view.state.D[0], -view.state.D[1], -view.state.D[2]), horizontal), vertical);
+    const origin = vector(view.camera[0], view.camera[1], view.camera[2]);
     return Object.freeze({ kind: "success", point: conversion.point, ray: Object.freeze({ origin, direction }) });
   } catch {
     return PRESENTATION_FAILURE;
@@ -606,7 +724,7 @@ export function pickAtCanvasPoint(
   backing: PositiveDimensions,
   geometry: PickingGeometry,
 ): PickResult {
-  const ray = createOrthographicRay(view, clientX, clientY, rectangle, backing);
+  const ray = createPerspectiveRay(view, clientX, clientY, rectangle, backing);
   if (ray.kind === "failure") return ray;
   if (ray.ray === null) return Object.freeze({ kind: "success", index: null, tEnter: null });
   return pickNearest(ray.ray, geometry);

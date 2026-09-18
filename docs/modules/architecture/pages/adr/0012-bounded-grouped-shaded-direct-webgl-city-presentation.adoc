@@ -147,6 +147,14 @@ uniforms, and semantic publication includes a persistent numeric legend. This
 is a reversible refinement inside the accepted direct-WebGL boundary, not a
 new architecture decision.
 
+Subsequent refinement (issue 571)::
+Issue https://github.com/FelixGeisler/code-city/issues/571[#571] supersedes only
+the retained historical orthographic projection, fit, homogeneous-`W`,
+depth-oracle, ray, and pan-span policy with the synchronized perspective policy
+in xref:requirements:city-and-failures.adoc[City and Failures]. Grouped
+geometry, immutable bounds-centre-relative uploads, renderer resources, UI,
+real-AABB picking ownership, lifecycle, failures, and privacy remain.
+
 Picking ranges over the `count` actual building AABBs only. Intra-group and
 inter-group whitespace must miss. No plate, cell, padding region, or group
 bounds can be hit. Camera changes do not rewrite instance data.

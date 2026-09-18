@@ -19,38 +19,12 @@ export type City = Readonly<{
   inspection: readonly InspectionFact[];
 }>;
 
-export type CityView = Readonly<{
-  target: readonly [number, number, number];
-  D: readonly [number, number, number];
-  R: readonly [number, number, number];
-  V: readonly [number, number, number];
-  E_r: number;
-  E_v: number;
-  H: number;
-  verticalHalf: number;
-  horizontalHalf: number;
-  E_d: number;
-  camera: readonly [number, number, number];
-  near: number;
-  far: number;
-}>;
-
 type DataRecord = Record<string, unknown>;
 type FactSnapshot = Readonly<{ canonicalPath: string; S: number; U: number; M: number }>;
 
 const MAX_FLOAT_INTEGER = 2 ** 24;
 const MAX_TARGET_RELATIVE = 2 ** 23;
 const FACT_KEYS = ["canonicalPath", "S", "U", "M"] as const;
-const ARRAY_BUFFER_IS_VIEW = ArrayBuffer.isView;
-const ARRAY_BUFFER_PROTOTYPE = ArrayBuffer.prototype;
-const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Float32Array.prototype) as object;
-type IntrinsicGetter = (this: unknown) => unknown;
-const TYPED_ARRAY_TAG = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, Symbol.toStringTag)!.get as IntrinsicGetter;
-const TYPED_ARRAY_BUFFER = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "buffer")!.get as IntrinsicGetter;
-const TYPED_ARRAY_BYTE_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "byteLength")!.get as IntrinsicGetter;
-const TYPED_ARRAY_BYTE_OFFSET = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "byteOffset")!.get as IntrinsicGetter;
-const TYPED_ARRAY_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "length")!.get as IntrinsicGetter;
-const ARRAY_BUFFER_BYTE_LENGTH = Object.getOwnPropertyDescriptor(ARRAY_BUFFER_PROTOTYPE, "byteLength")!.get as IntrinsicGetter;
 const PALETTE = [
   [0x22, 0xc5, 0x5e, 0xff],
   [0x84, 0xcc, 0x16, 0xff],
@@ -312,40 +286,6 @@ function snapshotFacts(value: unknown): FactSnapshot[] {
   }
 }
 
-function exactTypedArray<T extends Float32Array | Uint8Array>(
-  value: unknown,
-  prototype: object,
-  brand: "Float32Array" | "Uint8Array",
-  length: number,
-  bytesPerElement: number,
-): value is T {
-  if (typeof value !== "object" || value === null || !ARRAY_BUFFER_IS_VIEW(value)) return false;
-  try {
-    const byteLength = checkedMultiply(length, bytesPerElement);
-    if (TYPED_ARRAY_TAG.call(value) !== brand
-      || TYPED_ARRAY_LENGTH.call(value) !== length
-      || TYPED_ARRAY_BYTE_OFFSET.call(value) !== 0
-      || TYPED_ARRAY_BYTE_LENGTH.call(value) !== byteLength
-      || Object.getPrototypeOf(value) !== prototype) return false;
-
-    const buffer = TYPED_ARRAY_BUFFER.call(value);
-    if (typeof buffer !== "object"
-      || buffer === null
-      || Object.getPrototypeOf(buffer) !== ARRAY_BUFFER_PROTOTYPE
-      || ARRAY_BUFFER_BYTE_LENGTH.call(buffer) !== byteLength
-      || Reflect.ownKeys(buffer).length !== 0) return false;
-
-    const keys = Reflect.ownKeys(value);
-    if (keys.length !== length) return false;
-    for (let index = 0; index < length; index += 1) {
-      if (keys[index] !== String(index)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function buildCity(input: readonly ModuleComplexityFact[]): City {
   const facts = snapshotFacts(input);
   const count = facts.length;
@@ -397,67 +337,4 @@ export function buildCity(input: readonly ModuleComplexityFact[]): City {
     if (error instanceof Error && error.message === "M1-CITY-1") throw error;
     invalid();
   }
-}
-
-function boundsSnapshot(value: unknown): readonly [number, number, number, number, number, number] {
-  try {
-    const snapshot: number[] = [];
-    if (Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype) {
-      const descriptors = Object.getOwnPropertyDescriptors(value) as unknown as Record<PropertyKey, PropertyDescriptor>;
-      if (Reflect.ownKeys(descriptors).length !== 7 || descriptors.length?.value !== 6) invalid();
-      for (let index = 0; index < 6; index += 1) {
-        const descriptor = descriptors[String(index)];
-        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable || typeof descriptor.value !== "number") invalid();
-        snapshot.push(descriptor.value);
-      }
-    } else if (exactTypedArray<Float32Array>(value, Float32Array.prototype, "Float32Array", 6, 4)) {
-      for (let index = 0; index < 6; index += 1) snapshot.push(value[index]!);
-    } else {
-      invalid();
-    }
-    if (snapshot.some((entry) => !Number.isFinite(entry))) invalid();
-    return snapshot as unknown as readonly [number, number, number, number, number, number];
-  } catch (error) {
-    if (error instanceof Error && error.message === "M1-CITY-1") throw error;
-    invalid();
-  }
-}
-
-function vector(x: number, y: number, z: number): readonly [number, number, number] {
-  if (![x, y, z].every(Number.isFinite)) invalid();
-  return Object.freeze([x, y, z]) as readonly [number, number, number];
-}
-
-export function deriveView(boundsValue: readonly number[] | Float32Array, aspect: number): CityView {
-  const bounds = boundsSnapshot(boundsValue);
-  if (!Number.isFinite(aspect) || aspect <= 0) invalid();
-  const [minimumX, minimumY, minimumZ, maximumX, maximumY, maximumZ] = bounds;
-  if (!(maximumX > minimumX) || !(maximumY > minimumY) || !(maximumZ > minimumZ)) invalid();
-
-  const Lx = maximumX - minimumX;
-  const Ly = maximumY - minimumY;
-  const Lz = maximumZ - minimumZ;
-  const target = vector((minimumX + maximumX) / 2, (minimumY + maximumY) / 2, (minimumZ + maximumZ) / 2);
-  const sqrt2 = Math.sqrt(2);
-  const sqrt3 = Math.sqrt(3);
-  const sqrt6 = Math.sqrt(6);
-  const D = vector(1 / sqrt3, 1 / sqrt3, 1 / sqrt3);
-  const R = vector(1 / sqrt2, 0, -1 / sqrt2);
-  const V = vector(-1 / sqrt6, 2 / sqrt6, -1 / sqrt6);
-  const E_r = (Lx + Lz) / (2 * sqrt2);
-  const E_v = (Lx + 2 * Ly + Lz) / (2 * sqrt6);
-  const H = 1.1 * Math.max(E_v, E_r / aspect);
-  const verticalHalf = H;
-  const horizontalHalf = aspect * H;
-  const E_d = (Lx + Ly + Lz) / (2 * sqrt3);
-  const camera = vector(
-    target[0] + 3 * E_d * D[0],
-    target[1] + 3 * E_d * D[1],
-    target[2] + 3 * E_d * D[2],
-  );
-  const near = E_d;
-  const far = 5 * E_d;
-  if (![Lx, Ly, Lz, E_r, E_v, H, verticalHalf, horizontalHalf, E_d, near, far].every(Number.isFinite)
-    || H <= 0 || E_d <= 0 || near <= 0 || far <= near) invalid();
-  return Object.freeze({ target, D, R, V, E_r, E_v, H, verticalHalf, horizontalHalf, E_d, camera, near, far });
 }
