@@ -592,12 +592,19 @@ hash, serialise, log, packetise, wrap, or retain inspection facts.
 
 == Non-goals
 
-This perspective change adds no backend, worker, context, canvas,
-renderer/UI/picking dependency, GPU readback, BVH, projection toggle, alternate
-publication path, retry, fallback, or camera-collision policy. It changes no
-admission, syntax, raw metric, source limit, provider, browser-only topology,
-privacy boundary, failure category, input ownership or directions, traversal,
-AABB intersection, nearest-hit, or canonical-tie policy. Its only camera and
-picking changes are the synchronized perspective fit, lens projection,
+This baseline adds no source viewing or download, dependency view, search,
+filtering, history, authentication, private-repository support, metric
+configuration, export, finding, AI guidance, touch-specific gesture, preset,
+first-person movement, minimap, visible group plate, road, parcel, persistent
+group or building label, tooltip, static building edge, animation, saved view,
+sharing, or telemetry.
+
+This perspective change changes no admission, syntax, raw metric, source limit,
+provider, browser-only topology, privacy boundary, failure category, retry,
+fallback, input, or traversal policy. It adds no backend, worker, context,
+canvas, renderer/UI/picking dependency, GPU readback, BVH, alternate publication
+path, projection toggle, or camera-collision policy. Its only camera and CPU
+picking policy changes are the synchronized perspective fit, lens projection,
 depth/clipping oracle, target-plane pan spans, and divergent ray specified
-above.
+above; AABB intersection, nearest-hit, and canonical-tie policy remain
+unchanged.
