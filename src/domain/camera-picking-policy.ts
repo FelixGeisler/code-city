@@ -80,6 +80,25 @@ export type DepthOracleResult = Readonly<{
   clipW: readonly number[];
   depths: readonly number[];
 }> | PresentationPolicyFailure;
+export type NumericDistrictCell = Readonly<{
+  minimum: readonly [number, number, number];
+  dimensions: readonly [number, number, number];
+}>;
+export type DistrictProjection = Readonly<{
+  screenX: number;
+  screenY: number;
+  area: number;
+  lateral: boolean;
+}>;
+export type DistrictProjectionSnapshot = Readonly<{
+  cssWidth: number;
+  cssHeight: number;
+  districts: readonly DistrictProjection[];
+}>;
+export type DistrictProjectionResult = Readonly<{
+  kind: "success";
+  snapshot: DistrictProjectionSnapshot;
+}> | PresentationPolicyFailure;
 
 export const OVERVIEW_AZIMUTH = Math.PI / 4;
 export const OVERVIEW_ELEVATION = Math.asin(1 / Math.sqrt(3));
@@ -326,6 +345,95 @@ export function calculateOracleProjection(
     const quotient = divide(clipZ, clipW);
     const depth = fround(quotient);
     return Object.freeze({ kind: "success", clipZ, clipW, quotient, depth });
+  } catch {
+    return PRESENTATION_FAILURE;
+  }
+}
+
+type ProjectedPoint = Readonly<{ screenX: number; screenY: number; ndcX: number; ndcY: number }>;
+
+function projectDistrictPoint(
+  world: Vector3,
+  centre: Vector3,
+  matrix: readonly number[],
+  dimensions: PositiveDimensions,
+): ProjectedPoint {
+  const coordinates = world.map((component, axis) => {
+    const relative = subtract(component, centre[axis]!);
+    const rounded = fround(relative);
+    if (rounded !== relative) throw new Error("Inexact district coordinate");
+    return rounded;
+  }) as [number, number, number];
+  const clip: number[] = [];
+  for (let row = 0; row < 4; row += 1) {
+    const p0 = fround(multiply(matrix[row]!, coordinates[0]));
+    const p1 = fround(multiply(matrix[row + 4]!, coordinates[1]));
+    const p2 = fround(multiply(matrix[row + 8]!, coordinates[2]));
+    const p3 = fround(multiply(matrix[row + 12]!, fround(1)));
+    const s0 = fround(add(p0, p1));
+    const s1 = fround(add(s0, p2));
+    clip.push(fround(add(s1, p3)));
+  }
+  const clipW = clip[3]!;
+  if (!(clipW > 0)) throw new Error("District point has non-positive W");
+  const ndcX = fround(divide(clip[0]!, clipW));
+  const ndcY = fround(divide(clip[1]!, clipW));
+  const depth = fround(divide(clip[2]!, clipW));
+  if (!(-1 < depth && depth < 1)) throw new Error("District point outside depth range");
+  const screenX = finite((ndcX * 0.5 + 0.5) * dimensions.width);
+  const screenY = finite((-ndcY * 0.5 + 0.5) * dimensions.height);
+  return Object.freeze({ screenX, screenY, ndcX, ndcY });
+}
+
+export function projectDistricts(
+  cells: readonly NumericDistrictCell[],
+  centreValue: Vector3,
+  matrixValue: readonly number[] | Float32Array,
+  dimensionsValue: PositiveDimensions,
+): DistrictProjectionResult {
+  try {
+    if (!Array.isArray(cells) || cells.length < 1 || cells.length > MAX_PICK_INSTANCES) {
+      throw new Error("Invalid district cells");
+    }
+    const cssWidth = dimensionsValue.width;
+    const cssHeight = dimensionsValue.height;
+    if (!Number.isInteger(cssWidth) || cssWidth <= 0 || !Number.isInteger(cssHeight) || cssHeight <= 0) {
+      throw new Error("Invalid district dimensions");
+    }
+    const centre = vector(centreValue[0], centreValue[1], centreValue[2]);
+    const matrix = snapshotFloat32Matrix(matrixValue);
+    const districts: DistrictProjection[] = [];
+    for (const cell of cells) {
+      if (!cell || cell.minimum.length !== 3 || cell.dimensions.length !== 3) throw new Error("Invalid district cell");
+      const minimumX = finite(cell.minimum[0]);
+      const minimumZ = finite(cell.minimum[2]);
+      const maximumX = add(minimumX, finite(cell.dimensions[0]));
+      const maximumZ = add(minimumZ, finite(cell.dimensions[2]));
+      const anchorX = add(minimumX, divide(finite(cell.dimensions[0]), 2));
+      const anchorZ = add(minimumZ, divide(finite(cell.dimensions[2]), 2));
+      const anchor = projectDistrictPoint([anchorX, 0, anchorZ], centre, matrix, dimensionsValue);
+      const corners = [
+        projectDistrictPoint([minimumX, 0, minimumZ], centre, matrix, dimensionsValue),
+        projectDistrictPoint([maximumX, 0, minimumZ], centre, matrix, dimensionsValue),
+        projectDistrictPoint([minimumX, 0, maximumZ], centre, matrix, dimensionsValue),
+        projectDistrictPoint([maximumX, 0, maximumZ], centre, matrix, dimensionsValue),
+      ];
+      const minimumScreenX = Math.min(...corners.map((corner) => corner.screenX));
+      const maximumScreenX = Math.max(...corners.map((corner) => corner.screenX));
+      const minimumScreenY = Math.min(...corners.map((corner) => corner.screenY));
+      const maximumScreenY = Math.max(...corners.map((corner) => corner.screenY));
+      const area = finite((maximumScreenX - minimumScreenX) * (maximumScreenY - minimumScreenY));
+      districts.push(Object.freeze({
+        screenX: anchor.screenX,
+        screenY: anchor.screenY,
+        area,
+        lateral: -1 < anchor.ndcX && anchor.ndcX < 1 && -1 < anchor.ndcY && anchor.ndcY < 1,
+      }));
+    }
+    return Object.freeze({
+      kind: "success",
+      snapshot: Object.freeze({ cssWidth, cssHeight, districts: Object.freeze(districts) }),
+    });
   } catch {
     return PRESENTATION_FAILURE;
   }

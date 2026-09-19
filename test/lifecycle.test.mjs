@@ -15,6 +15,11 @@ const { stageSemanticPublication } = await import("../src/edge/semantic-publicat
 const VALID = "https://github.com/owner/repo";
 const SHA = "a".repeat(40);
 const CITY = buildCity([{ canonicalPath: "a.js", S: 1, U: 1, M: 0 }]);
+const PROJECTION = Object.freeze({
+  cssWidth: 200,
+  cssHeight: 100,
+  districts: Object.freeze([Object.freeze({ screenX: 100, screenY: 50, area: 100, lateral: true })]),
+});
 
 function fixture({
   factoryThrows = false,
@@ -23,7 +28,7 @@ function fixture({
   sendThrows = false,
   sendThrowsWhen = () => false,
   presentResult = { kind: "committed" },
-  commitResult = { kind: "committed" },
+  commitResult = { kind: "committed", snapshot: PROJECTION },
   visualResult = { kind: "applied" },
   commitThrows = false,
   visualThrows = false,
@@ -47,24 +52,30 @@ function fixture({
   const presentation = { clears: 0, calls: [], commits: [], disposes: 0, eventSinks: [], hooks: undefined, publications: [], rollbacks: [], visual: [] };
   const view = {
     clear() { visibleState = "empty"; },
-    stagePublication(revision, inspection) {
+    stagePublication(revision, inspection, districts) {
       events.push("semantic:stage");
       if (publicationStageThrows) throw new Error("semantic stage");
       if (publicationFactory) {
-        const publication = publicationFactory(revision, inspection);
+        const publication = publicationFactory(revision, inspection, districts);
         presentation.publications.push(publication);
         return publication;
       }
       let active = true;
       const publication = {
         commits: 0,
-        commit(canvas) {
+        commit(canvas, snapshot) {
           events.push("publication:commit");
           if (publicationCommitThrows) throw new Error("publication commit");
           this.commits += 1;
           this.canvas = canvas;
+          this.snapshot = snapshot;
           this.revision = revision;
           this.inspection = inspection;
+          this.districts = districts;
+        },
+        districtProjection(snapshot) {
+          events.push("semantic:projection");
+          this.snapshot = snapshot;
         },
         setSelection(index) {
           events.push("semantic:selection");
@@ -135,7 +146,15 @@ function fixture({
         presentation.eventSinks.push(eventSink);
         onStage?.({ generation, eventSink, hooks });
         if (presentResult.kind !== "committed") return presentResult;
-        return { kind: "staged", token: Object.freeze({ generation }), canvas: { remove() {} } };
+        return {
+          kind: "staged",
+          token: Object.freeze({ generation }),
+          canvas: {
+            remove() {},
+            getBoundingClientRect() { return { left: 0, top: 0, width: 200, height: 100 }; },
+          },
+          snapshot: PROJECTION,
+        };
       },
       commit(token) { events.push("presenter:commit"); presentation.commits.push(token); if (commitThrows) throw new Error("commit"); return commitResult; },
       rollback(token) { events.push("presenter:rollback"); presentation.rollbacks.push(token); if (rollbackThrows) throw new Error("rollback"); },
@@ -396,6 +415,27 @@ test("committed event sink gates generation and token before authoritative visua
   assert.deepEqual(f.presentation.publications[0].selections, [0, null]);
 });
 
+test("district projection uses the captured presenter token and current generation while staging and stale callbacks stay inert", () => {
+  let stagedSink;
+  const f = fixture({ onStage({ eventSink }) { stagedSink = eventSink; eventSink.districtProjection(1, PROJECTION); } });
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
+  assert.equal(f.events.filter((event) => event === "semantic:projection").length, 0, "staging callback published");
+  const moved = Object.freeze({ cssWidth: 479, cssHeight: 300, districts: PROJECTION.districts });
+  stagedSink.districtProjection(999, moved);
+  assert.equal(f.events.filter((event) => event === "semantic:projection").length, 0, "wrong generation published");
+  stagedSink.districtProjection(1, moved);
+  assert.equal(f.events.filter((event) => event === "semantic:projection").length, 1);
+  assert.equal(f.presentation.publications[0].snapshot, moved);
+  f.controller.submit("https://github.com/owner/replacement");
+  stagedSink.districtProjection(1, PROJECTION);
+  assert.equal(f.events.filter((event) => event === "semantic:projection").length, 1, "stale token published");
+  assert.deepEqual(f.failures, []);
+});
+
 test("controller rejects every out-of-bounds callback index before presenter, semantic, or failure effects", () => {
   const f = fixture();
   f.controller.submit(VALID);
@@ -501,7 +541,9 @@ test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an
       this.failText = false;
       this.failReplace = false;
       this.hiddenValue = false;
+      this.style = {};
     }
+    get parentNode() { return this.parent; }
     set hidden(value) {
       operations.push(`${this.tagName}:hidden:${String(value)}`);
       this.hiddenValue = Boolean(value);
@@ -527,11 +569,21 @@ test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an
       this.children = children;
       for (const child of children) if (child && typeof child === "object") child.parent = this;
     }
+    removeChild(child) {
+      this.children = this.children.filter((candidate) => candidate !== child);
+      child.parent = undefined;
+      return child;
+    }
     remove() {
       operations.push(`${this.tagName}:remove`);
       if (!this.parent) return;
       this.parent.children = this.parent.children.filter((child) => child !== this);
       this.parent = undefined;
+    }
+    getBoundingClientRect() {
+      return Object.hasOwn(this.dataset, "inspector")
+        ? { left: 100, top: 0, width: 100, height: 100 }
+        : { left: 0, top: 0, width: 200, height: 100 };
     }
   }
 
@@ -546,12 +598,13 @@ test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an
     },
   };
   const f = fixture({
-    publicationFactory: (selectedRevision, inspection) => stageSemanticPublication(
+    publicationFactory: (selectedRevision, inspection, districts) => stageSemanticPublication(
       documentTarget,
       root,
       revision,
       selectedRevision,
       inspection,
+      districts,
     ),
   });
   f.controller.submit(VALID);
@@ -584,6 +637,8 @@ test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an
     "SECTION:replace",
     "SECTION:hidden:true",
     "SECTION:replace",
+    "DIV:replace",
+    "DIV:remove",
     "SECTION:remove",
     "OUTPUT:text:",
   ]);

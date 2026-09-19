@@ -24,8 +24,9 @@
 successful current attempt.
 
 |Validated city
-|Controller-owned, non-aliasing geometry, inspection, and numeric presentation
-snapshots produced by the sole city-payload validator.
+|Controller-owned, non-aliasing geometry, inspection, numeric presentation,
+and aligned semantic district snapshots produced by the sole city-payload
+validator.
 
 |Numeric presentation
 |An internal immutable value containing ordered district plate minima and
@@ -36,9 +37,19 @@ path, group identity, label, projection, callback, or observer field.
 |One opaque, noninteractive prism under an existing packed virtual group cell.
 It is rendered before buildings and is never a pick or focus candidate.
 
+|District projection snapshot
+|A closed immutable presenter result containing positive CSS dimensions and one
+ordered numeric `{screenX,screenY,area,lateral}` row per plate. It contains no
+identity, token, path, or DOM value.
+
+|District label
+|One inert clipped HTML `div` with an isolated `bdi.textContent` group name,
+aligned to a district plate by the controller's current numeric snapshot. It is
+not accessible, focusable, selectable, or a pick candidate.
+
 |Semantic state
-|The controller's current-generation inspection facts, hover, selection, and
-inspector publication.
+|The controller's current-generation inspection facts, aligned district
+identities, hover, selection, label overlay, and inspector publication.
 
 |Visual replica
 |A presenter-owned opaque hover or selection index used only by the trusted

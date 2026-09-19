@@ -38,8 +38,16 @@ instability with epsilon or capacity shortcuts
 |A path or metric fact could describe a different rendered building or escape
 through a presenter or evidence observer
 |Use one closed city payload, the sole controller validator, non-aliasing
-snapshots, building-index proofs, numeric-only district presentation,
-geometry-only observers, and sentinel privacy tests
+snapshots, aligned controller-only district descriptors, numeric-only presenter
+projection, geometry-only observers, and sentinel privacy tests
+
+|District label density or stale projection
+|Labels could overlap, obscure inspection, drift from plates, disclose identity
+outside text, or survive replacement
+|Use exact same-draw projection, accepted-only deterministic grid collision,
+inspector exclusion from cached boxes, captured-token callbacks, inert
+`bdi.textContent`, and full partial/current cleanup; stop on any stale mutation
+or non-text disclosure
 
 |Interaction usability and visual imbalance
 |Controls, surface focus, inspector, or persistent legend layout could obscure

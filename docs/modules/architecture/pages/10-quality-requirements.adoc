@@ -11,7 +11,8 @@ city; identical camera state and input produce the same matrix and exact CPU hit
 |Safety and privacy
 |Adversarial repository and provider data remains inert, uses only the fixed
 network boundary, and creates no credential or active content. Inspection paths
-remain controller-owned text and do not enter WebGL or release evidence
+and approved group labels remain controller-owned `textContent`; identity does
+not enter attributes, styles, WebGL, callbacks, logs, or release evidence
 
 |Completeness
 |When the fixed provider path returns complete source, a supported repository
@@ -23,8 +24,9 @@ partial one
 maxima with dense and deep valid syntax and no private lower limit
 
 |Atomicity
-|Geometry, inspection, numeric district presentation, canvas, persistent
-complexity legend, and revision publish as one transaction; replacement,
+|Geometry, inspection, numeric district presentation/projection, aligned
+semantic labels, canvas, inspector, persistent complexity legend, and revision
+publish as one transaction; replacement,
 cancellation, failure, resize, context loss, or stale interaction cannot publish
 partial or stale output
 
@@ -33,7 +35,8 @@ partial or stale output
 lifetime and exactly-once cleanup rules
 
 |Numeric correctness
-|Concentrated and `N=G=4000` scenes renew plate-inclusive camera, clipping,
+|Concentrated and `N=G=4000` scenes renew plate-inclusive camera, exact
+four-row label projection, deterministic accepted-only collision layout,
 building-only picking, shared-centre exact `float32` representation, and the
 `420+28N+24G <= 208420` upload envelope
 

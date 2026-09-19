@@ -371,6 +371,17 @@ after actual context loss it performs no WebGL deletion or restoration while
 releasing all JavaScript ownership. No semantic district identity or label
 enters the presenter.
 
+== Subsequent refinement (issue 575)
+
+Issue https://github.com/FelixGeisler/code-city/issues/575[#575] adds aligned
+controller-only district descriptors and one inert semantic HTML label overlay.
+The presenter derives an ordered closed numeric projection snapshot from plate
+cells in each accepted camera transaction and forwards it through the existing
+generation plus captured-token gate. Identity never enters the presenter;
+labels never enter picking. Selection relayout uses cached projection, hover
+does no label work, and the existing failure and cleanup boundary owns all new
+numeric/semantic state.
+
 == Consequences
 
 A current success has one aligned geometry-and-inspection identity, one

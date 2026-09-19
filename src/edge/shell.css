@@ -176,6 +176,43 @@ button:focus-visible,
   outline-color: #ffffff;
 }
 
+[data-district-labels] {
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+  z-index: 1;
+}
+
+[data-district-labels] > div {
+  background: rgb(7 17 31 / 0.72);
+  border: 0;
+  border-radius: 3px;
+  box-shadow: none;
+  color: #CBD5E1;
+  font: 650 11px/20px ui-monospace, SFMono-Regular, Consolas, monospace;
+  height: 20px;
+  isolation: isolate;
+  outline: 0;
+  overflow: hidden;
+  padding-inline: 6px;
+  position: absolute;
+  text-align: center;
+  text-overflow: ellipsis;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+  width: 144px;
+}
+
+[data-district-labels] bdi {
+  display: block;
+  isolation: isolate;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+}
+
 [data-inspector] {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -191,7 +228,7 @@ button:focus-visible,
   position: absolute;
   scrollbar-gutter: stable;
   width: 20rem;
-  z-index: 1;
+  z-index: 2;
 }
 
 [data-inspector][hidden] {

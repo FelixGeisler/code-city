@@ -5,12 +5,14 @@ import {
   panCameraByKeyboard,
   panCameraByPointer,
   pickAtCanvasPoint,
+  projectDistricts,
   resetCamera,
   resizeCamera,
   zoomCamera,
   type CameraState,
   type CameraTransitionResult,
   type CameraView,
+  type DistrictProjectionSnapshot,
 } from "../domain/camera-picking-policy";
 
 // Face-local vertices keep both fixed display branches in the trusted shader
@@ -106,20 +108,28 @@ export type PresenterEventSink<G> = Readonly<{
   hoverIndex(generation: G, index: number | null): void;
   activationIndex(generation: G, index: number | null): void;
   selectionAction(generation: G, action: SelectionAction): void;
+  districtProjection(generation: G, snapshot: DistrictProjectionSnapshot): void;
 }>;
 
 declare const presenterTokenBrand: unique symbol;
 export type PresenterToken = Readonly<{ readonly [presenterTokenBrand]: true }>;
 export type PresenterStageResult =
-  | Readonly<{ kind: "staged"; token: PresenterToken; canvas: PresenterCanvas }>
+  | Readonly<{
+    kind: "staged";
+    token: PresenterToken;
+    canvas: PresenterCanvas;
+    snapshot: DistrictProjectionSnapshot;
+  }>
   | Readonly<{ kind: "stale" }>
   | Readonly<{ kind: "failure"; category: PresentationFailureCategory; code: PresentationFailureCode }>;
-export type PresenterCommitResult = Readonly<{ kind: "committed" }> | Readonly<{ kind: "stale" }>;
+export type PresenterCommitResult = Readonly<{
+  kind: "committed";
+  snapshot: DistrictProjectionSnapshot;
+}> | Readonly<{ kind: "stale" }>;
 export type PresenterVisualResult = Readonly<{ kind: "applied" }> | Readonly<{ kind: "stale" }>
   | Readonly<{ kind: "failure"; category: PresentationFailureCategory; code: PresentationFailureCode }>;
 type ControllerFailureResult = Readonly<{ kind: "failure"; category: PresentationFailureCategory; code: PresentationFailureCode }>;
 
-const COMMITTED: PresenterCommitResult = Object.freeze({ kind: "committed" });
 const APPLIED: PresenterVisualResult = Object.freeze({ kind: "applied" });
 const STALE = Object.freeze({ kind: "stale" }) as Readonly<{ kind: "stale" }>;
 const PRESENTATION_FAILURE: ControllerFailureResult = Object.freeze({ kind: "failure", category: "Presentation failed", code: "M1-PRES-1" });
@@ -247,6 +257,7 @@ type Session<G> = {
   gesture?: Gesture;
   cameraState?: CameraState;
   cameraView?: CameraView;
+  projection?: DistrictProjectionSnapshot;
   vertexShader?: WebGLShader;
   fragmentShader?: WebGLShader;
   program?: WebGLProgram;
@@ -554,6 +565,14 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   requireNoError(gl);
 
   draw(session as Session<unknown>, size, initialCamera.view);
+  const projected = projectDistricts(
+    session.presentation!.plates,
+    session.presentation!.centre,
+    initialCamera.view.matrix,
+    size,
+  );
+  if (projected.kind === "failure") throw new Error("Initial district projection failed");
+  session.projection = projected.snapshot;
 }
 
 function releaseGesture<G>(session: Session<G>): void {
@@ -673,6 +692,7 @@ function cleanup<G>(session: Session<G>): boolean {
   session.eventSink = undefined;
   session.cameraState = undefined;
   session.cameraView = undefined;
+  session.projection = undefined;
   session.generation = undefined;
   session.hover = null;
   session.selection = null;
@@ -780,8 +800,20 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
       return;
     }
     draw(session as Session<unknown>, size, transition.view);
+    const projected = projectDistricts(
+      session.presentation!.plates,
+      session.presentation!.centre,
+      transition.view.matrix,
+      size,
+    );
+    if (projected.kind === "failure") {
+      failSession(session);
+      return;
+    }
     session.cameraState = transition.state;
     session.cameraView = transition.view;
+    session.projection = projected.snapshot;
+    session.eventSink!.districtProjection(session.generation!, projected.snapshot);
   };
 
   const applyCameraAndRenewHover = (session: Session<G>, transition: CameraTransitionResult, size: Dimensions): void => {
@@ -1103,6 +1135,9 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           selectionAction(callbackGeneration, action) {
             if (callbackEligible(callbackGeneration)) eventSink.selectionAction(generation, action);
           },
+          districtProjection(callbackGeneration, snapshot) {
+            if (callbackEligible(callbackGeneration)) eventSink.districtProjection(generation, snapshot);
+          },
         });
         canvas.tabIndex = 0;
         canvas.setAttribute("aria-label", "Interactive code city");
@@ -1120,8 +1155,8 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           applyCamera(candidate, transition, finalSize);
           if (!candidate.active) return STALE;
         }
-        if (!candidate.active) return STALE;
-        return Object.freeze({ kind: "staged", token, canvas });
+        if (!candidate.active || !candidate.projection) return STALE;
+        return Object.freeze({ kind: "staged", token, canvas, snapshot: candidate.projection });
       } catch {
         if (candidate) removeSession(candidate);
         if (affected && current === affected) removeSession(affected);
@@ -1138,7 +1173,11 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         removeSession(candidate);
         throw new Error("Presentation teardown failed");
       }
-      return COMMITTED;
+      if (!candidate.projection) {
+        removeSession(candidate);
+        throw new Error("District projection is unavailable");
+      }
+      return Object.freeze({ kind: "committed", snapshot: candidate.projection });
     },
     rollback(token: PresenterToken): void {
       const candidate = sessions.get(token);

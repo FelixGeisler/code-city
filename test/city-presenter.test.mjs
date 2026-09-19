@@ -284,7 +284,17 @@ function overlappingBuildings(count) {
   const rgba = new Uint8Array(count * 4).fill(255);
   return Object.freeze({ kind: oneBuilding().kind, count, origins, sizes, rgba, bounds: new Float32Array([0, 0, 0, 1, 1, 1]) });
 }
-const EMPTY_EVENT_SINK = Object.freeze({ hoverIndex() {}, activationIndex() {}, selectionAction() {} });
+const EMPTY_EVENT_SINK = Object.freeze({
+  hoverIndex() {}, activationIndex() {}, selectionAction() {}, districtProjection() {},
+});
+function commitKind(result) {
+  if (result.kind !== "committed") return result;
+  assert.deepEqual(Reflect.ownKeys(result), ["kind", "snapshot"]);
+  assert(Number.isInteger(result.snapshot.cssWidth) && result.snapshot.cssWidth > 0);
+  assert(Number.isInteger(result.snapshot.cssHeight) && result.snapshot.cssHeight > 0);
+  assert(Object.isFrozen(result.snapshot) && Object.isFrozen(result.snapshot.districts));
+  return COMMITTED;
+}
 function failuresCollector(environment, eligibility = () => true) {
   const failures = [];
   const presenter = createCityPresenter({ host: environment.host, resetControl: environment.resetControl, platform: environment.platform, isEligible: eligibility, failed(...args) { failures.push(args); } });
@@ -296,9 +306,12 @@ function present(environment, presenter, generation, geometry, eventSink = EMPTY
   environment.lastToken = staged.token;
   const committed = presenter.commit(staged.token);
   if (committed.kind !== "committed") return committed;
+  assert.equal(committed.snapshot, staged.snapshot, "stage/commit direct snapshot handoff");
+  environment.projections ??= [];
+  environment.projections.push(committed.snapshot);
   try {
     environment.host.replaceChildren(staged.canvas);
-    return committed;
+    return commitKind(committed);
   } catch {
     presenter.rollback(staged.token);
     return PRESENTATION_FAILURE;
@@ -585,6 +598,7 @@ test("hover coalesces latest movement, invalidates stale frames, and renews afte
     },
     activationIndex(...args) { events.push(["activation", ...args]); },
     selectionAction(...args) { events.push(["selection", ...args]); },
+    districtProjection() {},
   };
   ({ presenter } = failuresCollector(environment));
   assert.deepEqual(present(environment, presenter, 1, oneBuilding(), sink), COMMITTED);
@@ -656,7 +670,7 @@ test("pending hover cleanup, callback, picking, request, and cancellation failur
     const { presenter, failures } = failuresCollector(environment);
     const sink = {
       hoverIndex() { if (failure === "callback") throw new Error("hover callback"); },
-      activationIndex() {}, selectionAction() {},
+      activationIndex() {}, selectionAction() {}, districtProjection() {},
     };
     assert.deepEqual(present(environment, presenter, failure, oneBuilding(), sink), COMMITTED);
     const canvas = environment.canvases[0];
@@ -682,7 +696,7 @@ test("context loss and disposal cancel pending hover exactly once and retained f
     const events = [];
     const { presenter, failures } = failuresCollector(environment);
     assert.deepEqual(present(environment, presenter, stimulus, oneBuilding(), {
-      hoverIndex(...args) { events.push(args); }, activationIndex() {}, selectionAction() {},
+      hoverIndex(...args) { events.push(args); }, activationIndex() {}, selectionAction() {}, districtProjection() {},
     }), COMMITTED);
     const canvas = environment.canvases[0];
     canvas.dispatch("pointermove", inputEvent({ clientX: 110, clientY: 70 }));
@@ -739,7 +753,7 @@ test("an ineligible current visual call is stale before index validation and cle
 test("canvas accessibility and exact camera and selection key mappings suppress only recognised unmodified input", () => {
   const environment = fakeEnvironment();
   const events = [];
-  const sink = { hoverIndex(...args) { events.push(["hover", ...args]); }, activationIndex(...args) { events.push(["activation", ...args]); }, selectionAction(...args) { events.push(["selection", ...args]); } };
+  const sink = { hoverIndex(...args) { events.push(["hover", ...args]); }, activationIndex(...args) { events.push(["activation", ...args]); }, selectionAction(...args) { events.push(["selection", ...args]); }, districtProjection() {} };
   const { presenter, failures } = failuresCollector(environment);
   const geometry = oneBuilding();
   assert.deepEqual(present(environment, presenter, 1, geometry, sink), COMMITTED);
@@ -806,7 +820,7 @@ test("canvas accessibility and exact camera and selection key mappings suppress 
 test("primary orbit and secondary pan use exact pointer deltas, focus, capture, and no activation", () => {
   const environment = fakeEnvironment();
   const events = [];
-  const sink = { hoverIndex(...args) { events.push(["hover", ...args]); }, activationIndex(...args) { events.push(["activation", ...args]); }, selectionAction(...args) { events.push(["selection", ...args]); } };
+  const sink = { hoverIndex(...args) { events.push(["hover", ...args]); }, activationIndex(...args) { events.push(["activation", ...args]); }, selectionAction(...args) { events.push(["selection", ...args]); }, districtProjection() {} };
   const { presenter, failures } = failuresCollector(environment);
   const geometry = oneBuilding();
   assert.deepEqual(present(environment, presenter, 1, geometry, sink), COMMITTED);
@@ -870,6 +884,7 @@ test("pointer release classification has no threshold and activates only a stati
     hoverIndex(...args) { events.push(["hover", ...args]); },
     activationIndex(...args) { events.push(["activation", ...args]); },
     selectionAction(...args) { events.push(["selection", ...args]); },
+    districtProjection() {},
   }), COMMITTED);
   const canvas = environment.canvases[0];
   const draws = names(canvas.gl).filter((name) => name === "drawElementsInstanced").length;
@@ -908,7 +923,7 @@ test("eligible releases use the current overview, orbit, pan, zoom, resize, CSS 
   assert.deepEqual(present(environment, presenter, 7, geometry, {
     hoverIndex() {},
     activationIndex(generation, index) { activations.push([generation, index]); },
-    selectionAction() {},
+    selectionAction() {}, districtProjection() {},
   }), COMMITTED);
   const canvas = environment.canvases[0];
   let expected = resetCamera(geometry.bounds, { width: 200, height: 100 });
@@ -960,7 +975,7 @@ test("exact ties at the 4,000-instance envelope choose the lower canonical index
   const geometry = overlappingBuildings(4_000);
   const { presenter, failures } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, 1, geometry, {
-    hoverIndex() {}, activationIndex(...args) { events.push(args); }, selectionAction() {},
+    hoverIndex() {}, activationIndex(...args) { events.push(args); }, selectionAction() {}, districtProjection() {},
   }), COMMITTED);
   const canvas = environment.canvases[0];
   canvas.dispatch("pointerdown", inputEvent({ pointerId: 1, button: 0, clientX: 110, clientY: 70 }));
@@ -976,7 +991,7 @@ test("picking arithmetic and eligible activation callback failures revoke the se
     assert.deepEqual(present(environment, presenter, failureKind, oneBuilding(), {
       hoverIndex() {},
       activationIndex() { if (failureKind === "callback") throw new Error("injected activation callback"); },
-      selectionAction() {},
+      selectionAction() {}, districtProjection() {},
     }), COMMITTED);
     const canvas = environment.canvases[0];
     canvas.dispatch("pointerdown", inputEvent({ pointerId: 1, button: 0, clientX: 110, clientY: 70 }));
@@ -1040,7 +1055,7 @@ test("pointer interruptions cancel capture without deltas and lifecycle cleanup 
     const activations = [];
     const { presenter, failures } = failuresCollector(environment);
     assert.deepEqual(present(environment, presenter, stimulus, oneBuilding(), {
-      hoverIndex() {}, activationIndex(...args) { activations.push(args); }, selectionAction() {},
+      hoverIndex() {}, activationIndex(...args) { activations.push(args); }, selectionAction() {}, districtProjection() {},
     }), COMMITTED);
     const canvas = environment.canvases[0];
     canvas.dispatch("pointerdown", inputEvent({ pointerId: 12, button: 0, clientX: 50, clientY: 50 }));
@@ -1176,7 +1191,7 @@ test("stage is detached, commit and visual state are token/generation gated, and
   assert.equal(environment.host.child, undefined);
   assert.deepEqual(presenter.setVisualState(7, null, null), STALE);
   assert.deepEqual(presenter.commit(Object.freeze({})), STALE);
-  assert.deepEqual(presenter.commit(staged.token), COMMITTED);
+  assert.deepEqual(commitKind(presenter.commit(staged.token)), COMMITTED);
   assert.deepEqual(presenter.commit(staged.token), STALE);
   assert.deepEqual(presenter.setVisualState(8, null, null), STALE);
   assert.deepEqual(presenter.setVisualState(7, null, null), APPLIED);
@@ -1269,8 +1284,8 @@ test("committing a second staged token disposes the prior committed session exac
   const second = presenter.stage(2, geometry, presentation, EMPTY_EVENT_SINK);
   assert.equal(first.kind, "staged");
   assert.equal(second.kind, "staged");
-  assert.deepEqual(presenter.commit(first.token), COMMITTED);
-  assert.deepEqual(presenter.commit(second.token), COMMITTED);
+  assert.deepEqual(commitKind(presenter.commit(first.token)), COMMITTED);
+  assert.deepEqual(commitKind(presenter.commit(second.token)), COMMITTED);
   assert.equal(first.canvas.removeCount, 1);
   assert.equal(second.canvas.removeCount, 0);
   presenter.dispose();
@@ -1289,6 +1304,55 @@ test("source-free presentation data has only the geometry contract and is struct
   assert.deepEqual([...cloned.bounds], [...geometry.bounds]);
 });
 
+test("camera and resize accept immutable projection snapshots before current-only callbacks while hover and selection do no label work", () => {
+  const environment = fakeEnvironment({ width: 640, height: 480 });
+  const projections = [];
+  const { presenter, failures } = failuresCollector(environment);
+  assert.deepEqual(present(environment, presenter, 17, oneBuilding(), {
+    hoverIndex() {}, activationIndex() {}, selectionAction() {},
+    districtProjection(generation, snapshot) { projections.push({ generation, snapshot }); },
+  }), COMMITTED);
+  const canvas = environment.canvases[0];
+  assert.equal(projections.length, 0, "stage or commit emitted a projection callback");
+  canvas.dispatch("pointermove", inputEvent({ clientX: 110, clientY: 70 }));
+  environment.runFrame();
+  canvas.dispatch("keydown", inputEvent({ key: "ArrowRight" }));
+  assert.equal(projections.length, 0, "hover or selection projected labels");
+  canvas.dispatch("keydown", inputEvent({ key: "d" }));
+  assert.equal(projections.length, 1);
+  assert.equal(projections[0].generation, 17);
+  assert.equal(projections[0].snapshot.cssWidth, 640);
+  assert.equal(projections[0].snapshot.cssHeight, 480);
+  assert.deepEqual(Reflect.ownKeys(projections[0].snapshot), ["cssWidth", "cssHeight", "districts"]);
+  assert.deepEqual(Reflect.ownKeys(projections[0].snapshot.districts[0]), ["screenX", "screenY", "area", "lateral"]);
+  assert(Object.isFrozen(projections[0].snapshot) && Object.isFrozen(projections[0].snapshot.districts));
+  environment.host.width = 479;
+  environment.host.height = 300;
+  environment.observers[0].callback();
+  assert.equal(projections.length, 2);
+  assert.deepEqual([projections[1].snapshot.cssWidth, projections[1].snapshot.cssHeight], [479, 300]);
+  environment.resetControl.dispatch();
+  assert.equal(projections.length, 3);
+  assert.deepEqual([projections[2].snapshot.cssWidth, projections[2].snapshot.cssHeight], [479, 300]);
+  assert.deepEqual(failures, []);
+});
+
+test("a current projection callback failure revokes the complete session and retained camera callbacks are inert", () => {
+  const environment = fakeEnvironment();
+  const { presenter, failures } = failuresCollector(environment);
+  assert.deepEqual(present(environment, presenter, 23, oneBuilding(), {
+    hoverIndex() {}, activationIndex() {}, selectionAction() {},
+    districtProjection() { throw new Error("projection callback failed"); },
+  }), COMMITTED);
+  const canvas = environment.canvases[0];
+  const retainedKey = [...canvas.eventListeners.get("keydown")][0];
+  canvas.dispatch("keydown", inputEvent({ key: "d" }));
+  assert.deepEqual(failures, [[23, "Presentation failed", "M1-PRES-1"]]);
+  assert.equal(canvas.removeCount, 1);
+  retainedKey(inputEvent({ key: "a" }));
+  assert.equal(failures.length, 1);
+});
+
 test("the complete N=G=4,000 presentation uploads exactly 208,420 bytes and draws two 4,000-instance passes", () => {
   const facts = Array.from({ length: 4000 }, (_, index) => ({
     canonicalPath: `district-${String(index).padStart(4, "0")}/module.js`, S: index % 7, U: index % 5, M: index % 17,
@@ -1298,7 +1362,7 @@ test("the complete N=G=4,000 presentation uploads exactly 208,420 bytes and draw
   const { presenter } = failuresCollector(environment);
   const staged = presenter.stage(4000, city.geometry, city.presentation, EMPTY_EVENT_SINK);
   assert.equal(staged.kind, "staged");
-  assert.deepEqual(presenter.commit(staged.token), COMMITTED);
+  assert.deepEqual(commitKind(presenter.commit(staged.token)), COMMITTED);
   const gl = environment.canvases[0].gl;
   assert.equal(city.presentation.plates.length, 4000);
   assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 112000, 96000]);

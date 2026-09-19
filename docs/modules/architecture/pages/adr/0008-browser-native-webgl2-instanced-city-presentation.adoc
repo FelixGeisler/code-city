@@ -102,3 +102,9 @@ canvas/context, and renderer-neutral worker geometry. The current envelope is
 one program, two VAOs, four buffers, and plate-first/building-second instanced
 draws; actual context loss still performs no restoration and now skips all
 WebGL deletion while releasing JavaScript ownership.
+
+Issue https://github.com/FelixGeisler/code-city/issues/575[#575] subsequently
+adds controller-owned aligned district identities, exact numeric projection in
+the existing presenter camera transaction, and one inert HTML label overlay.
+Identity remains outside WebGL, worker, hash, and evidence boundaries; the
+program, VAOs, buffers, uploads, and two draws remain unchanged.

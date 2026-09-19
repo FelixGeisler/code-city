@@ -33,6 +33,7 @@ const {
   panCameraByPointer,
   pickAtCanvasPoint,
   pickNearest,
+  projectDistricts,
   resetCamera,
   resizeCamera,
   zoomCamera,
@@ -106,6 +107,34 @@ function project(view, world) {
   const clipZ = m[2] * q[0] + m[6] * q[1] + m[10] * q[2] + m[14];
   const clipW = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15];
   return { x: clipX / clipW, y: clipY / clipW, depth: clipZ / clipW, clipW };
+}
+
+function exactDistrictPoint(matrix, centre, point, dimensions) {
+  const q = point.map((component, axis) => {
+    const relative = component - centre[axis];
+    assert.equal(Math.fround(relative), relative);
+    return Math.fround(relative);
+  });
+  const clip = Array.from({ length: 4 }, (_, row) => {
+    const p0 = Math.fround(matrix[row] * q[0]);
+    const p1 = Math.fround(matrix[row + 4] * q[1]);
+    const p2 = Math.fround(matrix[row + 8] * q[2]);
+    const p3 = Math.fround(matrix[row + 12] * Math.fround(1));
+    const s0 = Math.fround(p0 + p1);
+    const s1 = Math.fround(s0 + p2);
+    return Math.fround(s1 + p3);
+  });
+  assert(clip[3] > 0);
+  const ndcX = Math.fround(clip[0] / clip[3]);
+  const ndcY = Math.fround(clip[1] / clip[3]);
+  const depth = Math.fround(clip[2] / clip[3]);
+  assert(-1 < depth && depth < 1);
+  return {
+    screenX: (ndcX * 0.5 + 0.5) * dimensions.width,
+    screenY: (-ndcY * 0.5 + 0.5) * dimensions.height,
+    ndcX,
+    ndcY,
+  };
 }
 
 function adversarialBounds(source) {
@@ -645,11 +674,71 @@ test("both full 4,000-city envelopes keep immutable origin-C endpoints and stric
   }
 });
 
+
+test("district projection independently proves exact float32 row order, quotients, unrounded CSS placement, and closed snapshots", () => {
+  const city = validateCityPayload(buildCity([
+    { canonicalPath: "a/one.ts", S: 0, U: 0, M: 0 },
+    { canonicalPath: "b/two.ts", S: 0, U: 0, M: 0 },
+  ]));
+  const dimensions = { width: 997, height: 613 };
+  const camera = success(resetCamera(city.presentation.sceneBounds, dimensions));
+  const projected = success(projectDistricts(city.presentation.plates, city.presentation.centre, camera.view.matrix, dimensions));
+  const expected = city.presentation.plates.map((plate) => {
+    const [minimumX, , minimumZ] = plate.minimum;
+    const [width, , depth] = plate.dimensions;
+    const anchor = exactDistrictPoint(camera.view.matrix, city.presentation.centre, [minimumX + width / 2, 0, minimumZ + depth / 2], dimensions);
+    const corners = [
+      [minimumX, 0, minimumZ], [minimumX + width, 0, minimumZ],
+      [minimumX, 0, minimumZ + depth], [minimumX + width, 0, minimumZ + depth],
+    ].map((point) => exactDistrictPoint(camera.view.matrix, city.presentation.centre, point, dimensions));
+    const xs = corners.map(({ screenX }) => screenX);
+    const ys = corners.map(({ screenY }) => screenY);
+    return {
+      screenX: anchor.screenX,
+      screenY: anchor.screenY,
+      area: (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys)),
+      lateral: -1 < anchor.ndcX && anchor.ndcX < 1 && -1 < anchor.ndcY && anchor.ndcY < 1,
+    };
+  });
+  assert.deepEqual(projected.snapshot, { cssWidth: 997, cssHeight: 613, districts: expected });
+  assert.deepEqual(Reflect.ownKeys(projected.snapshot), ["cssWidth", "cssHeight", "districts"]);
+  assert(projected.snapshot.districts.every((district) => Reflect.ownKeys(district).join(",") === "screenX,screenY,area,lateral"));
+  assert(Object.isFrozen(projected.snapshot) && Object.isFrozen(projected.snapshot.districts));
+  assert(projected.snapshot.districts.every(Object.isFrozen));
+  assert(projected.snapshot.districts.some(({ screenX, screenY }) => !Number.isInteger(screenX) || !Number.isInteger(screenY)));
+});
+
+test("district projection fails complete W, depth, finite, dimension, and exact-coordinate boundaries but retains lateral offscreen values", () => {
+  const identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  const cell = Object.freeze({ minimum: Object.freeze([-0.5, -0.5, 0]), dimensions: Object.freeze([1, 0.5, 0.5]) });
+  const accepted = success(projectDistricts([cell], [0, 0, 0], identity, { width: 101, height: 99 }));
+  assert.deepEqual(accepted.snapshot.districts[0], { screenX: 50.5, screenY: 49.5, area: 0, lateral: true });
+
+  const lateralCell = Object.freeze({ minimum: Object.freeze([2, -0.5, 0]), dimensions: Object.freeze([1, 0.5, 0.5]) });
+  const lateral = success(projectDistricts([lateralCell], [0, 0, 0], identity, { width: 101, height: 99 }));
+  assert.equal(lateral.snapshot.districts[0].lateral, false);
+  assert(lateral.snapshot.districts[0].screenX > 101);
+
+  const noW = new Float32Array(identity); noW[15] = 0;
+  const depthBoundary = new Float32Array(identity);
+  const depthCell = Object.freeze({ minimum: Object.freeze([-0.5, -0.5, 1]), dimensions: Object.freeze([1, 0.5, 0.5]) });
+  const nonfinite = new Float32Array(identity); nonfinite[0] = Infinity;
+  const inexactCell = Object.freeze({ minimum: Object.freeze([0.1, -0.5, 0]), dimensions: Object.freeze([1, 0.5, 0.5]) });
+  for (const [id, result] of [
+    ["W=0", projectDistricts([cell], [0, 0, 0], noW, { width: 101, height: 99 })],
+    ["depth=1", projectDistricts([depthCell], [0, 0, 0], depthBoundary, { width: 101, height: 99 })],
+    ["nonfinite matrix", projectDistricts([cell], [0, 0, 0], nonfinite, { width: 101, height: 99 })],
+    ["inexact relative", projectDistricts([inexactCell], [0, 0, 0], identity, { width: 101, height: 99 })],
+    ["fractional width", projectDistricts([cell], [0, 0, 0], identity, { width: 101.5, height: 99 })],
+    ["zero height", projectDistricts([cell], [0, 0, 0], identity, { width: 101, height: 0 })],
+  ]) failure(result, id);
+});
+
 test("accepted ADR history and current perspective requirements stay synchronized without ADR 0013", async () => {
   const adrFiles = [
-    ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 4_579, "f618aca466b02a45399fb9f9d625b1e4c941cfdb3570a118b68b2fa09ccf348d"],
-    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 20_522, "3631b0e7fd71d3562115d5ae2fd07e5748a39161b1f05d5c97da7536921e09bc"],
-    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 14_268, "71cb8e73ad60cfa4819d183db7dc464c59bfd46f586893aabe989a904ba3115c"],
+    ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 4_954, "4e5440b950fe24299b91508fe32bbf5b032afff0fe7d7691fa8335ba35f63374"],
+    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 21_131, "47e62d6bda9cb1561de95f1eb6835013ff90974b5129074ea8866b7ac6d4fc06"],
+    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 14_785, "c9ae8519714f2aef3a4efe3fbec99927d98bccf715d340e26af89b96af786fc3"],
   ];
   const adrs = [];
   for (const [file, expectedLength, expectedHash] of adrFiles) {
@@ -666,7 +755,7 @@ test("accepted ADR history and current perspective requirements stay synchronize
   assert(adrs[2].includes("Subsequent refinement (issue 569)"));
   assert(adrs[1].includes("Subsequent refinement (issue 571)"));
   assert(adrs[2].includes("Subsequent refinement (issue 571)"));
-  assert(adrs.every((adr) => adr.includes("issues/573")));
+  assert(adrs.every((adr) => adr.includes("issues/573") && adr.includes("issues/575")));
   assert.equal(await readFile(path.join(root, "docs/modules/architecture/nav.adoc"), "utf8").then((text) => text.includes("0013")), false);
   const requirements = await readFile(path.join(root, "docs/modules/requirements/pages/city-and-failures.adoc"), "utf8");
   const normalized = requirements.replace(/\s+/g, " ");
