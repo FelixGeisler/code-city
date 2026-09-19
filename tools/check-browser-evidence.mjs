@@ -1837,7 +1837,7 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(focus.faceShading, true);
   assert.equal(focus.polygonOffsetEnables, 0);
   assert.deepEqual(focus.cleanup, { deleteShader: 6, deleteProgram: 3, deleteBuffer: 12, deleteVertexArray: 6 });
-  exactKeys(result.presentation.maximum, ["result", "groups", "uploads", "draws", "passKinds", "matrices", "sourceBounds", "sceneBounds", "centre", "matrixOracles", "labels", "selectedLabels", "clearedLabels", "cachedInspectorRelayout", "exactPlateUpload"], "Maximum district presentation");
+  exactKeys(result.presentation.maximum, ["result", "groups", "uploads", "draws", "passKinds", "matrices", "sourceBounds", "sceneBounds", "centre", "matrixOracles", "labels", "selectedLabels", "clearedLabels", "clickThrough", "cachedInspectorRelayout", "exactPlateUpload"], "Maximum district presentation");
   const maximum = result.presentation.maximum;
   assert.deepEqual(maximum.result, { kind: "committed" });
   assert.equal(maximum.groups, 4000);
@@ -1850,17 +1850,49 @@ function validateBrowserResult(result, expectedAssets) {
   assert.deepEqual(maximum.centre, [528.5, 1.75, 537]);
   assert.deepEqual(maximum.matrixOracles, Array.from({ length: 7 }, (_, index) => ({ corners: 8, positiveW: true, strictDepth: true, lateralFit: index === 0 || index === 6 })));
   assert.equal(maximum.labels.length, 7);
+  const expectedMaximumCounts = [
+    { projected: 4000, admitted: 4000, collision: 3993, offscreen: 0, inspector: 0, visible: 7 },
+    { projected: 4000, admitted: 4000, collision: 3993, offscreen: 0, inspector: 0, visible: 7 },
+    { projected: 4000, admitted: 4000, collision: 3993, offscreen: 0, inspector: 0, visible: 7 },
+    { projected: 4000, admitted: 4000, collision: 3991, offscreen: 0, inspector: 0, visible: 9 },
+    { projected: 4000, admitted: 4000, collision: 3989, offscreen: 0, inspector: 0, visible: 11 },
+    { projected: 4000, admitted: 4000, collision: 3985, offscreen: 0, inspector: 0, visible: 15 },
+    { projected: 4000, admitted: 4000, collision: 3992, offscreen: 0, inspector: 0, visible: 8 },
+  ];
   for (const [index, labels] of maximum.labels.entries()) {
-    exactKeys(labels, ["dom", "visible", "hidden", "widths", "transformsFinite", "overlayMatchesCanvas", "pointerEvents"], `Maximum labels ${index}`);
+    exactKeys(labels, ["dom", "width", "overlayMatchesCanvas", "pointerEvents", "counts", "exactPositions", "exactVisibility"], `Maximum labels ${index}`);
+    exactKeys(labels.counts, ["projected", "admitted", "collision", "offscreen", "inspector", "visible"], `Maximum label counts ${index}`);
     assert.equal(labels.dom, 4000);
-    assert(labels.visible > 0);
-    assert.equal(labels.visible + labels.hidden, 4000);
-    assert.deepEqual(labels.widths, [index === 4 ? "144px" : "104px"]);
-    assert.equal(labels.transformsFinite, true);
+    assert.equal(labels.width, index === 4 ? "144px" : "104px");
+    assert.deepEqual(labels.counts, expectedMaximumCounts[index]);
+    assert.equal(labels.exactPositions, true);
+    assert.equal(labels.exactVisibility, true);
     assert.equal(labels.overlayMatchesCanvas, true);
     assert.equal(labels.pointerEvents, "none");
   }
-  assert(maximum.selectedLabels.visible <= maximum.clearedLabels.visible);
+  for (const [label, observed, expected] of [
+    ["selected", maximum.selectedLabels, { projected: 4000, admitted: 0, collision: 0, offscreen: 0, inspector: 4000, visible: 0 }],
+    ["cleared", maximum.clearedLabels, expectedMaximumCounts[6]],
+  ]) {
+    exactKeys(observed, ["dom", "width", "overlayMatchesCanvas", "pointerEvents", "counts", "exactPositions", "exactVisibility"], `Maximum ${label} labels`);
+    exactKeys(observed.counts, ["projected", "admitted", "collision", "offscreen", "inspector", "visible"], `Maximum ${label} counts`);
+    assert.equal(observed.dom, 4000);
+    assert.equal(observed.width, "104px");
+    assert.deepEqual(observed.counts, expected);
+    assert.equal(observed.exactPositions, true);
+    assert.equal(observed.exactVisibility, true);
+    assert.equal(observed.overlayMatchesCanvas, true);
+    assert.equal(observed.pointerEvents, "none");
+  }
+  exactKeys(maximum.clickThrough, ["buildingExpected", "buildingObserved", "buildingInspectorVisible", "noHitObserved", "noHitInspectorCleared", "targetsCanvas"], "Maximum click-through");
+  assert.deepEqual(maximum.clickThrough, {
+    buildingExpected: 246,
+    buildingObserved: 246,
+    buildingInspectorVisible: true,
+    noHitObserved: null,
+    noHitInspectorCleared: true,
+    targetsCanvas: true,
+  });
   assert.equal(maximum.cachedInspectorRelayout, true);
   assert.equal(maximum.exactPlateUpload, true);
   const expectedLifecycleListeners = ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"];
