@@ -98,12 +98,18 @@ test("validateCityPayload creates immutable controller-owned non-aliasing city s
   const input = cloneCity();
   const before = cloneCity(input);
   const validated = validateCityPayload(input);
-  assert.deepEqual(Object.keys(validated), ["geometry", "inspection", "presentation"]);
+  assert.deepEqual(Object.keys(validated), ["geometry", "inspection", "presentation", "districts"]);
   assert.equal(Object.isFrozen(validated), true);
   assert.equal(Object.isFrozen(validated.geometry), true);
   assert.equal(Object.isFrozen(validated.inspection), true);
   assert(validated.inspection.every(Object.isFrozen));
   assert.equal(Object.isFrozen(validated.presentation), true);
+  assert.equal(Object.isFrozen(validated.districts), true);
+  assert(validated.districts.every(Object.isFrozen));
+  assert.deepEqual(validated.districts, [
+    { root: true, identity: "_root" },
+    { root: false, identity: "src" },
+  ]);
   assert.equal(Object.isFrozen(validated.presentation.plates), true);
   assert(validated.presentation.plates.every((plate) => Object.isFrozen(plate)
     && Object.isFrozen(plate.minimum) && Object.isFrozen(plate.dimensions)));
@@ -125,6 +131,7 @@ test("validateCityPayload creates immutable controller-owned non-aliasing city s
   }
   assert.notEqual(validated.inspection, input.inspection);
   assert.notEqual(validated.inspection[0], input.inspection[0]);
+  assert.notEqual(validated.districts, validateCityPayload(before).districts);
   input.geometry.origins.fill(99);
   input.geometry.sizes.fill(99);
   input.geometry.rgba.fill(99);
@@ -284,6 +291,10 @@ test("concentrated and N=G=4,000 reconstruction yields exact plate cells, scene 
       canonicalPath: entry.path(index), S: 0, U: 0, M: 0,
     }))));
     assert.equal(city.presentation.plates.length, entry.plates, entry.id);
+    assert.equal(city.districts.length, entry.plates, entry.id);
+    assert.equal(city.districts[0].root, false, entry.id);
+    assert.equal(city.districts[0].identity, entry.id === "concentrated" ? "all" : "g0000", entry.id);
+    assert.equal(city.districts.at(-1).identity, entry.id === "concentrated" ? "all" : "g3999", entry.id);
     assert.deepEqual(city.presentation.sceneBounds, entry.bounds, entry.id);
     assert.deepEqual(city.presentation.centre, entry.centre, entry.id);
     assert.deepEqual(city.presentation.plates[0], entry.first, entry.id);
@@ -300,6 +311,23 @@ test("concentrated and N=G=4,000 reconstruction yields exact plate cells, scene 
       }
     }
   }
+});
+
+test("root and literal directory identities stay structurally distinct and aligned with plate order", () => {
+  const facts = [
+    { canonicalPath: "Repository root/a.ts", S: 0, U: 0, M: 0 },
+    { canonicalPath: "_root/a.ts", S: 0, U: 0, M: 0 },
+    { canonicalPath: "a.ts", S: 0, U: 0, M: 0 },
+  ];
+  const city = validateCityPayload(buildCity(facts));
+  assert.deepEqual(city.districts, [
+    { root: false, identity: "Repository root" },
+    { root: true, identity: "_root" },
+    { root: false, identity: "_root" },
+  ]);
+  assert.equal(city.districts.length, city.presentation.plates.length);
+  assert.deepEqual(Reflect.ownKeys(city.districts[0]), ["root", "identity"]);
+  assert.equal(JSON.stringify(city.presentation).includes("Repository root"), false);
 });
 
 test("validated geometry preserves exact bytes while inspection contributes no geometry bytes", () => {

@@ -2,6 +2,7 @@ import { parseWorkerMessage, readGeneration, type ParsedWorkerMessage, type Work
 import type { InspectionFact, NumericPresentation, ValidatedCity, ValidatedGeometry } from "./city-payload";
 import type { FailureCode } from "./resolution";
 import { parseRepositoryReference } from "../domain/repository-reference";
+import type { DistrictProjectionSnapshot } from "../domain/camera-picking-policy";
 
 export type WorkerTransport = Readonly<{
   send(command: WorkerCommand): void;
@@ -16,9 +17,13 @@ export type WorkerTransport = Readonly<{
 export type VisibleFailureCode = FailureCode | "M1-PRES-1";
 export type SelectionAction = "next" | "previous" | "first" | "last" | "clear";
 
-export type ControllerCanvas = Readonly<{ remove(): void }>;
+export type ControllerCanvas = Readonly<{
+  remove(): void;
+  getBoundingClientRect(): Readonly<{ left: number; top: number; width: number; height: number }>;
+}>;
 export type ControllerPublication = Readonly<{
-  commit(canvas: ControllerCanvas): void;
+  commit(canvas: ControllerCanvas, snapshot: DistrictProjectionSnapshot): void;
+  districtProjection(snapshot: DistrictProjectionSnapshot): void;
   setSelection(index: number | null): void;
   rollback(): void;
 }>;
@@ -30,7 +35,11 @@ export type AttemptView = Readonly<{
   success(revision: string): void;
   failure(category: string, code?: VisibleFailureCode, revision?: string): void;
   cancelled(): void;
-  stagePublication(revision: string, inspection: readonly InspectionFact[]): ControllerPublication;
+  stagePublication(
+    revision: string,
+    inspection: readonly InspectionFact[],
+    districts: ValidatedCity["districts"],
+  ): ControllerPublication;
 }>;
 
 export type ControllerPresentationFailure = Readonly<{
@@ -39,15 +48,24 @@ export type ControllerPresentationFailure = Readonly<{
   code: "M1-PRES-1";
 }>;
 export type ControllerPresenterStageResult<T, C extends ControllerCanvas> =
-  | Readonly<{ kind: "staged"; token: T; canvas: C }>
+  | Readonly<{
+    kind: "staged";
+    token: T;
+    canvas: C;
+    snapshot: DistrictProjectionSnapshot;
+  }>
   | Readonly<{ kind: "stale" }>
   | ControllerPresentationFailure;
-export type ControllerCommitResult = Readonly<{ kind: "committed" }> | Readonly<{ kind: "stale" }>;
+export type ControllerCommitResult = Readonly<{
+  kind: "committed";
+  snapshot: DistrictProjectionSnapshot;
+}> | Readonly<{ kind: "stale" }>;
 export type ControllerVisualResult = Readonly<{ kind: "applied" }> | Readonly<{ kind: "stale" }> | ControllerPresentationFailure;
 export type ControllerEventSink<G> = Readonly<{
   hoverIndex(generation: G, index: number | null): void;
   activationIndex(generation: G, index: number | null): void;
   selectionAction(generation: G, action: SelectionAction): void;
+  districtProjection(generation: G, snapshot: DistrictProjectionSnapshot): void;
 }>;
 
 export type ControllerPresenter<G, T = object, C extends ControllerCanvas = ControllerCanvas> = Readonly<{
@@ -330,6 +348,15 @@ export function createMainController(
         else return;
         applyVisual(publication, publication.hover, next);
       },
+      districtProjection(callbackGeneration, snapshot) {
+        const publication = publicationFor(callbackGeneration);
+        if (!publication) return;
+        try {
+          publication.publication.districtProjection(snapshot);
+        } catch {
+          failPresentation(callbackGeneration);
+        }
+      },
     });
   }
 
@@ -366,7 +393,7 @@ export function createMainController(
         cleanup(bridge);
         return;
       }
-      candidate.publication = view.stagePublication(message.revision, message.city.inspection);
+      candidate.publication = view.stagePublication(message.revision, message.city.inspection, message.city.districts);
       if (!transactionStillEligible(candidate)) {
         rollbackTransaction(candidate);
         cleanup(bridge);
@@ -388,7 +415,7 @@ export function createMainController(
         cleanup(bridge);
         return;
       }
-      candidate.publication.commit(staged.canvas);
+      candidate.publication.commit(staged.canvas, committed.snapshot);
       if (!transactionStillEligible(candidate)) {
         rollbackTransaction(candidate);
         cleanup(bridge);

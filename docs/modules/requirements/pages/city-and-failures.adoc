@@ -100,10 +100,77 @@ dimensions `(cellWidth,0.5,cellDepth)`. The plate top is exactly `y=0`; group
 gap `8` is excluded. `sceneBounds` is the union of all plates and real building
 AABBs, and its immutable centre is shared by camera and instance uploads.
 Plates are presentation-only and are not payload geometry or pick targets.
+Each plate has one aligned controller-only descriptor `{root,identity}`. The root
+is `{true,"_root"}`; a real `_root` directory is `{false,"_root"}`. Other
+identities are the existing one- or two-segment grouping result. These
+descriptors do not enter the numeric presentation, worker, WebGL, hash, or
+evidence contracts.
 
 Payload arrays remain in increasing canonical-path index order. Packing writes
 one computed position back to that index; it does not reorder identity,
 keyboard traversal, selection, inspection, or exact-tie ownership.
+
+== District labels
+
+Every visible district plate has one inert HTML label in a single
+`div[data-district-labels]` overlay. The label text is `/` for the root and the
+exact existing group identity otherwise. The repository-derived value is
+assigned only to an inner `<bdi dir="auto">` with `textContent`; it is never an
+attribute, style, URL, object key, log, shader/GPU value, observer value, or
+evidence field. The overlay is `aria-hidden`, clipped to the canvas, layered
+below the inspector, and has `pointer-events:none`. Labels therefore remain
+outside picking: a ray through a label retains the underlying building hit or
+empty canvas hit.
+
+For each plate, derive the top-centre anchor and all four top corners directly
+from its numeric cell at `y=0`. Subtract the immutable `sceneBounds` centre and
+project each point with the exact float32 matrix used by the corresponding
+draw. For every row `k=0..3`, with `f=Math.fround`, evaluate:
+
+[source,text]
+....
+p0=f(m[k]*x); p1=f(m[k+4]*y); p2=f(m[k+8]*z); p3=f(m[k+12]*f(1))
+s0=f(p0+p1); s1=f(s0+p2); clip[k]=f(s1+p3)
+....
+
+Every relative coordinate must equal its `f` result; every input, product,
+sum, clip component, and quotient must be finite. Require `clipW>0` and
+`-1 < f(clipZ/clipW) < 1`. Set `ndcX=f(clipX/clipW)` and
+`ndcY=f(clipY/clipW)`. A violation fails the complete transaction as
+`M1-PRES-1`; lateral values outside `(-1,1)` remain valid and are layout
+exclusions. With the positive integer CSS dimensions accepted by the same
+draw, use unrounded `Number` operations for:
+
+[source,text]
+....
+screenX=(ndcX*0.5+0.5)*cssWidth
+screenY=(-ndcY*0.5+0.5)*cssHeight
+area=(maxCornerX-minCornerX)*(maxCornerY-minCornerY)
+....
+
+The closed immutable snapshot contains only `cssWidth`, `cssHeight`, and
+ordered `{screenX,screenY,area,lateral}` rows. Stage and commit return their
+direct snapshot; commit returns the latest accepted staged-resize snapshot.
+Current camera and resize transitions replace camera, view, and snapshot
+atomically before the generation- and captured-token-gated
+`districtProjection(generation,snapshot)` callback.
+
+Labels are fixed `144px × 20px` when `cssWidth>=480`, otherwise `104px ×
+20px`, centred at `(screenX,screenY)`. They use `6px` inline padding,
+`11px ui-monospace, SFMono-Regular, Consolas, monospace`, weight `650`, colour
+`#CBD5E1`, background `rgb(7 17 31 / 0.72)`, radius `3px`, single-line bidi
+isolation and ellipsis, and no border, outline, or shadow.
+
+Exclude only a non-lateral anchor, a box with no positive-area canvas
+intersection, or a box intersecting the visible inspector rectangle expanded
+by `4px`. Sort remaining boxes by descending unrounded area then district
+index. Inflate boxes by `2px` per side and greedily reject strict overlap;
+exact `4px` separation is accepted. Use accepted-only half-open grid buckets
+of `(labelWidth+4) × 24`, insert only after acceptance, and evaluate every
+district without a first-K cap. Selection show/clear remeasures the inspector
+and reruns exclusion/collision from cached projected boxes; hover does no label
+work. Camera actions, accepted resize, and Reset reproject and relayout. There
+is no label listener, observer, frame, retry, renderer, or GPU text.
 
 == Scene and fixed face display
 
@@ -371,6 +438,7 @@ semantic events are:
 hoverIndex(generation, index | null)
 activationIndex(generation, index | null)
 selectionAction(generation, next | previous | first | last | clear)
+districtProjection(generation, numericSnapshot)
 ----
 
 The controller receives no DOM event. It generation-gates semantic events and
@@ -505,8 +573,12 @@ has no group identity, path, label, anchor, projection, callback, or observer
 field. The controller stages presentation and detached semantic content,
 rechecks the current generation, commits the presenter, and performs one
 publication-root commit.
-Geometry, facts, revision, canvas, inspector container, persistent legend, and
-empty hover and selection become current together.
+Geometry, facts, revision, canvas, district-label overlay, inspector container,
+persistent legend, direct committed projection snapshot, and empty hover and
+selection become current together. Semantic commit performs one ordered
+`replaceChildren(canvas, labels, inspector, legend)`, validates attached
+canvas/overlay rectangles, and lays out the labels before current ownership is
+assigned.
 
 [cols="2,3,3,2",options="header"]
 |===
@@ -518,8 +590,8 @@ empty hover and selection become current together.
 |One complete city
 
 |Camera action
-|Preserve facts and selection; clear then eligible hover recompute
-|Validate proposed state, invalidate queued hover, redraw
+|Preserve facts and selection; relayout labels; clear then eligible hover recompute
+|Validate proposed state, redraw, project every district, atomically accept, then callback
 |Current city or `M1-PRES-1`
 
 |Resize
@@ -576,8 +648,9 @@ empty hover and selection become current together.
 Presenter disposal is exactly-once and idempotent: invalidate frame work,
 release pointer capture, remove input, Reset, context-loss, lifecycle, and
 resize listeners, delete the one fill program, two VAOs, and four buffers,
-clear both instance staging arrays, numeric district state, camera, and visual
-state, and remove the canvas. After actual context loss, cleanup makes no WebGL
+clear both instance staging arrays, numeric projection snapshots/callbacks,
+semantic label/inspector caches and nodes, camera, and visual state, and remove
+the canvas. After actual context loss, cleanup makes no WebGL
 deletion or restoration call but still releases every JavaScript owner and
 reference.
 
@@ -612,8 +685,10 @@ Stale generations, sessions, tokens, callbacks, and frame epochs only clean up.
 There is no new category, raw diagnostic, retry, fallback, restoration, or
 partial city.
 
-Repository paths may reach only the controller's inert inspector text. Source
-bodies, provider locators and values, parser values, credentials, raw
+Repository paths may reach only the controller's inert inspector text and the
+approved grouped directory identity may reach only district-label `bdi.textContent`.
+No complete path or filename is added by labels. Source bodies, provider
+locators and values, parser values, credentials, raw
 diagnostics, telemetry, and persisted product state do not reach interaction,
 inspection, WebGL, or release evidence. The existing browser and production
 evidence observers access only required geometry and never clone, enumerate,
@@ -624,8 +699,8 @@ hash, serialise, log, packetise, wrap, or retain inspection facts.
 This baseline adds no source viewing or download, dependency view, search,
 filtering, history, authentication, private-repository support, metric
 configuration, export, finding, AI guidance, touch-specific gesture, preset,
-first-person movement, minimap, road, parcel, persistent group or building
-label, tooltip, static building edge, animation, saved view,
+first-person movement, minimap, road, parcel, persistent building label,
+tooltip, static building edge, animation, saved view,
 sharing, or telemetry.
 
 This perspective change changes no admission, syntax, raw metric, source limit,

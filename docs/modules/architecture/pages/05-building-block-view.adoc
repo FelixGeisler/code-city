@@ -8,8 +8,8 @@ image::building-blocks.svg[Main-context controller and presenter with the sole p
 
 |UI attempt controller |Main application |Validate submitted URL shape; own the
 current attempt, the sole city-payload validator, immutable inspection snapshot,
-semantic hover and selection, traversal, inspector, generation gating, and the
-single publication-root commit
+semantic hover and selection, traversal, inspector and district-label
+identities, generation/token gating, and the single publication-root commit
 
 |Worker bridge |Main and worker edge |Own the sole concrete worker handle;
 validate closed, generation-tagged commands, outcomes, and lifecycle messages;
@@ -17,8 +17,9 @@ reject stale messages
 
 |Interactive presenter |Main edge |Own stage tokens and sessions, canvas and DOM
 input, immutable scene-centre camera, pointer capture, request epoch, building-only
-CPU picking, one-program/two-pass WebGL city resources, and uniform-driven
-hover/selection surface focus
+CPU picking, exact numeric district projection snapshots,
+one-program/two-pass WebGL city resources, and uniform-driven hover/selection
+surface focus
 
 |Worker pipeline coordinator |Worker application |Sequence capabilities and
 suppress downstream work after failure or cancellation
@@ -48,7 +49,8 @@ own SLOC, executable-unit, ownership, and complexity rules
 The controller owns semantic facts and independently reconstructs the numeric
 presentation snapshot. The presenter receives only opaque validated geometry
 plus plate minima/dimensions, plate-inclusive `sceneBounds`, and centre; it
-receives no group identity or path. Presenter input listeners map DOM events to the three semantic event
+receives no group identity or path. Its closed numeric projection callback
+contains no identity or token. Presenter input listeners map DOM events to the semantic event
 families in
 xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]. The
 controller receives no DOM event and rejects stale generations or invalid indices
@@ -105,15 +107,18 @@ inspection contains aligned `{canonicalPath,S,U,M}` facts.
 |Validated city |Controller validator → controller/presenter |Controller-owned,
 non-aliasing geometry, inspection, and immutable numeric presentation snapshots.
 The numeric presentation contains only ordered plate minima/dimensions,
-plate-inclusive `sceneBounds`, and centre. The presenter receives geometry and
-that numeric presentation, never inspection, identity, label, projection, or
-callback data.
+plate-inclusive `sceneBounds`, and centre. The validated city separately owns
+aligned `{root,identity}` district descriptors. The presenter receives geometry
+and numeric presentation, never inspection, identity, or label data; it returns
+only ordered numeric projection snapshots.
 
 |Semantic event |Presenter → controller |Generation plus hover or activation
-index, or one traversal action; never a DOM event, path, fact, or browser object
+index, one traversal action, or an immutable closed district projection snapshot;
+never a DOM event, path, fact, or browser object
 
 |Semantic publication |Controller → DOM |One atomically committed canvas,
-selection inspector, and persistent noninteractive numeric complexity legend
+inert clipped district-label overlay, selection inspector, and persistent
+noninteractive numeric complexity legend
 
 |Visual state |Controller → presenter |Generation plus opaque hover and selection
 indices; the presenter validates them and assigns focus uniforms around the
@@ -126,6 +131,7 @@ pre-selection failures carry none.
 
 Concrete provider, parser, DOM, and WebGL objects remain at their edges.
 Repository paths may be published only as wrapping, bidirectionally isolated
-`textContent` from the controller snapshot. They are never markup, object keys,
-shader text, URLs, or resource locators. Evidence observers access geometry only
+inspector `textContent`; approved grouped directory identities may additionally
+be district-label `bdi.textContent`. They are never markup, attributes, styles,
+object keys, shader text, URLs, resource locators, logs, or evidence. Evidence observers access geometry only
 and do not retain or disclose inspection.

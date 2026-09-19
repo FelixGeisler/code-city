@@ -26,10 +26,12 @@ export type NumericPresentation = Readonly<{
   sceneBounds: readonly [number, number, number, number, number, number];
   centre: readonly [number, number, number];
 }>;
+export type DistrictDescriptor = Readonly<{ root: boolean; identity: string }>;
 export type ValidatedCity = Readonly<{
   geometry: ValidatedGeometry;
   inspection: readonly InspectionFact[];
   presentation: NumericPresentation;
+  districts: readonly DistrictDescriptor[];
 }>;
 
 type DataRecord = Record<string, unknown>;
@@ -155,6 +157,7 @@ function reconstructExpected(inspection: readonly InspectionFact[]): Readonly<{
   rgba: readonly number[];
   bounds: readonly number[];
   plates: readonly Readonly<{ minimumX: number; minimumZ: number; width: number; depth: number }>[];
+  districts: readonly DistrictDescriptor[];
   sceneBounds: readonly number[];
 }> {
   const count = inspection.length;
@@ -239,14 +242,26 @@ function reconstructExpected(inspection: readonly InspectionFact[]): Readonly<{
   let rowDepth = 0;
   let minimumX = Number.POSITIVE_INFINITY;
   let minimumZ = Number.POSITIVE_INFINITY;
-  const packedCells: Array<{ minimumX: number; minimumZ: number; width: number; depth: number }> = [];
+  const packedCells: Array<{
+    minimumX: number;
+    minimumZ: number;
+    width: number;
+    depth: number;
+    district: DistrictDescriptor;
+  }> = [];
   for (const group of groups) {
     if (cursorX !== 0 && checkedAdd(cursorX, group.width) > target) {
       cursorX = 0;
       cursorZ = checkedAdd(cursorZ, checkedAdd(rowDepth, GROUP_GAP));
       rowDepth = 0;
     }
-    packedCells.push({ minimumX: cursorX, minimumZ: cursorZ, width: group.width, depth: group.depth });
+    packedCells.push({
+      minimumX: cursorX,
+      minimumZ: cursorZ,
+      width: group.width,
+      depth: group.depth,
+      district: Object.freeze({ root: group.root, identity: group.identity }),
+    });
     for (const building of group.buildings) {
       const x = checkedAdd(cursorX, building.x);
       const z = checkedAdd(cursorZ, building.z);
@@ -293,6 +308,7 @@ function reconstructExpected(inspection: readonly InspectionFact[]): Readonly<{
     rgba,
     bounds: [0, 0, 0, maximumX, maximumY, maximumZ],
     plates,
+    districts: packedCells.map((cell) => cell.district),
     sceneBounds: [sceneMinimumX, -0.5, sceneMinimumZ, sceneMaximumX, maximumY, sceneMaximumZ],
   };
 }
@@ -452,7 +468,12 @@ export function validateCityPayload(value: unknown): ValidatedCity {
     }
     for (const plate of plates) exactRelativeBox(plate.minimum, plate.dimensions);
     const presentation = Object.freeze({ plates, sceneBounds, centre });
-    return Object.freeze({ geometry, inspection, presentation });
+    const districts = Object.freeze(expected.districts.map((district) => Object.freeze({
+      root: district.root,
+      identity: district.identity,
+    })));
+    if (districts.length !== plates.length) invalid();
+    return Object.freeze({ geometry, inspection, presentation, districts });
   } catch (error) {
     if (error instanceof Error && error.message === "M1-CITY-1") throw error;
     invalid();

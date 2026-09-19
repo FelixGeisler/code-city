@@ -32,13 +32,14 @@ image::context.svg[Code City system context]
   crossing or security sandbox.
 * The worker sends only one bounded, source-free, aligned geometry-and-inspection
   result to the main context.
-* The controller independently reconstructs a numeric-only district snapshot
-  from validated facts and geometry. Only plate cells, plate-inclusive scene
-  bounds, and centre cross to the presenter; directory identities and paths do
-  not.
-* The controller owns semantic hover, selection, and inert inspector text. The
-  presenter owns browser input and WebGL mechanisms and sends only
-  generation-tagged building index events to the controller. Plates have no
-  semantic or picking identity.
+* The controller independently reconstructs numeric plate data and aligned
+  semantic district descriptors from validated facts and geometry. Only plate
+  cells, plate-inclusive scene bounds, and centre cross to the presenter;
+  directory identities and paths do not.
+* The controller owns semantic hover, selection, inert inspector text, and
+  inert HTML district labels. The presenter owns browser input, WebGL, and
+  numeric district projection. It sends generation-tagged building events and
+  one closed numeric projection snapshot through the captured-token gate.
+  Plates and labels have no picking identity.
 * No product data is sent to GitHub Pages after the static application loads.
 * There is no backend, database, relay, telemetry service, or second provider.

@@ -6,7 +6,13 @@ import { deriveBaseMetricAnalysis } from ${JSON.stringify(`${projectRootUrl}src/
 import { buildCity } from ${JSON.stringify(`${projectRootUrl}src/domain/city-model.ts`)};
 import { validateCityPayload } from ${JSON.stringify(`${projectRootUrl}src/application/city-payload.ts`)};
 import { createCityPresenter } from ${JSON.stringify(`${projectRootUrl}src/edge/city-presenter.ts`)};
+import { stageSemanticPublication } from ${JSON.stringify(`${projectRootUrl}src/edge/semantic-publication.ts`)};
 
+const shellStyles=document.createElement("link");
+shellStyles.rel="stylesheet";
+shellStyles.href=${JSON.stringify(`${projectRootUrl}src/edge/shell.css`)};
+document.head.append(shellStyles);
+await new Promise((resolve,reject)=>{shellStyles.addEventListener("load",resolve,{once:true});shellStyles.addEventListener("error",reject,{once:true});});
 const ASSETS = ${JSON.stringify(assets)};
 const COUNT_KEYS = ["lexicalExclusion","explicitUnit","valueAnchor","typeOnly","if","loop","case","catch","ternary","logicalAnd","logicalOr","nullish","logicalAndAssign","logicalOrAssign","nullishAssign"];
 const encoder = new TextEncoder();
@@ -209,8 +215,14 @@ function presentationPlatform(state,compileFailure=false){
 }
 function presentationHost(width,height){
   const host=document.createElement("div");
-  const dimensions={width,height};
-  Object.defineProperties(host,{clientWidth:{get:()=>dimensions.width},clientHeight:{get:()=>dimensions.height}});
+  host.dataset.city="";
+  host.style.position="relative";
+  host.style.border="0";
+  host.style.minHeight="0";
+  const dimensions={};
+  let currentWidth=width;let currentHeight=height;
+  Object.defineProperties(dimensions,{width:{get:()=>currentWidth,set(value){currentWidth=value;host.style.width=value+"px";}},height:{get:()=>currentHeight,set(value){currentHeight=value;host.style.height=value+"px";}}});
+  dimensions.width=width;dimensions.height=height;
   const reset=document.createElement("button");
   reset.type="button";
   reset.textContent="Reset view";
@@ -224,17 +236,21 @@ function presentationHost(width,height){
 }
 const presentationCity=validateCityPayload(buildCity([{canonicalPath:"browser.js",S:1,U:1,M:1}]));
 const presentationModel=presentationCity.geometry;
-const emptyEventSink={hoverIndex(){},activationIndex(){},selectionAction(){}};
-function stageCommit(presenter,host,generation,city=presentationCity){
+const emptyEventSink={hoverIndex(){},activationIndex(){},selectionAction(){},districtProjection(){}};
+function stageCommit(presenter,host,generation,city=presentationCity,semantic=false){
   const priorChildren=[...host.childNodes];
-  const staged=presenter.stage(generation,city.geometry,city.presentation,emptyEventSink);
+  const revision=document.createElement("output");
+  const publication=semantic?stageSemanticPublication(document,host,revision,"a".repeat(40),city.inspection,city.districts):undefined;
+  const eventSink=semantic?{...emptyEventSink,districtProjection(_generation,snapshot){publication.districtProjection(snapshot);}}:emptyEventSink;
+  const staged=presenter.stage(generation,city.geometry,city.presentation,eventSink);
   if(staged.kind!=="staged")return staged;
   if(priorChildren.length!==host.childNodes.length||priorChildren.some((node,index)=>host.childNodes[index]!==node))throw new Error("Presenter stage was not detached");
   const committed=presenter.commit(staged.token);
   if(committed.kind!=="committed")return committed;
-  host.replaceChildren(staged.canvas);
+  if(committed.snapshot!==staged.snapshot)throw new Error("Stage/commit projection handoff changed");
   if(presenter.setVisualState(generation,null,null).kind!=="applied")throw new Error("Initial visual state was not applied");
-  return committed;
+  if(publication){publication.commit(staged.canvas,committed.snapshot);host.__districtPublication=publication;}else host.replaceChildren(staged.canvas);
+  return {kind:"committed"};
 }
 const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,focus:null,maximum:null,accessibility:null,inputCleanup:null,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossOrdering:null,lossCleanup:null,lossTerminalState:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,compileFailureTerminalState:null,pass:false};
 const makeState=()=>({canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],uploads:[],subUploads:[],uniforms:[],drawUniforms:[],matrices:[],shaderSources:[],operations:[],polygonOffsetEnables:0,contextLost:false,deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}});
@@ -273,17 +289,21 @@ let faceShadingPass=false;
   if(repeat.kind!=="committed"||presentation.initialDraws!==2||presentation.repeatDraws!==2||presentation.resizeDraws!==2||failures.length!==0||holder.host.firstChild!==activeCanvas||activeCanvas.width!==400||activeCanvas.height!==240)throw new Error("Actual WebGL2 present/repeat/focus/resize evidence failed");
   const maximumCity=validateCityPayload(buildCity(Array.from({length:4000},(_,index)=>({canonicalPath:"district-"+String(index).padStart(4,"0")+"/module.js",S:0,U:0,M:0}))));
   const maximumUploadStart=state.uploads.length;const maximumDrawStart=state.draws;const maximumPassStart=state.uniforms.filter(({name})=>name==="u_passKind").length;const maximumMatrixStart=state.matrices.length;
-  const maximumResult=stageCommit(presenter,holder.host,4000,maximumCity);
-  const maximumCanvas=state.canvases.at(-1);const maximumPhases=[{lateralFit:true,matrix:state.matrices.at(-1)}];
-  maximumCanvas.dispatchEvent(new KeyboardEvent("keydown",{key:"d",cancelable:true}));maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1)});
-  maximumCanvas.dispatchEvent(new KeyboardEvent("keydown",{key:"D",shiftKey:true,cancelable:true}));maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1)});
-  maximumCanvas.dispatchEvent(new WheelEvent("wheel",{deltaY:-120,cancelable:true}));maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1)});
-  holder.dimensions.width=480;holder.dimensions.height=300;state.observerCallbacks.at(-1)();maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1)});
-  holder.reset.click();maximumPhases.push({lateralFit:true,matrix:state.matrices.at(-1)});
+  const maximumResult=stageCommit(presenter,holder.host,4000,maximumCity,true);
+  const maximumLabelState=()=>{const overlay=holder.host.querySelector("[data-district-labels]");const labels=[...overlay.children];const overlayRect=overlay.getBoundingClientRect();const canvasRect=state.canvases.at(-1).getBoundingClientRect();return {dom:labels.length,visible:labels.filter(label=>!label.hidden).length,hidden:labels.filter(label=>label.hidden).length,widths:[...new Set(labels.map(label=>label.style.width))],transformsFinite:labels.every(label=>/^translate\\(-?\\d+(?:\\.\\d+)?px, -?\\d+(?:\\.\\d+)?px\\)$/.test(label.style.transform)),overlayMatchesCanvas:overlayRect.left===canvasRect.left&&overlayRect.top===canvasRect.top&&overlayRect.width===canvasRect.width&&overlayRect.height===canvasRect.height,pointerEvents:getComputedStyle(overlay).pointerEvents};};
+  const maximumCanvas=state.canvases.at(-1);const maximumPhases=[{lateralFit:true,matrix:state.matrices.at(-1),labels:maximumLabelState()}];
+  maximumCanvas.dispatchEvent(new KeyboardEvent("keydown",{key:"d",cancelable:true}));maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1),labels:maximumLabelState()});
+  maximumCanvas.dispatchEvent(new KeyboardEvent("keydown",{key:"D",shiftKey:true,cancelable:true}));maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1),labels:maximumLabelState()});
+  maximumCanvas.dispatchEvent(new WheelEvent("wheel",{deltaY:-120,cancelable:true}));maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1),labels:maximumLabelState()});
+  holder.dimensions.width=480;holder.dimensions.height=300;state.observerCallbacks.at(-1)();maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1),labels:maximumLabelState()});
+  holder.dimensions.width=479;state.observerCallbacks.at(-1)();maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1),labels:maximumLabelState()});
+  holder.reset.click();maximumPhases.push({lateralFit:true,matrix:state.matrices.at(-1),labels:maximumLabelState()});
+  const matricesBeforeInspector=state.matrices.length;holder.host.__districtPublication.setSelection(0);const selectedLabels=maximumLabelState();holder.host.__districtPublication.setSelection(null);const clearedLabels=maximumLabelState();const cachedInspectorRelayout=state.matrices.length===matricesBeforeInspector;
   const maximumUploads=state.uploads.slice(maximumUploadStart);const maximumGeometry=maximumGeometryOracle(maximumCity,maximumUploads[2],maximumUploads[3]);
   const matrixOracles=maximumPhases.map(({matrix,lateralFit})=>matrixOracle(matrix,maximumGeometry.sceneBounds,maximumGeometry.centre,lateralFit));
-  presentation.maximum={result:maximumResult,groups:maximumGeometry.cells,uploads:maximumUploads.map((bytes)=>bytes.length),draws:state.draws-maximumDrawStart,passKinds:state.uniforms.filter(({name})=>name==="u_passKind").slice(maximumPassStart).map(({value})=>value),matrices:state.matrices.length-maximumMatrixStart,sourceBounds:maximumGeometry.sourceBounds,sceneBounds:maximumGeometry.sceneBounds,centre:maximumGeometry.centre,matrixOracles,exactPlateUpload:true};
+  presentation.maximum={result:maximumResult,groups:maximumGeometry.cells,uploads:maximumUploads.map((bytes)=>bytes.length),draws:state.draws-maximumDrawStart,passKinds:state.uniforms.filter(({name})=>name==="u_passKind").slice(maximumPassStart).map(({value})=>value),matrices:state.matrices.length-maximumMatrixStart,sourceBounds:maximumGeometry.sourceBounds,sceneBounds:maximumGeometry.sceneBounds,centre:maximumGeometry.centre,matrixOracles,labels:maximumPhases.map(({labels})=>labels),selectedLabels,clearedLabels,cachedInspectorRelayout,exactPlateUpload:true};
   presentation.actualContexts+=state.actualContexts;
+  holder.host.__districtPublication.rollback();
   presenter.dispose();
   presentation.focus.cleanup={...state.deletes};
   presentation.inputCleanup={listenerAdds:[...state.listenerAdds],listenerRemoves:[...state.listenerRemoves],reset:holder.resetEvidence()};
@@ -315,7 +335,7 @@ let faceShadingPass=false;
 }
 const expectedLifecycleListeners=["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","pointerleave","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"];
 const expectedInputCleanup={listenerAdds:Array.from({length:3},()=>expectedLifecycleListeners).flat(),listenerRemoves:Array.from({length:3},()=>expectedLifecycleListeners).flat(),reset:{adds:3,removes:3}};
-presentation.pass=focusPass&&faceShadingPass&&presentation.webgl2Available&&presentation.actualContexts===5&&presentation.initialDraws===2&&presentation.repeatDraws===2&&presentation.resizeDraws===2&&JSON.stringify(presentation.focus.allocationUploads)===JSON.stringify([384,36,28,24,384,36,28,24])&&presentation.maximum.result.kind==="committed"&&presentation.maximum.groups===4000&&JSON.stringify(presentation.maximum.uploads)===JSON.stringify([384,36,112000,96000])&&presentation.maximum.draws===12&&JSON.stringify(presentation.maximum.passKinds)===JSON.stringify(Array.from({length:6},()=>[0,1]).flat())&&presentation.maximum.matrices===6&&presentation.maximum.matrixOracles.length===6&&presentation.maximum.matrixOracles.every((oracle)=>oracle.corners===8&&oracle.positiveW&&oracle.strictDepth)&&presentation.maximum.matrixOracles[0].lateralFit&&presentation.maximum.matrixOracles[5].lateralFit&&presentation.maximum.exactPlateUpload&&JSON.stringify(presentation.focus.camera)===JSON.stringify({draws:2,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]})&&JSON.stringify(presentation.focus.reset)===JSON.stringify({draws:2,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]})&&presentation.focus.immutableUploads&&presentation.focus.subUploads===0&&presentation.focus.shaderFocus&&presentation.focus.faceShading&&presentation.focus.polygonOffsetEnables===0&&JSON.stringify(presentation.focus.cleanup)===JSON.stringify({deleteShader:6,deleteProgram:3,deleteBuffer:12,deleteVertexArray:6})&&JSON.stringify(presentation.accessibility)===JSON.stringify({tabIndex:0,label:"Interactive code city",description:"city-navigation-instructions",listenerAdds:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","pointerleave","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],resetText:"Reset view"})&&JSON.stringify(presentation.inputCleanup)===JSON.stringify(expectedInputCleanup)&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&JSON.stringify(presentation.lossFailures)===JSON.stringify([[3,"Presentation failed","M1-PRES-1"]])&&JSON.stringify(presentation.lossOrdering)===JSON.stringify({semanticPresentAtNotification:true,hostChildrenAtNotification:2,cleanupAtNotification:{deleteShader:2,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0},semanticPresentAfterControllerClear:false})&&JSON.stringify(presentation.lossCleanup)===JSON.stringify({deleteShader:2,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})&&JSON.stringify(presentation.lossTerminalState)===JSON.stringify({retainedCallbacks:1,failures:1,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true})&&JSON.stringify(presentation.compileFailureResult)===JSON.stringify({kind:"failure",category:"Presentation failed",code:"M1-PRES-1"})&&presentation.compileFailureDraws===0&&JSON.stringify(presentation.compileFailures)===JSON.stringify([])&&JSON.stringify(presentation.compileCleanup)===JSON.stringify({deleteShader:1,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})&&JSON.stringify(presentation.compileFailureTerminalState)===JSON.stringify({retainedCallbacks:1,failures:0,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true});
+presentation.pass=focusPass&&faceShadingPass&&presentation.webgl2Available&&presentation.actualContexts===5&&presentation.initialDraws===2&&presentation.repeatDraws===2&&presentation.resizeDraws===2&&JSON.stringify(presentation.focus.allocationUploads)===JSON.stringify([384,36,28,24,384,36,28,24])&&presentation.maximum.result.kind==="committed"&&presentation.maximum.groups===4000&&JSON.stringify(presentation.maximum.uploads)===JSON.stringify([384,36,112000,96000])&&presentation.maximum.draws===14&&JSON.stringify(presentation.maximum.passKinds)===JSON.stringify(Array.from({length:7},()=>[0,1]).flat())&&presentation.maximum.matrices===7&&presentation.maximum.matrixOracles.length===7&&presentation.maximum.matrixOracles.every((oracle)=>oracle.corners===8&&oracle.positiveW&&oracle.strictDepth)&&presentation.maximum.matrixOracles[0].lateralFit&&presentation.maximum.matrixOracles[6].lateralFit&&presentation.maximum.labels.length===7&&presentation.maximum.labels.every((labels)=>labels.dom===4000&&labels.visible>0&&labels.visible+labels.hidden===4000&&labels.transformsFinite&&labels.overlayMatchesCanvas&&labels.pointerEvents==="none")&&presentation.maximum.labels.slice(0,4).every((labels)=>JSON.stringify(labels.widths)===JSON.stringify(["104px"]))&&JSON.stringify(presentation.maximum.labels[4].widths)===JSON.stringify(["144px"])&&presentation.maximum.labels.slice(5).every((labels)=>JSON.stringify(labels.widths)===JSON.stringify(["104px"]))&&presentation.maximum.selectedLabels.visible<=presentation.maximum.clearedLabels.visible&&presentation.maximum.cachedInspectorRelayout&&presentation.maximum.exactPlateUpload&&JSON.stringify(presentation.focus.camera)===JSON.stringify({draws:2,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]})&&JSON.stringify(presentation.focus.reset)===JSON.stringify({draws:2,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]})&&presentation.focus.immutableUploads&&presentation.focus.subUploads===0&&presentation.focus.shaderFocus&&presentation.focus.faceShading&&presentation.focus.polygonOffsetEnables===0&&JSON.stringify(presentation.focus.cleanup)===JSON.stringify({deleteShader:6,deleteProgram:3,deleteBuffer:12,deleteVertexArray:6})&&JSON.stringify(presentation.accessibility)===JSON.stringify({tabIndex:0,label:"Interactive code city",description:"city-navigation-instructions",listenerAdds:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","pointerleave","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],resetText:"Reset view"})&&JSON.stringify(presentation.inputCleanup)===JSON.stringify(expectedInputCleanup)&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&JSON.stringify(presentation.lossFailures)===JSON.stringify([[3,"Presentation failed","M1-PRES-1"]])&&JSON.stringify(presentation.lossOrdering)===JSON.stringify({semanticPresentAtNotification:true,hostChildrenAtNotification:2,cleanupAtNotification:{deleteShader:2,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0},semanticPresentAfterControllerClear:false})&&JSON.stringify(presentation.lossCleanup)===JSON.stringify({deleteShader:2,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})&&JSON.stringify(presentation.lossTerminalState)===JSON.stringify({retainedCallbacks:1,failures:1,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true})&&JSON.stringify(presentation.compileFailureResult)===JSON.stringify({kind:"failure",category:"Presentation failed",code:"M1-PRES-1"})&&presentation.compileFailureDraws===0&&JSON.stringify(presentation.compileFailures)===JSON.stringify([])&&JSON.stringify(presentation.compileCleanup)===JSON.stringify({deleteShader:1,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})&&JSON.stringify(presentation.compileFailureTerminalState)===JSON.stringify({retainedCallbacks:1,failures:0,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true});
 const assetRequests=ASSETS.map(({role,path,sha256})=>({role,path,sha256}));
 const result={schemaVersion:1,assetRequests,cases:outputCases,matrixRuns,complexityMatrixRuns,presentation,browserExceptions:[],unexpectedNetworkRequests:[],overallPass:outputCases.every((entry)=>entry.pass)&&matrixRuns.every((entry)=>entry.pass)&&matrixRuns[0].runDigest===matrixRuns[1].runDigest&&complexityMatrixRuns.every((entry)=>entry.pass)&&complexityMatrixRuns[0].runDigest===complexityMatrixRuns[1].runDigest&&presentation.pass};
 document.querySelector("#result").textContent=JSON.stringify(result);

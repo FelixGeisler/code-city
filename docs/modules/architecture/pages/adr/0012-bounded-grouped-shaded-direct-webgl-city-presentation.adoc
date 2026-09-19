@@ -236,6 +236,16 @@ immutable upload is `420 + 28N + 24G <= 208420` bytes for
 `1 <= G <= N <= 4000`. Labels and all semantic district publication remain
 deferred.
 
+== Subsequent refinement (issue 575)
+
+Issue https://github.com/FelixGeisler/code-city/issues/575[#575] completes that
+deferred semantic slice without changing grouping, packing, worker geometry,
+plate geometry, uploads, resources, draws, camera policy, or building picking.
+The controller retains the already-derived aligned group identity, while the
+presenter returns only exact numeric plate projection. One inert clipped HTML
+overlay performs deterministic accepted-only collision layout and inspector
+exclusion.
+
 == Consequences
 
 The current application gains one bounded, grouped, face-readable baseline

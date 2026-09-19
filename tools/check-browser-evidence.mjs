@@ -181,6 +181,72 @@ function assertSceneMatrix(matrix, bounds, centre, { label, lateralFit }) {
   return { corners: corners.length, positiveW: true, strictDepth: true, lateralFit };
 }
 
+function deriveDistrictLabelProjection(matrix, groups, centre, dimensions, label) {
+  const project = (world) => {
+    const relative = world.map((component, axis) => component - centre[axis]);
+    for (const [axis, component] of relative.entries()) assert.equal(Math.fround(component), component, `${label} district coordinate ${axis}`);
+    const clip = [0, 1, 2, 3].map((column) => f32ClipComponent(matrix, relative, column));
+    assert(clip.every(Number.isFinite), `${label} district clip is non-finite`);
+    assert(clip[3] > 0, `${label} district W is not positive`);
+    const ndcX = Math.fround(clip[0] / clip[3]);
+    const ndcY = Math.fround(clip[1] / clip[3]);
+    const depth = Math.fround(clip[2] / clip[3]);
+    assert(Number.isFinite(ndcX) && Number.isFinite(ndcY) && Number.isFinite(depth));
+    assert(-1 < depth && depth < 1, `${label} district depth is outside the strict interval`);
+    return {
+      screenX: (ndcX * 0.5 + 0.5) * dimensions.width,
+      screenY: (-ndcY * 0.5 + 0.5) * dimensions.height,
+      ndcX,
+      ndcY,
+    };
+  };
+  return groups.map(({ minimum, dimensions: size }) => {
+    const anchor = project([minimum[0] + size[0] / 2, 0, minimum[2] + size[2] / 2]);
+    const corners = [
+      [minimum[0], 0, minimum[2]], [minimum[0] + size[0], 0, minimum[2]],
+      [minimum[0], 0, minimum[2] + size[2]], [minimum[0] + size[0], 0, minimum[2] + size[2]],
+    ].map(project);
+    const xs = corners.map(({ screenX }) => screenX);
+    const ys = corners.map(({ screenY }) => screenY);
+    return {
+      screenX: anchor.screenX,
+      screenY: anchor.screenY,
+      area: (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys)),
+      lateral: -1 < anchor.ndcX && anchor.ndcX < 1 && -1 < anchor.ndcY && anchor.ndcY < 1,
+    };
+  });
+}
+
+function deriveDistrictLabelAdmission(projected, dimensions, inspector) {
+  const width = dimensions.width >= 480 ? 144 : 104;
+  const boxes = projected.map((district, index) => ({
+    index,
+    area: district.area,
+    left: district.screenX - width / 2,
+    top: district.screenY - 10,
+    right: district.screenX + width / 2,
+    bottom: district.screenY + 10,
+    lateral: district.lateral,
+  })).filter((box) => box.lateral && box.left < dimensions.width && box.right > 0 && box.top < dimensions.height && box.bottom > 0)
+    .sort((left, right) => right.area - left.area || left.index - right.index);
+  const overlaps = (left, right) => left.left < right.right && right.left < left.right && left.top < right.bottom && right.top < left.bottom;
+  const exclusion = inspector ? { left: inspector.left - 4, top: inspector.top - 4, right: inspector.left + inspector.width + 4, bottom: inspector.top + inspector.height + 4 } : undefined;
+  const accepted = [];
+  const visible = new Set();
+  for (const box of boxes) {
+    if (exclusion && overlaps(box, exclusion)) continue;
+    const inflated = { left: box.left - 2, top: box.top - 2, right: box.right + 2, bottom: box.bottom + 2 };
+    if (accepted.some((candidate) => overlaps(inflated, candidate))) continue;
+    accepted.push(inflated);
+    visible.add(box.index);
+  }
+  return projected.map((district, index) => ({
+    hidden: !visible.has(index),
+    width: `${width}px`,
+    transform: `translate(${district.screenX - width / 2}px, ${district.screenY - 10}px)`,
+  }));
+}
+
 function matrixDerivedElevation(matrix, label) {
   assert.equal(matrix.length, 16, `${label} matrix length`);
   const cameraDirection = [-matrix[3], -matrix[7], -matrix[11]];
@@ -190,6 +256,34 @@ function matrixDerivedElevation(matrix, label) {
   const sineElevation = cameraDirection[1] / length;
   assert(sineElevation >= -1 && sineElevation <= 1, `${label} elevation sine is outside [-1,1]`);
   return Math.asin(sineElevation);
+}
+
+function independentPickAtCssPoint({ matrix, centre, boxes, rectangle, point }) {
+  const directionRow = [-matrix[3], -matrix[7], -matrix[11]];
+  const directionLength = Math.hypot(...directionRow);
+  const D = directionRow.map((component) => component / directionLength);
+  const rightRow = [matrix[0], matrix[4], matrix[8]];
+  const fx = Math.hypot(...rightRow);
+  const R = rightRow.map((component) => component / fx);
+  const verticalRow = [matrix[1], matrix[5], matrix[9]];
+  const fy = Math.hypot(...verticalRow);
+  const V = verticalRow.map((component) => component / fy);
+  const dr = matrix[12] / fx;
+  const dv = matrix[13] / fy;
+  const camera = centre.map((component, axis) => component - dr * R[axis] - dv * V[axis] + matrix[15] * D[axis]);
+  const nx = 2 * (point.x - rectangle.left) / rectangle.width - 1;
+  const ny = 1 - 2 * (point.y - rectangle.top) / rectangle.height;
+  const direction = D.map((component, axis) => -component + nx / fx * R[axis] + ny / fy * V[axis]);
+  let nearest = null;
+  for (const box of boxes) {
+    const interval = lineIntervalThroughBox(camera, direction, box.origin, box.size);
+    if (!interval || interval.maximum < 0) continue;
+    const distance = Math.max(0, interval.minimum);
+    if (nearest === null || distance < nearest.distance || (distance === nearest.distance && box.index < nearest.index)) {
+      nearest = { index: box.index, distance };
+    }
+  }
+  return nearest?.index ?? null;
 }
 
 function lineIntervalThroughBox(anchor, direction, origin, size) {
@@ -773,9 +867,10 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const first = await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===1`, "first successful city");
     invariant(first === true, "First successful package run did not publish");
 
-    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,legends:document.querySelectorAll('[data-city] [data-palette-legend]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
+    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,labels:document.querySelectorAll('[data-city] [data-district-labels]').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,legends:document.querySelectorAll('[data-city] [data-palette-legend]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
     assert.equal(cleared.commit, "");
     assert.equal(cleared.canvases, 0);
+    assert.equal(cleared.labels, 0);
     assert.equal(cleared.inspectors, 0);
     assert.equal(cleared.legends, 0);
     assert.equal(cleared.children, 0);
@@ -972,7 +1067,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {draws:context.draws.length-${navigationStart.draws},selectionFocusDraws:context.selectionFocusDraws.length-${navigationStart.selectionFocusDraws},hoverFocusDraws:context.hoverFocusDraws.length-${navigationStart.hoverFocusDraws},matrices:context.matrices.slice(${navigationStart.matrices}),selectionFocusMatrices:context.selectionFocusMatrices.slice(${navigationStart.selectionFocusMatrices}),hoverFocusMatrices:context.hoverFocusMatrices.slice(${navigationStart.hoverFocusMatrices}),subUploads:context.subUploads.length-${navigationStart.subUploads},uploads:context.uploads.map(bytes=>bytes.length),events:Object.fromEntries(Object.entries(globalThis.__navigationEvidence).map(([key,value])=>[key,value.slice(${JSON.stringify(navigationStart.eventCounts)}[key])])),canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,selectionAfterCameraResizeReset:{hidden:inspector.hidden,path:inspector.querySelector('[data-canonical-path]').textContent,sourceLines:inspector.querySelector('[data-source-lines]').textContent,range:inspector.querySelector('[data-selected-range]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent}}; })()`);
 
     const observed = await evaluate("globalThis.__codeCitySuccessEvidence");
-    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorHidden:document.querySelector('[data-inspector]')?.hidden,pathTag:document.querySelector('[data-canonical-path]')?.tagName,legendItems:document.querySelectorAll('[data-palette-legend] li').length,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName)})");
+    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,labelOverlays:document.querySelectorAll('[data-city] [data-district-labels]').length,labelCount:document.querySelectorAll('[data-district-labels] > div').length,labelTextSafe:[...document.querySelectorAll('[data-district-labels] bdi')].length===1&&document.querySelector('[data-district-labels] bdi').textContent==='src',inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorHidden:document.querySelector('[data-inspector]')?.hidden,pathTag:document.querySelector('[data-canonical-path]')?.tagName,legendItems:document.querySelectorAll('[data-palette-legend] li').length,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName)})");
 
     invariant(failures.length === 0, `Production success instrumentation failed: ${failures.map(String).join("; ")}`);
     invariant(browserExceptions.length === 0, `Production browser exceptions: ${browserExceptions.join("; ")}`);
@@ -1153,7 +1248,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert(navigation.events.pointers.some(({ type, target, defaultPrevented }) => type === "pointerdown" && target !== "CANVAS" && !defaultPrevented));
     assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target === "CANVAS" && defaultPrevented));
     assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target !== "CANVAS" && !defaultPrevented));
-    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, inspectors: 1, inspectorHidden: false, pathTag: "BDI", legendItems: 6, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview. Use the arrow keys to traverse buildings, Home or End to select the first or last building, and Escape to clear selection.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION", "SECTION"] });
+    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, labelOverlays: 1, labelCount: 1, labelTextSafe: true, inspectors: 1, inspectorHidden: false, pathTag: "BDI", legendItems: 6, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview. Use the arrow keys to traverse buildings, Home or End to select the first or last building, and Escape to clear selection.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "DIV", "SECTION", "SECTION"] });
 
     const layouts = [];
     for (const expected of [
@@ -1443,6 +1538,49 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       const rectangle=canvas.getBoundingClientRect();
       return {message:evidence.messages[0],matrix:context.matrices.at(-1),buildingUpload:context.uploads[2],plateUpload:context.uploads[3],rectangle:{left:rectangle.left,top:rectangle.top,width:rectangle.width,height:rectangle.height},draws:context.draws.length,plateDraws:context.plateDraws.length,clearColors:context.clearColors.length,hoverFocusDraws:context.hoverFocusDraws.length,subUploads:context.subUploads.length,frameRequests:evidence.hoverFrames.requests,canvasSize:{width:canvas.width,height:canvas.height},viewport:{width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio}};
     })()`);
+    const labelEvidence = [];
+    const assertLabels = async (state, label) => {
+      const district = deriveDistrictGeometry({ ...state, orderedPaths });
+      const projected = deriveDistrictLabelProjection(state.matrix, district.groups, district.centre, state.canvasSize, label);
+      const expectedIdentities = district.groups.map(({ identity }) => identity === "_root" ? "/" : identity);
+      const actual = await evaluate(`(() => {
+        const expectedIdentities=${JSON.stringify(expectedIdentities)};
+        const overlay=document.querySelector('[data-district-labels]');
+        const overlayRect=overlay.getBoundingClientRect();
+        const canvas=document.querySelector('[data-city] canvas');
+        const canvasRect=canvas.getBoundingClientRect();
+        const inspector=document.querySelector('[data-inspector]');
+        const inspectorRect=inspector.hidden?null:inspector.getBoundingClientRect();
+        return {overlay:{ariaHidden:overlay.getAttribute('aria-hidden'),pointerEvents:getComputedStyle(overlay).pointerEvents,rect:{left:overlayRect.left,top:overlayRect.top,width:overlayRect.width,height:overlayRect.height}},canvas:{left:canvasRect.left,top:canvasRect.top,width:canvasRect.width,height:canvasRect.height},inspector:inspectorRect?{left:inspectorRect.left-overlayRect.left,top:inspectorRect.top-overlayRect.top,width:inspectorRect.width,height:inspectorRect.height}:null,labels:[...overlay.children].map((element,index)=>{const text=element.querySelector('bdi');const rect=element.getBoundingClientRect();return {hidden:element.hidden,width:element.style.width,transform:element.style.transform,textSafe:text.textContent===expectedIdentities[index],dir:text.getAttribute('dir'),forbidden:[element.id,element.className,element.getAttribute('title'),element.getAttribute('aria-label'),element.getAttribute('href'),element.getAttribute('src'),text.id,text.className,text.getAttribute('title'),text.getAttribute('aria-label'),text.getAttribute('href'),text.getAttribute('src')].filter(Boolean),centre:{x:rect.left+rect.width/2,y:rect.top+rect.height/2},target:element.hidden?null:document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2)?.tagName};})};
+      })()`);
+      assert.deepEqual(actual.overlay.rect, actual.canvas, `${label} label/canvas rectangles differ`);
+      assert.equal(actual.overlay.ariaHidden, "true", `${label} labels are not aria-hidden`);
+      assert.equal(actual.overlay.pointerEvents, "none", `${label} labels intercept pointers`);
+      assert.equal(actual.labels.length, district.groups.length, `${label} label DOM count`);
+      assert(actual.labels.every(({ textSafe }) => textSafe), `${label} district text alignment`);
+      assert(actual.labels.every(({ dir, forbidden }) => dir === "auto" && forbidden.length === 0), `${label} label identity escaped textContent`);
+      const expected = deriveDistrictLabelAdmission(projected, state.canvasSize, actual.inspector);
+      const transformCoordinates = (transform) => {
+        const match = /^translate\((-?[\d.]+)px, (-?[\d.]+)px\)$/u.exec(transform);
+        assert(match, `${label} invalid label transform`);
+        return [Number(match[1]), Number(match[2])];
+      };
+      for (let index = 0; index < expected.length; index += 1) {
+        const observed = actual.labels[index];
+        const reference = expected[index];
+        assert.equal(observed.hidden, reference.hidden, `${label} label ${index} visibility`);
+        assert.equal(observed.width, reference.width, `${label} label ${index} width`);
+        const observedCoordinates = transformCoordinates(observed.transform);
+        const expectedCoordinates = transformCoordinates(reference.transform);
+        assert(Math.abs(observedCoordinates[0] - expectedCoordinates[0]) <= 0.00051
+          && Math.abs(observedCoordinates[1] - expectedCoordinates[1]) <= 0.00051,
+        `${label} label ${index} CSSOM projection`);
+      }
+      assert(actual.labels.filter(({ hidden }) => !hidden).every(({ target }) => target === "CANVAS"), `${label} visible label did not click through to canvas`);
+      const visible = actual.labels.filter(({ hidden }) => !hidden).length;
+      labelEvidence.push({ label, districts: actual.labels.length, visible, inspector: actual.inspector !== null });
+      return { actual, district, projected };
+    };
     const settlePointer = async (point, label) => {
       const before = await evaluate("globalThis.__codeCitySuccessEvidence.hoverFrames.requests");
       await dispatchPointer({ type: "mouseMoved", ...point });
@@ -1468,6 +1606,33 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     const assertPhase = async (label) => {
       await evaluate("document.querySelector('[data-city] canvas').scrollIntoView({block:'center'});true");
       const start = await observation();
+      const labelsAtStart = await assertLabels(start, `${label}:unselected`);
+      if (label === "overview") {
+        const clickCases = labelsAtStart.actual.labels.map((entry, index) => ({ entry, index }))
+          .filter(({ entry }) => !entry.hidden)
+          .map(({ entry, index }) => ({
+            entry,
+            expectedIndex: independentPickAtCssPoint({
+              matrix: start.matrix,
+              centre: labelsAtStart.district.centre,
+              boxes: labelsAtStart.district.boxes,
+              rectangle: start.rectangle,
+              point: entry.centre,
+            }),
+          }));
+        assert(clickCases.length > 0, "overview had no visible label click-through case");
+        for (const { entry, expectedIndex } of clickCases) {
+          await settleClick(entry.centre, `overview label click-through ${expectedIndex === null ? "miss" : "building"}`);
+          const outcome = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); return {hidden:inspector.hidden,path:inspector.querySelector('[data-canonical-path]')?.textContent??""}; })()`);
+          assert.deepEqual(outcome, expectedIndex === null
+            ? { hidden: true, path: "" }
+            : { hidden: false, path: orderedPaths[expectedIndex] }, "label click-through changed canvas picking");
+          if (expectedIndex !== null) {
+            await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
+            await assertCleared("label click-through cleanup");
+          }
+        }
+      }
       const points = deriveInteractiveJourneyPoints({ ...start, orderedPaths, targetPath });
       const matrixOracle = assertSceneMatrix(start.matrix, points.sceneBounds, points.centre, {
         label, lateralFit: label === "overview" || label === "Reset",
@@ -1488,6 +1653,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
         { type: "pointerup", pointerId: activationEvents[0]?.pointerId, button: 0, clientX: activationEvents[0]?.clientX, clientY: activationEvents[0]?.clientY },
       ], `${label} native click was not a stationary primary release: ${JSON.stringify(activationEvents)}`);
       await assertInspector(`${label} pointer inspector; events=${JSON.stringify(activationEvents)}`);
+      await assertLabels(await observation(), `${label}:selected`);
       if (label === "overview") {
         const sameBuildingFocus = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {operation:context.operations.at(-1),focus:context.focusStates.at(-1),selectionArgs:context.selectionFocusDraws.at(-1),hoverArgs:context.hoverFocusDraws.at(-1),subUploads:context.subUploads.length,uniforms:context.uniformUpdates.slice(-2)}; })()`);
         assert.deepEqual(sameBuildingFocus, { operation:"city", focus:{hover:points.targetIndex,selection:points.targetIndex}, selectionArgs:[36,5121,0,18], hoverArgs:[36,5121,0,18], subUploads:hoverUploadsBefore, uniforms:[{name:"u_hoverIndex",value:points.targetIndex},{name:"u_selectionIndex",value:points.targetIndex}] }, `${label} same-building surface focus was not classified`);
@@ -1586,7 +1752,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     await assertPhase("Reset");
 
     const finalDraws = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length");
-    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; native-phases=${phaseEvidence.map(({ label }) => label).join(",")}; exact-plate-upload-and-shared-centre=true; strict-w-depth-every-phase=true; overview-reset-lateral-fit=true; plate-interior-padding-group-gap-misses=true; projected-plate-building-hit=true; plate-first-two-pass-per-frame=true; observed-frames=${finalDraws}.`);
+    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; label-layout-phases=${labelEvidence.length}; native-phases=${phaseEvidence.map(({ label }) => label).join(",")}; exact-plate-upload-and-shared-centre=true; strict-w-depth-every-phase=true; deterministic-label-layout=true; visible-label-click-through=true; overview-reset-lateral-fit=true; plate-interior-padding-group-gap-misses=true; projected-plate-building-hit=true; plate-first-two-pass-per-frame=true; observed-frames=${finalDraws}.`);
   } finally {
     cdp.listeners.delete(listener);
     try { await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId); } catch {}
@@ -1671,15 +1837,32 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(focus.faceShading, true);
   assert.equal(focus.polygonOffsetEnables, 0);
   assert.deepEqual(focus.cleanup, { deleteShader: 6, deleteProgram: 3, deleteBuffer: 12, deleteVertexArray: 6 });
-  exactKeys(result.presentation.maximum, ["result", "groups", "uploads", "draws", "passKinds", "matrices", "sourceBounds", "sceneBounds", "centre", "matrixOracles", "exactPlateUpload"], "Maximum district presentation");
-  assert.deepEqual(result.presentation.maximum, {
-    result: { kind: "committed" }, groups: 4000,
-    uploads: [384, 36, 112000, 96000], draws: 12,
-    passKinds: Array.from({ length: 6 }, () => [0, 1]).flat(), matrices: 6,
-    sourceBounds: [0, 0, 0, 1057, 4, 1074], sceneBounds: [-3, -0.5, -3, 1060, 4, 1077], centre: [528.5, 1.75, 537],
-    matrixOracles: Array.from({ length: 6 }, (_, index) => ({ corners: 8, positiveW: true, strictDepth: true, lateralFit: index === 0 || index === 5 })),
-    exactPlateUpload: true,
-  });
+  exactKeys(result.presentation.maximum, ["result", "groups", "uploads", "draws", "passKinds", "matrices", "sourceBounds", "sceneBounds", "centre", "matrixOracles", "labels", "selectedLabels", "clearedLabels", "cachedInspectorRelayout", "exactPlateUpload"], "Maximum district presentation");
+  const maximum = result.presentation.maximum;
+  assert.deepEqual(maximum.result, { kind: "committed" });
+  assert.equal(maximum.groups, 4000);
+  assert.deepEqual(maximum.uploads, [384, 36, 112000, 96000]);
+  assert.equal(maximum.draws, 14);
+  assert.deepEqual(maximum.passKinds, Array.from({ length: 7 }, () => [0, 1]).flat());
+  assert.equal(maximum.matrices, 7);
+  assert.deepEqual(maximum.sourceBounds, [0, 0, 0, 1057, 4, 1074]);
+  assert.deepEqual(maximum.sceneBounds, [-3, -0.5, -3, 1060, 4, 1077]);
+  assert.deepEqual(maximum.centre, [528.5, 1.75, 537]);
+  assert.deepEqual(maximum.matrixOracles, Array.from({ length: 7 }, (_, index) => ({ corners: 8, positiveW: true, strictDepth: true, lateralFit: index === 0 || index === 6 })));
+  assert.equal(maximum.labels.length, 7);
+  for (const [index, labels] of maximum.labels.entries()) {
+    exactKeys(labels, ["dom", "visible", "hidden", "widths", "transformsFinite", "overlayMatchesCanvas", "pointerEvents"], `Maximum labels ${index}`);
+    assert.equal(labels.dom, 4000);
+    assert(labels.visible > 0);
+    assert.equal(labels.visible + labels.hidden, 4000);
+    assert.deepEqual(labels.widths, [index === 4 ? "144px" : "104px"]);
+    assert.equal(labels.transformsFinite, true);
+    assert.equal(labels.overlayMatchesCanvas, true);
+    assert.equal(labels.pointerEvents, "none");
+  }
+  assert(maximum.selectedLabels.visible <= maximum.clearedLabels.visible);
+  assert.equal(maximum.cachedInspectorRelayout, true);
+  assert.equal(maximum.exactPlateUpload, true);
   const expectedLifecycleListeners = ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"];
   assert.deepEqual(result.presentation, {
     webgl2Available: true,
