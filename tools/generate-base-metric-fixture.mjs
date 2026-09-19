@@ -8,8 +8,9 @@ registerHooks({ resolve(specifier, context, nextResolve) { return nextResolve(/^
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const { createTreeSitterAdapter } = await import("../src/edge/tree-sitter-adapter.ts");
 const { processAdmittedBaseMetrics } = await import("../src/application/base-metric-processing.ts");
+const { deriveBaseMetricAnalysis } = await import("../src/domain/base-metrics.ts");
 const assetPath = (relativePath) => pathToFileURL(path.join(projectRoot, ...relativePath.split("/"))).href;
-const assets = { runtimeJavaScript: assetPath("node_modules/web-tree-sitter/web-tree-sitter.js"), runtimeWasm: assetPath("node_modules/web-tree-sitter/web-tree-sitter.wasm"), grammarJavaScript: assetPath("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm"), grammarTypeScript: assetPath("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm"), grammarTsx: assetPath("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-tsx.wasm") };
+const assets = { runtimeJavaScript: assetPath("node_modules/web-tree-sitter/web-tree-sitter.js"), runtimeWasm: assetPath("node_modules/web-tree-sitter/web-tree-sitter.wasm"), grammarJavaScript: assetPath("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm"), grammarTypeScript: assetPath("vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm"), grammarTsx: assetPath("vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm") };
 const parser = createTreeSitterAdapter(assets, { loadBytes: async (url) => new Uint8Array(await readFile(fileURLToPath(url))) });
 
 const definitions = [
@@ -52,6 +53,11 @@ const definitions = [
   ["canonical-src-a", "src/a.js", "function f(a = x && y) {\n  if (a) return () => a ?? y;\n  return a;\n}", "javascript-no-jsx"],
   ["ownership-parameter-and-nested", "d.js", "function f(a=x&&y){ if(a) return ()=>a??y; }", "javascript-no-jsx"], ["ownership-field-and-computed", "d.js", "class C extends (a?B:C) { [x&&y](){return ()=>z||q} field=p??q; }", "javascript-no-jsx"],
   ["identity-order-astral", "i.js", "const s='😀'; function f(a='🚀'){ return ()=>a; }", "javascript-no-jsx"], ["identity-order-same-start-nesting", "i.js", "const f=(function(){return ()=>1});", "javascript-no-jsx"],
+  ["type-query-import-call-typescript", "grammar.ts", "importOriginal<typeof import('./module')>();", "typescript"],
+  ["type-query-import-call-tsx", "grammar.tsx", "const view=<A/>; importOriginal<typeof import('./module')>();", "tsx"],
+  ["type-query-import-call-nested", "grammar.ts", "const loaded=importOriginal<Promise<typeof import('./module')>>();", "typescript"],
+  ["type-query-import-call-malformed-typescript", "grammar.ts", "importOriginal<typeof import('./module')>(); }", "typescript"],
+  ["type-query-import-call-malformed-tsx", "grammar.tsx", "const view=<A/>; importOriginal<typeof import('./module')>(); </B>", "tsx"],
 
   ["contextual-top-return", "c.js", "return 1;", "javascript-no-jsx"], ["contextual-top-break", "c.js", "break;", "javascript-no-jsx"], ["contextual-top-continue", "c.js", "continue;", "javascript-no-jsx"], ["contextual-import-defer-rejected", "c.ts", "import defer * as x from 'm';", "typescript"],
   ["malformed-javascript", "bad.js", "function {", "javascript-no-jsx"], ["malformed-jsx", "bad.jsx", "const x=<A>", "javascript-jsx"], ["malformed-typescript", "bad.ts", "interface {", "typescript"], ["malformed-tsx", "bad.tsx", "const x=<A>", "tsx"], ["missing-recovery", "missing.ts", "const x =", "typescript"], ["forbidden-jsx-js", "forbidden.js", "const x=<A/>;", "javascript-no-jsx"], ["typescript-in-javascript", "bad.js", "interface X{}", "javascript-no-jsx"],
@@ -63,8 +69,10 @@ const cases = [];
 for (const [id, canonicalPath, source, grammarFamily] of definitions) {
   const result = await processAdmittedBaseMetrics([{ canonicalPath, normalizedSource: source }], parser);
   if (result.kind === "failure") { cases.push({ id, canonicalPath, source, grammarFamily, expectedOutcome: { kind: "failure", category: result.category, code: result.code } }); continue; }
-  const analysis = result.analyses[0];
+  const stream = await parser.project(grammarFamily, source);
+  const analysis = deriveBaseMetricAnalysis(canonicalPath, source, stream.observations);
   const expected = { S: analysis.S, U: analysis.U, units: [...analysis.units], observations: [...analysis.observations] };
+  stream.release();
   const digest = createHash("sha256").update(JSON.stringify(expected)).digest("hex");
   cases.push({ id, canonicalPath, source, grammarFamily, expectedOutcome: { kind: "processed", ...expected, digest } });
 }

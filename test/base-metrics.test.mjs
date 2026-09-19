@@ -24,8 +24,8 @@ const assets = {
   runtimeJavaScript: assetPath("node_modules/web-tree-sitter/web-tree-sitter.js"),
   runtimeWasm: assetPath("node_modules/web-tree-sitter/web-tree-sitter.wasm"),
   grammarJavaScript: assetPath("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm"),
-  grammarTypeScript: assetPath("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm"),
-  grammarTsx: assetPath("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-tsx.wasm"),
+  grammarTypeScript: assetPath("vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm"),
+  grammarTsx: assetPath("vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm"),
 };
 const bytesFromFileUrl = async (url) => new Uint8Array(await readFile(fileURLToPath(url)));
 
@@ -72,6 +72,7 @@ const REQUIRED_CASE_IDS = [
   "bodyless-overload", "bodyless-declare-function", "bodyless-ambient-class", "bodyless-abstract-method", "bodyless-interface-method", "bodyless-implicit-constructor", "ambient-enum", "ambient-namespace", "ambient-nested-runtime-shapes",
   "top-level-empty-statement", "top-level-function", "top-level-value", "top-level-type-only", "top-level-import-type", "top-level-export-type", "top-level-import-all-type-trivia", "top-level-export-all-type-trivia", "top-level-import-mixed", "top-level-export-mixed", "top-level-side-effect-import", "top-level-export-empty", "top-level-export-empty-trivia", "top-level-export-local-value", "top-level-export-empty-reexport", "top-level-export-value-reexport", "top-level-runtime-enum", "top-level-runtime-namespace", "top-level-ambient", "top-level-jsx", "top-level-type-and-value-mixed",
   "decisions-all", "decisions-exclusions", "canonical-src-a", "ownership-parameter-and-nested", "ownership-field-and-computed", "identity-order-astral", "identity-order-same-start-nesting",
+  "type-query-import-call-typescript", "type-query-import-call-tsx", "type-query-import-call-nested", "type-query-import-call-malformed-typescript", "type-query-import-call-malformed-tsx",
   "contextual-top-return", "contextual-top-break", "contextual-top-continue", "contextual-import-defer-rejected",
   "malformed-javascript", "malformed-jsx", "malformed-typescript", "malformed-tsx", "missing-recovery", "forbidden-jsx-js", "typescript-in-javascript", "nonfailure-type-diagnostic", "nonfailure-unresolved-import", "nonexecution-sentinel",
 ];

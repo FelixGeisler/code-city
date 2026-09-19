@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFile, readdir } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -8,7 +9,13 @@ import { createServer as createViteServer } from "vite";
 import viteConfig from "../vite.config.mjs";
 import { assertClosedReference } from "../tools/audit-package.mjs";
 import { inspectDependencyClosure } from "../tools/check-dependencies.mjs";
-import { checkParserAssets } from "../tools/check-parser-assets.mjs";
+import {
+  VENDOR_FILES,
+  assertEntryNotices,
+  checkParserAssets,
+  inspectWasm,
+  verifyVendorFiles,
+} from "../tools/check-parser-assets.mjs";
 import {
   assertWorkerConstructionPolicy,
   inspectEntryPolicy,
@@ -53,8 +60,138 @@ test("the dependency manifest and complete lock closure match the accepted pins"
   assert(result.registryPackageCount > 0);
 });
 
-test("selected parser assets, licenses, ABI envelope, and canonical inventory match accepted evidence", async () => {
+test("selected parser assets, notices, provenance, ABI envelope, dylink, and canonical inventory match accepted evidence", async () => {
   await checkParserAssets();
+});
+
+test("the exact six-file parser vendor boundary and every payload mutation fail closed", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "code-city-parser-vendor-"));
+  const source = path.join(projectRoot, "vendor", "tree-sitter-typescript");
+  const target = path.join(root, "vendor", "tree-sitter-typescript");
+  try {
+    await cp(source, target, { recursive: true });
+    await verifyVendorFiles(root);
+    for (const relativePath of VENDOR_FILES) {
+      const filePath = path.join(target, ...relativePath.split("/"));
+      const original = await readFile(filePath);
+      const mutation = Buffer.from(original);
+      mutation[Math.floor(mutation.length / 2)] ^= 1;
+      await writeFile(filePath, mutation);
+      await assert.rejects(() => verifyVendorFiles(root), /changed|differs/u, relativePath);
+      await writeFile(filePath, original);
+    }
+    await writeFile(path.join(target, "unknown"), "unexpected\n", "utf8");
+    await assert.rejects(() => verifyVendorFiles(root), /allowlist/u);
+    await rm(path.join(target, "unknown"));
+    await rm(path.join(target, "grammar.patch"));
+    await assert.rejects(() => verifyVendorFiles(root), /allowlist/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("closed dylink parsing rejects missing, duplicate, unknown, and trailing metadata", () => {
+  const header = [0, 97, 115, 109, 1, 0, 0, 0];
+  const name = [...Buffer.from("dylink.0", "utf8")];
+  const custom = (subsections) => {
+    const payload = [name.length, ...name, ...subsections];
+    return [0, payload.length, ...payload];
+  };
+  const memory = [1, 4, 0, 0, 0, 0];
+  const valid = Uint8Array.from([...header, ...custom(memory)]);
+  assert.deepEqual(inspectWasm(valid).dylink, { memorySize: 0, memoryAlign: 0, tableSize: 0, tableAlign: 0, neededLibraries: [], subsectionTypes: [1] });
+  assert.throws(() => inspectWasm(Uint8Array.from(header)), /exactly one/u);
+  assert.throws(() => inspectWasm(Uint8Array.from([...header, ...custom(memory), ...custom(memory)])), /exactly one/u);
+  assert.throws(() => inspectWasm(Uint8Array.from([...header, ...custom([3, 0])])), /Unknown/u);
+  assert.throws(() => inspectWasm(Uint8Array.from([...header, ...custom([...memory, ...memory])])), /Duplicate/u);
+  assert.throws(() => inspectWasm(Uint8Array.from([...header, ...custom([1, 5, 0, 0, 0, 0, 0])])), /Trailing/u);
+  assert.notDeepEqual(inspectWasm(Uint8Array.from([...header, ...custom([...memory, 2, 1, 0])])).dylink, inspectWasm(valid).dylink);
+});
+
+test("provenance shape/type mutations and every labelled notice mutation fail closed", async () => {
+  const provenance = await readFile(path.join(projectRoot, "vendor", "tree-sitter-typescript", "provenance.json"), "utf8");
+  const variants = [];
+  const add = (mutate) => {
+    const value = JSON.parse(provenance);
+    mutate(value);
+    variants.push(`${JSON.stringify(value, null, 2)}\n`);
+  };
+  add((value) => { value.unknown = true; });
+  add((value) => { delete value.patch; });
+  add((value) => { value.schemaVersion = "2"; });
+  add((value) => { value.closedAssetContract.dylink.typescript.neededLibraries = ["unknown"]; });
+  add((value) => { value.closedAssetContract.dylink.typescript.subsectionTypes = [1, 2]; });
+  add((value) => { value.closedAssetContract.canonicalInventory.rows = 218; });
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "code-city-parser-provenance-"));
+  const source = path.join(projectRoot, "vendor", "tree-sitter-typescript");
+  const target = path.join(root, "vendor", "tree-sitter-typescript");
+  try {
+    await cp(source, target, { recursive: true });
+    for (const variant of variants) {
+      await writeFile(path.join(target, "provenance.json"), variant, "utf8");
+      await assert.rejects(() => verifyVendorFiles(root), /length|digest|changed/u);
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+
+  const sourceIndex = await readFile(path.join(projectRoot, "index.html"));
+  const text = sourceIndex.toString("utf8");
+  const firstStart = text.indexOf("  <!-- third-party-notice:source-grammar:");
+  const secondStart = text.indexOf("  <!-- third-party-notice:source-grammar-dependency:");
+  const viewportStart = text.indexOf("  <meta name=\"viewport\"");
+  assert(firstStart >= 0 && secondStart > firstStart && viewportStart > secondStart);
+  const first = text.slice(firstStart, secondStart);
+  const second = text.slice(secondStart, viewportStart);
+  const mutations = [
+    text.slice(0, firstStart) + text.slice(secondStart),
+    text.replace("Permission is hereby granted", "Permission is hereby changed"),
+    text.slice(0, secondStart) + first + text.slice(secondStart),
+    text.replace("third-party-notice:source-grammar:tree-sitter-typescript@0.23.2", "third-party-notice:source-grammar:unknown"),
+    text.slice(0, firstStart) + second + first + text.slice(viewportStart),
+    text.replace("-->\n  <!-- third-party-notice:source-grammar-dependency:", "\nthird-party-notice:source-grammar-dependency:"),
+    text.replaceAll("\n", "\r\n"),
+  ];
+  for (const [index, mutation] of mutations.entries()) {
+    await assert.rejects(() => assertEntryNotices(Buffer.from(mutation, "utf8"), `mutation-${index}`));
+  }
+});
+
+test("the four prior and six narrow parser byte-fidelity attributes remain exact and effective", async () => {
+  const attributes = await readText(".gitattributes");
+  assert.equal(attributes, [
+    "test/fixtures/wasm-inventory.tsv text eol=lf",
+    "docs/modules/architecture/pages/adr/0011-interactive-webgl2-navigation-and-inspection.adoc text eol=lf",
+    "test/fixtures/interactive/fixture.json text eol=lf",
+    "docs/modules/architecture/pages/adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc text eol=lf",
+    "vendor/tree-sitter-typescript/LICENSE text eol=lf",
+    "vendor/tree-sitter-typescript/LICENSE.javascript text eol=lf",
+    "vendor/tree-sitter-typescript/grammar.patch text eol=lf",
+    "vendor/tree-sitter-typescript/provenance.json text eol=lf",
+    "vendor/tree-sitter-typescript/wasm/*.wasm -text",
+    "index.html text eol=lf",
+    "",
+  ].join("\n"));
+  const paths = [
+    "vendor/tree-sitter-typescript/LICENSE",
+    "vendor/tree-sitter-typescript/LICENSE.javascript",
+    "vendor/tree-sitter-typescript/grammar.patch",
+    "vendor/tree-sitter-typescript/provenance.json",
+    "vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm",
+    "vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm",
+    "index.html",
+  ];
+  const output = execFileSync("git", ["check-attr", "text", "eol", "--", ...paths], { cwd: projectRoot, encoding: "utf8" });
+  for (const relativePath of paths.slice(0, 4).concat("index.html")) {
+    assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: text: set`));
+    assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: eol: lf`));
+  }
+  for (const relativePath of paths.slice(4, 6)) assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: text: unset`));
+  for (const relativePath of ["LICENSE", "LICENSE.javascript", "grammar.patch", "provenance.json"]) {
+    const bytes = await readFile(path.join(projectRoot, "vendor", "tree-sitter-typescript", relativePath));
+    assert(!bytes.includes(0x0d), `${relativePath} contains CR bytes`);
+  }
 });
 
 test("exactly three strict no-emit TypeScript configs isolate main and worker libraries", async () => {
@@ -213,6 +350,30 @@ test("the development command configuration starts at the public base and shuts 
     await server.close();
   }
   assert.equal(server.httpServer?.listening, false);
+});
+
+test("the maintainer parser builder is manual, pinned, bounded, offline during builds, and absent from ordinary automation", async () => {
+  const builder = await readText("tools/build-parser-assets.mjs");
+  for (const expected of [
+    "https://registry.npmjs.org/tree-sitter-typescript/0.23.2",
+    "https://registry.npmjs.org/tree-sitter-javascript/0.23.1",
+    "https://registry.npmjs.org/tree-sitter-cli/0.24.4",
+    "https://registry.npmjs.org/tree-sitter-cli/0.25.10",
+    "https://registry.npmjs.org/tree-sitter-typescript/-/tree-sitter-typescript-0.23.2.tgz",
+    "https://registry.npmjs.org/tree-sitter-javascript/-/tree-sitter-javascript-0.23.1.tgz",
+    "https://registry.npmjs.org/tree-sitter-cli/-/tree-sitter-cli-0.24.4.tgz",
+    "https://registry.npmjs.org/tree-sitter-cli/-/tree-sitter-cli-0.25.10.tgz",
+    "https://github.com/tree-sitter/tree-sitter/releases/download/v0.24.4/tree-sitter-linux-x64.gz",
+    "https://github.com/tree-sitter/tree-sitter/releases/download/v0.25.10/tree-sitter-linux-x64.gz",
+    "--pull", "never", "--network", "none", "--platform", "linux/amd64", "--rm",
+    "control-1", "control-2", "patched-1", "patched-2",
+  ]) assert(builder.includes(expected), `Builder is missing ${expected}`);
+  assert.doesNotMatch(builder, /npm (?:install|ci)|docker (?:pull|build|tag|prune)|docker\.sock|--network[= ]host|--privileged/u);
+  const packageManifest = await readJson("package.json");
+  assert(!Object.values(packageManifest.scripts).some((command) => command.includes("build-parser-assets")));
+  const ci = await readText(".github/workflows/ci.yml");
+  const publish = await readText(".github/workflows/publish.yml");
+  assert(!`${ci}\n${publish}`.includes("build-parser-assets"));
 });
 
 test("commands preserve the canonical package audit sequence and CI separates review from publication", async () => {

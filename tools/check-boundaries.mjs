@@ -27,8 +27,8 @@ const PARSER_ASSET_IMPORTS = new Set([
   "web-tree-sitter?url",
   "web-tree-sitter/web-tree-sitter.wasm?url",
   "@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm?url",
-  "@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm?url",
-  "@vscode/tree-sitter-wasm/wasm/tree-sitter-tsx.wasm?url",
+  "../../vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm?url",
+  "../../vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm?url",
 ]);
 
 const ALLOWED_TARGETS = {

@@ -2,3 +2,9 @@ test/fixtures/wasm-inventory.tsv text eol=lf
 docs/modules/architecture/pages/adr/0011-interactive-webgl2-navigation-and-inspection.adoc text eol=lf
 test/fixtures/interactive/fixture.json text eol=lf
 docs/modules/architecture/pages/adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc text eol=lf
+vendor/tree-sitter-typescript/LICENSE text eol=lf
+vendor/tree-sitter-typescript/LICENSE.javascript text eol=lf
+vendor/tree-sitter-typescript/grammar.patch text eol=lf
+vendor/tree-sitter-typescript/provenance.json text eol=lf
+vendor/tree-sitter-typescript/wasm/*.wasm -text
+index.html text eol=lf

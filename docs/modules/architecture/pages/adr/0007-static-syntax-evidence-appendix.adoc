@@ -8,15 +8,64 @@ architecture decision.
 |Item |Accepted value
 
 |Runtime asset |`web-tree-sitter.wasm`
-|Grammar assets |`tree-sitter-javascript.wasm`,
-`tree-sitter-typescript.wasm`, `tree-sitter-tsx.wasm`
-|Runtime package |`web-tree-sitter@0.27.0`
-|Grammar package |`@vscode/tree-sitter-wasm@0.3.1`
+|JavaScript grammar asset |`tree-sitter-javascript.wasm` from
+`@vscode/tree-sitter-wasm@0.3.1`
+|TypeScript source |`tree-sitter-typescript@0.23.2`, commit
+`f975a621f4e7f532fe322e13c4f79495e0a7b2e7`
+|Patch |`grammar.patch`; SHA-256
+`470d7029ad57d743704d5c1ab871449a4e817b9bd8c3266912aeb52b4ad4b62d`;
+963 bytes
+|TypeScript WASM |SHA-256
+`e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9`;
+1,362,713 bytes; ABI 14
+|TSX WASM |SHA-256
+`23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7`;
+1,446,550 bytes; ABI 14
 |Canonical WASM inventory |10,167 UTF-8 bytes; 219 rows
-|Inventory SHA-256 |`55c040fa4f0cf095f1f6819b78984549d40884c75bf599d81da93e662b3f8637`
+|Inventory SHA-256 |`727c583b8823fdaa80204c3f3211c37ed4c6bd8b07a89afbf8bcc90bad28d931`
+|Production provenance |`vendor/tree-sitter-typescript/provenance.json`;
+SHA-256
+`885ad8788f6ba6f50c82702ebb61179408f4825ba3ec1cbbee494d43b50f3bc3`;
+8,223 bytes
 |===
 
-The immutable issue evidence for the decision retains the package tarball,
-selected-asset, ABI, section, provenance, and licence checks. Implementation
-must automate those checks rather than copying their output into reader
-documentation.
+The vendor boundary contains exactly six files: the TypeScript source notice,
+the distinct `tree-sitter-javascript@0.23.1` source-dependency notice, the
+patch, production provenance, and the TypeScript and TSX WASMs. The notices
+remain separate exact 1,080-byte MIT payloads with SHA-256 values
+`49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559`
+and
+`2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1`.
+Each payload is also carried once in deployed `index.html` by its labelled,
+non-executable comment. The package therefore remains the same nine runtime
+files; it does not emit either notice as a standalone file.
+
+The TypeScript and TSX node-type files remain pinned at, respectively,
+`c790a733fc756b54d4e54dceeb7d2d51e40d8b57136e70277753a75804cce3e3`
+(108,583 bytes) and
+`78b5789145286799a27a0a7ecc36cc1bcb151f94ec7fa631b248459867010c8c`
+(113,345 bytes). The accepted `dylink.0` values are:
+
+* TypeScript: memory 1,330,484, alignment 4, table size 7, table alignment 0,
+  no needed libraries, and subsection `[1]`.
+* TSX: memory 1,409,560, alignment 4, table size 7, table alignment 0, no needed
+  libraries, and subsection `[1]`.
+
+Only the TypeScript imported `env.memory` minimum and its normalized inventory
+projection change, from 22 to exactly 21 pages. The fixed
+`web-tree-sitter@0.27.0` host supplies 512 initial pages and a 32,768-page
+maximum, so the lower descriptor is an instantiation minimum rather than a
+capacity reduction. The remaining 217 inventory rows are byte-identical and
+TSX remains at 22 pages.
+
+`tools/build-parser-assets.mjs` is the manual maintainer reproduction route. It
+reacquires the pinned public inputs, reproduces two controls and two patched
+builds in the exact cached Emscripten image without build-time network access,
+checks every output and intermediate, and publishes only the two WASMs to a
+new system-Temp output. Ordinary verification independently checks committed
+bytes and does not invoke that heavy route.
+
+Issue https://github.com/FelixGeisler/code-city/issues/577[#577] is the immutable
+decision and qualification record. It records the human-approved narrow
+grammar amendment separately from the delegated Requirements Engineer choice
+to package the two notices in labelled HTML comments.
