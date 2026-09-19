@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,12 +8,21 @@ import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
 import viteConfig from "../vite.config.mjs";
 import { assertClosedReference } from "../tools/audit-package.mjs";
+import {
+  METADATA,
+  acquireOutputPath,
+  createCleanupController,
+  fetchBounded,
+  validateMetadata,
+} from "../tools/build-parser-assets.mjs";
 import { inspectDependencyClosure } from "../tools/check-dependencies.mjs";
 import {
   VENDOR_FILES,
   assertEntryNotices,
   checkParserAssets,
   inspectWasm,
+  validateDylink,
+  validateProvenance,
   verifyVendorFiles,
 } from "../tools/check-parser-assets.mjs";
 import {
@@ -108,34 +117,62 @@ test("closed dylink parsing rejects missing, duplicate, unknown, and trailing me
   assert.notDeepEqual(inspectWasm(Uint8Array.from([...header, ...custom([...memory, 2, 1, 0])])).dylink, inspectWasm(valid).dylink);
 });
 
-test("provenance shape/type mutations and every labelled notice mutation fail closed", async () => {
-  const provenance = await readFile(path.join(projectRoot, "vendor", "tree-sitter-typescript", "provenance.json"), "utf8");
-  const variants = [];
-  const add = (mutate) => {
-    const value = JSON.parse(provenance);
+test("the complete closed provenance validator directly rejects nested schema, type, array, mapping, and value mutations", async () => {
+  const provenance = JSON.parse(await readFile(path.join(projectRoot, "vendor", "tree-sitter-typescript", "provenance.json"), "utf8"));
+  assert.equal(validateProvenance(provenance), true);
+  const mutations = [
+    (value) => { value.unknown = true; },
+    (value) => { delete value.patch; },
+    (value) => { value.schemaVersion = "2"; },
+    (value) => { value.source.typescript.package = "tree-sitter-typescript@latest"; },
+    (value) => { value.source.javascriptDependency.license.path = "vendor/tree-sitter-typescript/LICENSE"; },
+    (value) => { value.source.license.bytes = 1_081; },
+    (value) => { value.patch.application = ["patch", "-p1"]; },
+    (value) => { value.toolchain.generator.upstreamPublishedChecksumAvailable = true; },
+    (value) => { delete value.toolchain.builder.releaseAssetId; },
+    (value) => { value.toolchain.emscripten.networkDuringBuild = true; },
+    (value) => { value.build.generate.arguments.reverse(); },
+    (value) => { value.build.compile.arguments.push("--extra"); },
+    (value) => { value.reproduction.control.typescriptWasm.bytes = 0; },
+    (value) => { value.reproduction.patched.tsxParserC.sha256 = "0".repeat(64); },
+    (value) => { value.reproduction.nodeTypes.byteIdenticalAcrossControlPatchedAndUpstream = "true"; },
+    (value) => { value.closedAssetContract.abi.typescript = 15; },
+    (value) => { value.closedAssetContract.canonicalInventory.rows = 218; },
+    (value) => { value.closedAssetContract.dylink.typescript.neededLibraries = ["unknown"]; },
+    (value) => { value.closedAssetContract.dylink.tsx.subsectionTypes = [1, 2]; },
+  ];
+  for (const mutate of mutations) {
+    const value = structuredClone(provenance);
     mutate(value);
-    variants.push(`${JSON.stringify(value, null, 2)}\n`);
-  };
-  add((value) => { value.unknown = true; });
-  add((value) => { delete value.patch; });
-  add((value) => { value.schemaVersion = "2"; });
-  add((value) => { value.closedAssetContract.dylink.typescript.neededLibraries = ["unknown"]; });
-  add((value) => { value.closedAssetContract.dylink.typescript.subsectionTypes = [1, 2]; });
-  add((value) => { value.closedAssetContract.canonicalInventory.rows = 218; });
-
-  const root = await mkdtemp(path.join(os.tmpdir(), "code-city-parser-provenance-"));
-  const source = path.join(projectRoot, "vendor", "tree-sitter-typescript");
-  const target = path.join(root, "vendor", "tree-sitter-typescript");
-  try {
-    await cp(source, target, { recursive: true });
-    for (const variant of variants) {
-      await writeFile(path.join(target, "provenance.json"), variant, "utf8");
-      await assert.rejects(() => verifyVendorFiles(root), /length|digest|changed/u);
-    }
-  } finally {
-    await rm(root, { force: true, recursive: true });
+    assert.throws(() => validateProvenance(value), /closed schema|mapping/u);
   }
+});
 
+test("actual parser dylink guards directly reject every closed field mutation", async () => {
+  for (const [role, relativePath] of [
+    ["grammar-typescript", "vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm"],
+    ["grammar-tsx", "vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm"],
+  ]) {
+    const actual = inspectWasm(await readFile(path.join(projectRoot, ...relativePath.split("/")))).dylink;
+    assert.equal(validateDylink(role, actual), true);
+    for (const mutate of [
+      (value) => { value.memorySize += 1; },
+      (value) => { value.memoryAlign += 1; },
+      (value) => { value.tableSize += 1; },
+      (value) => { value.tableAlign += 1; },
+      (value) => { value.neededLibraries.push("unknown"); },
+      (value) => { value.subsectionTypes.push(2); },
+      (value) => { delete value.memorySize; },
+      (value) => { value.unknown = 0; },
+    ]) {
+      const value = structuredClone(actual);
+      mutate(value);
+      assert.throws(() => validateDylink(role, value), /dylink\.0 drift/u);
+    }
+  }
+});
+
+test("every labelled notice mutation fails closed", async () => {
   const sourceIndex = await readFile(path.join(projectRoot, "index.html"));
   const text = sourceIndex.toString("utf8");
   const firstStart = text.indexOf("  <!-- third-party-notice:source-grammar:");
@@ -159,8 +196,7 @@ test("provenance shape/type mutations and every labelled notice mutation fail cl
 });
 
 test("the four prior and six narrow parser byte-fidelity attributes remain exact and effective", async () => {
-  const attributes = await readText(".gitattributes");
-  assert.equal(attributes, [
+  const expected = [
     "test/fixtures/wasm-inventory.tsv text eol=lf",
     "docs/modules/architecture/pages/adr/0011-interactive-webgl2-navigation-and-inspection.adoc text eol=lf",
     "test/fixtures/interactive/fixture.json text eol=lf",
@@ -172,7 +208,11 @@ test("the four prior and six narrow parser byte-fidelity attributes remain exact
     "vendor/tree-sitter-typescript/wasm/*.wasm -text",
     "index.html text eol=lf",
     "",
-  ].join("\n"));
+  ].join("\n");
+  const workingTree = (await readText(".gitattributes")).replaceAll("\r\n", "\n");
+  const committedBlob = execFileSync("git", ["show", "HEAD:.gitattributes"], { cwd: projectRoot, encoding: "utf8" });
+  assert.equal(workingTree, expected);
+  assert.equal(committedBlob, expected);
   const paths = [
     "vendor/tree-sitter-typescript/LICENSE",
     "vendor/tree-sitter-typescript/LICENSE.javascript",
@@ -350,6 +390,94 @@ test("the development command configuration starts at the public base and shuts 
     await server.close();
   }
   assert.equal(server.httpServer?.listening, false);
+});
+
+test("metadata fetches require explicit JSON identity headers and exact per-endpoint streaming lengths before field acceptance", async () => {
+  for (const metadata of METADATA) {
+    const base = JSON.stringify({ gitHead: metadata.gitHead, dist: { integrity: metadata.integrity, tarball: metadata.tarball }, padding: "" });
+    const paddingBytes = metadata.bytes - Buffer.byteLength(base, "utf8");
+    assert(paddingBytes >= 0);
+    const exact = Buffer.from(JSON.stringify({ gitHead: metadata.gitHead, dist: { integrity: metadata.integrity, tarball: metadata.tarball }, padding: "x".repeat(paddingBytes) }), "utf8");
+    assert.equal(exact.byteLength, metadata.bytes);
+    const fake = (body, declareLength = true) => async (url, options) => {
+      assert.equal(url.href, metadata.url);
+      assert.equal(options.headers.Accept, "application/json");
+      assert.equal(options.headers["Accept-Encoding"], "identity");
+      assert.equal(options.credentials, "omit");
+      return new Response(body, { status: 200, headers: declareLength ? { "content-length": String(body.byteLength) } : {} });
+    };
+    const accepted = await fetchBounded(metadata.url, metadata.bytes, "application/json", fake(exact));
+    assert.equal(validateMetadata(metadata, accepted).gitHead, metadata.gitHead);
+    await assert.rejects(() => fetchBounded(metadata.url, metadata.bytes, "application/json", fake(exact.subarray(0, -1), false)), /byte length/u);
+    await assert.rejects(() => fetchBounded(metadata.url, metadata.bytes, "application/json", fake(Buffer.concat([exact, Buffer.from("x")]), false)), /byte bound/u);
+    const fieldsChanged = Buffer.from(exact);
+    const offset = fieldsChanged.indexOf(Buffer.from(metadata.gitHead));
+    fieldsChanged[offset] = fieldsChanged[offset] === 0x61 ? 0x62 : 0x61;
+    assert.throws(() => validateMetadata(metadata, fieldsChanged), /npm metadata changed/u);
+  }
+});
+
+test("builder ownership fakes cover create races and uncertain post-create containment without deleting unowned paths", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "code-city-builder-ownership-"));
+  const raced = path.join(root, "raced");
+  const removals = [];
+  const racedController = createCleanupController({ removeOutput: async (value) => removals.push(value) });
+  try {
+    await assert.rejects(() => acquireOutputPath(raced, racedController, {
+      mkdir: async () => { const error = new Error("created by another process"); error.code = "EEXIST"; throw error; },
+      lstat: async () => assert.fail("post-create lstat must not run after EEXIST"),
+      realpath: async () => assert.fail("post-create realpath must not run after EEXIST"),
+    }), { code: "EEXIST" });
+    await racedController.finish();
+    assert.deepEqual(removals, []);
+
+    const uncertain = path.join(root, "uncertain");
+    const uncertainController = createCleanupController({ removeOutput: async (value) => removals.push(value) });
+    await assert.rejects(() => acquireOutputPath(uncertain, uncertainController, {
+      mkdir,
+      lstat: async () => ({ isDirectory: () => true, isSymbolicLink: () => true }),
+      realpath: async (value) => value,
+    }), /ordinary directory/u);
+    await assert.rejects(() => uncertainController.finish(), /Uncertain output ownership/u);
+    assert.deepEqual(removals, []);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("builder terminal flow stops and awaits owned children before cleanup for SIGINT and SIGTERM", async () => {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    const events = [];
+    let settle;
+    const controller = createCleanupController({ removeOutput: async () => { events.push("remove-output"); } });
+    controller.claimOutput(path.join(os.tmpdir(), `owned-${signal}`));
+    const record = {
+      child: { kill: () => { events.push(`stop-${signal}`); settle(); return true; } },
+      settled: new Promise((resolve) => { settle = () => { events.push(`settled-${signal}`); resolve(); }; }),
+    };
+    controller.trackChild(record);
+    await controller.finish({ signal });
+    assert.deepEqual(events, [`stop-${signal}`, `settled-${signal}`, "remove-output"]);
+  }
+});
+
+test("builder terminal flow aggregates child-adjacent, container, and output cleanup failures without claiming clean state", async () => {
+  const controller = createCleanupController({
+    removeOutput: async () => { throw new Error("output cleanup failed"); },
+    removeContainer: async () => { throw new Error("container cleanup failed"); },
+    containerAbsent: async () => false,
+  });
+  controller.claimOutput(path.join(os.tmpdir(), "owned-cleanup-failure"));
+  controller.trackContainer("code-city-parser-577-fake-owned");
+  await assert.rejects(() => controller.finish(), (error) => {
+    assert(error instanceof AggregateError);
+    const detail = error.errors.map(String).join("\n");
+    assert.match(detail, /Failed to remove owned container/u);
+    assert.match(detail, /still exists/u);
+    assert.match(detail, /Owned output retained/u);
+    assert.match(detail, /absence was not verified/u);
+    return true;
+  });
 });
 
 test("the maintainer parser builder is manual, pinned, bounded, offline during builds, and absent from ordinary automation", async () => {

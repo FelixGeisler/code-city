@@ -23,11 +23,11 @@ const ACQUISITIONS = Object.freeze([
   Object.freeze({ name: "tree-sitter-cli-0.24.4-linux-x64.gz", url: "https://github.com/tree-sitter/tree-sitter/releases/download/v0.24.4/tree-sitter-linux-x64.gz", bytes: 8_537_215, sha256: "60578f6e563e046d311d7cac4bf27207eb6982b97ddec6b78022a4afdf736a9b" }),
   Object.freeze({ name: "tree-sitter-cli-0.25.10-linux-x64.gz", url: "https://github.com/tree-sitter/tree-sitter/releases/download/v0.25.10/tree-sitter-linux-x64.gz", bytes: 6_521_182, sha256: "8283ddba69253c698f6e987ba0e2f9285e079c8db4d36ebe1394b5bb3a0ebdfd" }),
 ]);
-const METADATA = Object.freeze([
-  Object.freeze({ package: "tree-sitter-typescript@0.23.2", url: "https://registry.npmjs.org/tree-sitter-typescript/0.23.2", gitHead: "f975a621f4e7f532fe322e13c4f79495e0a7b2e7", integrity: ACQUISITIONS[0].integrity, tarball: ACQUISITIONS[0].url }),
-  Object.freeze({ package: "tree-sitter-javascript@0.23.1", url: "https://registry.npmjs.org/tree-sitter-javascript/0.23.1", gitHead: "3a837b6f3658ca3618f2022f8707e29739c91364", integrity: ACQUISITIONS[1].integrity, tarball: ACQUISITIONS[1].url }),
-  Object.freeze({ package: "tree-sitter-cli@0.24.4", url: "https://registry.npmjs.org/tree-sitter-cli/0.24.4", gitHead: "fc8c1863e2e5724a0c40bb6e6cfc8631bfe5908b", integrity: ACQUISITIONS[2].integrity, tarball: ACQUISITIONS[2].url }),
-  Object.freeze({ package: "tree-sitter-cli@0.25.10", url: "https://registry.npmjs.org/tree-sitter-cli/0.25.10", gitHead: "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406", integrity: ACQUISITIONS[3].integrity, tarball: ACQUISITIONS[3].url }),
+export const METADATA = Object.freeze([
+  Object.freeze({ package: "tree-sitter-typescript@0.23.2", url: "https://registry.npmjs.org/tree-sitter-typescript/0.23.2", bytes: 2_470, gitHead: "f975a621f4e7f532fe322e13c4f79495e0a7b2e7", integrity: ACQUISITIONS[0].integrity, tarball: ACQUISITIONS[0].url }),
+  Object.freeze({ package: "tree-sitter-javascript@0.23.1", url: "https://registry.npmjs.org/tree-sitter-javascript/0.23.1", bytes: 2_699, gitHead: "3a837b6f3658ca3618f2022f8707e29739c91364", integrity: ACQUISITIONS[1].integrity, tarball: ACQUISITIONS[1].url }),
+  Object.freeze({ package: "tree-sitter-cli@0.24.4", url: "https://registry.npmjs.org/tree-sitter-cli/0.24.4", bytes: 1_862, gitHead: "fc8c1863e2e5724a0c40bb6e6cfc8631bfe5908b", integrity: ACQUISITIONS[2].integrity, tarball: ACQUISITIONS[2].url }),
+  Object.freeze({ package: "tree-sitter-cli@0.25.10", url: "https://registry.npmjs.org/tree-sitter-cli/0.25.10", bytes: 1_917, gitHead: "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406", integrity: ACQUISITIONS[3].integrity, tarball: ACQUISITIONS[3].url }),
 ]);
 const EXECUTABLES = Object.freeze([
   Object.freeze({ gzip: ACQUISITIONS[4].name, name: "tree-sitter-cli-0.24.4", bytes: 23_984_272, sha256: "e62065f887c51079c943ace813a620a2ed4e69b7f0297192e6db6dc5c633715c", version: "tree-sitter 0.24.4 (fc8c1863e2e5724a0c40bb6e6cfc8631bfe5908b)" }),
@@ -66,28 +66,42 @@ function pathKey(value) { const resolved = path.resolve(value); return process.p
 function isWithin(parent, child) { const relative = path.relative(parent, child); return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative); }
 function assertSafeUrl(value) { const url = new URL(value); invariant(url.protocol === "https:" && !url.username && !url.password, `Acquisition URL is not credential-free HTTPS: ${value}`); return url; }
 
+let activeController;
+
 async function run(command, args, options = {}) {
+  activeController?.assertCanSpawn();
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd: options.cwd, env: options.env ?? process.env, stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true });
     const stdout = [];
     const stderr = [];
+    let settleChild;
+    let childFinished = false;
+    const record = { child, settled: new Promise((settle) => { settleChild = settle; }) };
+    activeController?.trackChild(record);
+    const finish = (callback) => {
+      if (childFinished) return;
+      childFinished = true;
+      activeController?.childSettled(record);
+      settleChild();
+      callback();
+    };
     child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
+    child.once("error", (error) => finish(() => reject(error)));
+    child.once("close", (code, signal) => finish(() => {
       const output = Buffer.concat(stdout).toString("utf8");
       const errorOutput = Buffer.concat(stderr).toString("utf8");
-      if (code === 0) resolve({ stdout: output, stderr: errorOutput });
+      if (code === 0 || options.allowFailure) resolve({ code, signal, stdout: output, stderr: errorOutput });
       else reject(new Error(`${command} failed (${signal ?? code}): ${errorOutput || output}`));
-    });
+    }));
     if (options.input !== undefined) child.stdin.end(options.input);
   });
 }
 
-async function fetchBounded(urlValue, expectedBytes, accept = "application/octet-stream") {
+export async function fetchBounded(urlValue, expectedBytes, accept = "application/octet-stream", fetchImpl = fetch) {
   let url = assertSafeUrl(urlValue);
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-    const response = await fetch(url, { redirect: "manual", headers: { Accept: accept, "User-Agent": "code-city-parser-asset-builder/1" }, credentials: "omit", referrerPolicy: "no-referrer" });
+    const response = await fetchImpl(url, { redirect: "manual", headers: { Accept: accept, "Accept-Encoding": "identity", "User-Agent": "code-city-parser-asset-builder/1" }, credentials: "omit", referrerPolicy: "no-referrer" });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       invariant(redirects < MAX_REDIRECTS, `Too many redirects for ${urlValue}`);
       const location = response.headers.get("location");
@@ -110,6 +124,14 @@ async function fetchBounded(urlValue, expectedBytes, accept = "application/octet
     return Buffer.concat(chunks);
   }
   throw new Error(`Redirect handling failed: ${urlValue}`);
+}
+
+export function validateMetadata(metadata, bytes) {
+  const text = new TextDecoder("utf8", { fatal: true }).decode(bytes);
+  invariant(Buffer.byteLength(text, "utf8") === metadata.bytes, `npm metadata UTF-8 length changed: ${metadata.package}`);
+  const value = JSON.parse(text);
+  invariant(value.gitHead === metadata.gitHead && value.dist?.integrity === metadata.integrity && value.dist?.tarball === metadata.tarball, `npm metadata changed: ${metadata.package}`);
+  return value;
 }
 
 async function verifyFile(filePath, expected, label = filePath) {
@@ -157,27 +179,91 @@ async function assertTarSafe(tarball) {
   }
 }
 
-const ownedContainers = new Set();
-let ownedOutput;
-let finished = false;
-async function cleanupContainers() {
-  for (const name of [...ownedContainers]) {
-    try { await run("docker", ["rm", "-f", name]); } catch {}
-    ownedContainers.delete(name);
-  }
-}
-async function failCleanup() {
-  await cleanupContainers();
-  if (ownedOutput && !finished) await rm(ownedOutput, { recursive: true, force: true });
-}
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.once(signal, () => { void failCleanup().finally(() => process.exit(128 + (signal === "SIGINT" ? 2 : 15))); });
+async function dockerContainerAbsent(name) {
+  const result = await run("docker", ["container", "inspect", name], { allowFailure: true });
+  if (result.code === 0) return false;
+  invariant(result.code === 1 && /No such (?:object|container)/iu.test(`${result.stderr}\n${result.stdout}`), `Could not verify absence of owned container ${name}`);
+  return true;
 }
 
-async function main() {
-  invariant(process.argv.length === 3, "Usage: node tools/build-parser-assets.mjs <absolute-new-output-under-system-Temp>");
-  ownedOutput = await validateOutputPath(process.argv[2]);
-  await mkdir(ownedOutput);
+export function createCleanupController({
+  removeOutput = (output) => rm(output, { recursive: true }),
+  removeContainer = (name) => run("docker", ["rm", "-f", name]),
+  containerAbsent = dockerContainerAbsent,
+} = {}) {
+  const children = new Set();
+  const containers = new Set();
+  const uncertainPaths = new Set();
+  let output;
+  let outputComplete = false;
+  let stopping = false;
+  let terminal;
+  return {
+    assertCanSpawn() { invariant(!stopping, "Builder cancellation is already in progress"); },
+    trackChild(record) { children.add(record); },
+    childSettled(record) { children.delete(record); },
+    claimOutput(value) { invariant(output === undefined, "Builder output ownership was already assigned"); output = value; },
+    retainUncertainPath(value) { uncertainPaths.add(value); },
+    completeOutput() { outputComplete = true; },
+    trackContainer(name) { containers.add(name); },
+    async confirmContainerAbsent(name) {
+      if (!containers.has(name)) return;
+      invariant(await containerAbsent(name), `Owned container still exists after --rm: ${name}`);
+      containers.delete(name);
+    },
+    finish({ success = false, signal } = {}) {
+      if (terminal) return terminal;
+      stopping = true;
+      terminal = (async () => {
+        const errors = [];
+        const active = [...children];
+        for (const record of active) {
+          try { record.child.kill("SIGTERM"); } catch (error) { errors.push(error); }
+        }
+        await Promise.all(active.map((record) => record.settled));
+        for (const name of [...containers]) {
+          try { await removeContainer(name); } catch (error) { errors.push(new Error(`Failed to remove owned container ${name}`, { cause: error })); }
+          try {
+            if (await containerAbsent(name)) containers.delete(name);
+            else errors.push(new Error(`Owned container still exists after cleanup: ${name}`));
+          } catch (error) { errors.push(new Error(`Could not verify owned container absence: ${name}`, { cause: error })); }
+        }
+        if (output && (!success || !outputComplete)) {
+          try { await removeOutput(output); } catch (error) { errors.push(new Error(`Owned output retained after cleanup failure: ${output}`, { cause: error })); }
+        }
+        for (const value of uncertainPaths) errors.push(new Error(`Uncertain output ownership; retained without deletion: ${value}`));
+        if (containers.size > 0) errors.push(new Error(`Owned containers retained because absence was not verified: ${[...containers].join(", ")}`));
+        if (errors.length > 0) {
+          const summary = errors.map((error) => error instanceof Error ? error.message : String(error)).join("; ");
+          throw new AggregateError(errors, `Builder terminal cleanup failed${signal ? ` after ${signal}` : ""}: ${summary}`);
+        }
+      })();
+      return terminal;
+    },
+  };
+}
+
+export async function acquireOutputPath(output, controller, io = { mkdir, lstat, realpath }) {
+  const resolved = await validateOutputPath(output);
+  await io.mkdir(resolved);
+  try {
+    const metadata = await io.lstat(resolved);
+    invariant(metadata.isDirectory() && !metadata.isSymbolicLink(), `Created output is not an owned ordinary directory: ${resolved}`);
+    const [createdReal, tempReal] = await Promise.all([io.realpath(resolved), io.realpath(os.tmpdir())]);
+    invariant(pathKey(createdReal) === pathKey(resolved), `Created output changed through a reparse point: ${resolved}`);
+    invariant(isWithin(tempReal, createdReal), `Created output escaped the system Temp directory: ${resolved}`);
+  } catch (error) {
+    controller.retainUncertainPath(resolved);
+    throw error;
+  }
+  controller.claimOutput(resolved);
+  return resolved;
+}
+
+export async function main(outputArgument = process.argv[2], controller = createCleanupController()) {
+  invariant(outputArgument && process.argv.length === 3, "Usage: node tools/build-parser-assets.mjs <absolute-new-output-under-system-Temp>");
+  activeController = controller;
+  const ownedOutput = await acquireOutputPath(outputArgument, controller);
   const work = path.join(ownedOutput, ".work");
   const inputs = path.join(work, "inputs");
   const runsRoot = path.join(work, "runs");
@@ -197,9 +283,8 @@ async function main() {
   }
 
   for (const metadata of METADATA) {
-    const bytes = await fetchBounded(metadata.url, undefined, "application/json");
-    const value = JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(bytes));
-    invariant(value.gitHead === metadata.gitHead && value.dist?.integrity === metadata.integrity && value.dist?.tarball === metadata.tarball, `npm metadata changed: ${metadata.package}`);
+    const bytes = await fetchBounded(metadata.url, metadata.bytes, "application/json");
+    validateMetadata(metadata, bytes);
   }
   for (const item of ACQUISITIONS) {
     const bytes = await fetchBounded(item.url, item.bytes);
@@ -243,7 +328,7 @@ async function main() {
     if (runName.startsWith("patched")) await run("patch", ["--batch", "--fuzz=0", "-p1", "-i", path.join(inputs, "grammar.patch")], { cwd: source });
 
     const containerName = `code-city-parser-577-${process.pid}-${randomBytes(6).toString("hex")}`;
-    ownedContainers.add(containerName);
+    controller.trackContainer(containerName);
     try {
       await run("docker", [
         "run", "--name", containerName, "--rm", "--pull", "never", "--network", "none", "--platform", "linux/amd64",
@@ -261,7 +346,7 @@ async function main() {
          /inputs/tree-sitter-cli-0.25.10 build --wasm /work/src/tsx`,
       ]);
     } finally {
-      ownedContainers.delete(containerName);
+      await controller.confirmContainerAbsent(containerName);
     }
 
     const kind = runName.startsWith("control") ? "control" : "patched";
@@ -294,15 +379,34 @@ async function main() {
     await cp(path.join(runsRoot, "patched-1", "out", wasm), path.join(publish, wasm), { errorOnExist: true, force: false });
   }
   await rename(publish, path.join(ownedOutput, "wasm"));
-  await rm(work, { recursive: true, force: true });
-  finished = true;
+  await rm(work, { recursive: true });
+  controller.completeOutput();
   console.log("Reproduced two controls and two patched builds; verified all pins; retained only wasm/tree-sitter-typescript.wasm and wasm/tree-sitter-tsx.wasm.");
 }
 
-try {
-  await main();
-} catch (error) {
-  await failCleanup();
-  console.error(error instanceof Error ? error.stack : String(error));
-  process.exitCode = 1;
+const invokedPath = process.argv[1] && path.resolve(process.argv[1]);
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  const controller = createCleanupController();
+  let signalName;
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.once(signal, () => {
+      signalName = signal;
+      void controller.finish({ signal }).then(
+        () => { process.exitCode = 128 + (signal === "SIGINT" ? 2 : 15); },
+        (error) => { console.error(error instanceof Error ? error.stack : String(error)); process.exitCode = 1; },
+      );
+    });
+  }
+  try {
+    await main(process.argv[2], controller);
+    await controller.finish({ success: true });
+  } catch (error) {
+    let cleanupError;
+    try { await controller.finish({ signal: signalName }); } catch (caught) { cleanupError = caught; }
+    console.error(error instanceof Error ? error.stack : String(error));
+    if (cleanupError) console.error(cleanupError instanceof Error ? cleanupError.stack : String(cleanupError));
+    process.exitCode = 1;
+  } finally {
+    activeController = undefined;
+  }
 }

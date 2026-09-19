@@ -38,6 +38,7 @@ const EXPECTED_VENDOR = Object.freeze({
   "wasm/tree-sitter-tsx.wasm": Object.freeze({ sha256: "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7", bytes: 1_446_550 }),
 });
 const EXPECTED_INVENTORY = Object.freeze({ sha256: "727c583b8823fdaa80204c3f3211c37ed4c6bd8b07a89afbf8bcc90bad28d931", bytes: 10_167, rows: 219 });
+const EXPECTED_PROVENANCE_VALUE_SHA256 = "aca712af736b438827b75ebfd4d0b6926f15de1fb33fc922674735e20d3adf5f";
 const EXPECTED_DYLINK = Object.freeze({
   "grammar-typescript": Object.freeze({ memorySize: 1_330_484, memoryAlign: 4, tableSize: 7, tableAlign: 0, neededLibraries: Object.freeze([]), subsectionTypes: Object.freeze([1]) }),
   "grammar-tsx": Object.freeze({ memorySize: 1_409_560, memoryAlign: 4, tableSize: 7, tableAlign: 0, neededLibraries: Object.freeze([]), subsectionTypes: Object.freeze([1]) }),
@@ -55,6 +56,36 @@ function invariant(condition, message) {
 
 export function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function assertJsonTree(value, location = "provenance") {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    invariant(Number.isSafeInteger(value), `${location} contains a non-integer or unsafe number`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) assertJsonTree(entry, `${location}[${index}]`);
+    return;
+  }
+  invariant(typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype, `${location} must be a plain closed JSON value`);
+  for (const key of Object.keys(value)) assertJsonTree(value[key], `${location}.${key}`);
+}
+
+export function validateProvenance(value) {
+  assertJsonTree(value);
+  const canonicalValue = Buffer.from(JSON.stringify(value), "utf8");
+  invariant(digest(canonicalValue) === EXPECTED_PROVENANCE_VALUE_SHA256, "Parser provenance closed schema or immutable value changed");
+  invariant(value.source.javascriptDependency.license.path === "vendor/tree-sitter-typescript/LICENSE.javascript", "JavaScript dependency notice mapping changed");
+  invariant(value.source.javascriptDependency.license.sha256 === EXPECTED_VENDOR["LICENSE.javascript"].sha256, "JavaScript dependency notice digest mapping changed");
+  invariant(value.source.license.sha256 === EXPECTED_VENDOR.LICENSE.sha256, "TypeScript notice digest mapping changed");
+  return true;
+}
+
+export function validateDylink(role, value) {
+  invariant(Object.hasOwn(EXPECTED_DYLINK, role), `Unknown dylink role: ${role}`);
+  assert.deepEqual(value, EXPECTED_DYLINK[role], `dylink.0 drift: ${role}`);
+  return true;
 }
 
 const utf8 = new TextEncoder();
@@ -268,31 +299,7 @@ export async function verifyVendorFiles(root = projectRoot) {
   const provenanceBytes = contents.get("provenance.json");
   invariant(provenanceBytes.at(-1) === 0x0a && !provenanceBytes.includes(0x0d), "Parser provenance must be exact UTF-8/LF with final LF");
   const provenance = JSON.parse(decoder.decode(provenanceBytes));
-  invariant(provenance.schemaVersion === 2, "Parser provenance schema changed");
-  assert.deepEqual(Object.keys(provenance), ["schemaVersion", "source", "patch", "toolchain", "build", "reproduction", "closedAssetContract"]);
-  assert.deepEqual(provenance.build, {
-    generate: { executable: "tree-sitter-cli@0.24.4 release binary", arguments: ["generate", "--abi", "14"], dialects: ["typescript", "tsx"] },
-    compile: { executable: "tree-sitter-cli@0.25.10 release binary", arguments: ["build", "--wasm"], emscripten: "3.1.64" },
-    controls: 2, patched: 2, independentFreshSourceTrees: true,
-  });
-  assert.deepEqual(provenance.closedAssetContract.dylink, {
-    typescript: EXPECTED_DYLINK["grammar-typescript"],
-    tsx: EXPECTED_DYLINK["grammar-tsx"],
-  });
-  assert.deepEqual(provenance.closedAssetContract.canonicalInventory, {
-    sha256: EXPECTED_INVENTORY.sha256,
-    bytes: EXPECTED_INVENTORY.bytes,
-    rows: EXPECTED_INVENTORY.rows,
-    onlyDeltaFromBaseline: "TypeScript env.memory minimum 22 to exact 21 in IMPORT and normalized MEMORY projection; all other 217 rows byte-identical",
-  });
-  assert.deepEqual(provenance.reproduction.nodeTypes, {
-    typescript: { sha256: "c790a733fc756b54d4e54dceeb7d2d51e40d8b57136e70277753a75804cce3e3", bytes: 108_583 },
-    tsx: { sha256: "78b5789145286799a27a0a7ecc36cc1bcb151f94ec7fa631b248459867010c8c", bytes: 113_345 },
-    byteIdenticalAcrossControlPatchedAndUpstream: true,
-  });
-  invariant(provenance.source.javascriptDependency.license.path === "vendor/tree-sitter-typescript/LICENSE.javascript", "JavaScript dependency notice mapping changed");
-  invariant(provenance.source.javascriptDependency.license.sha256 === EXPECTED_VENDOR["LICENSE.javascript"].sha256, "JavaScript dependency notice digest mapping changed");
-  invariant(provenance.source.license.sha256 === EXPECTED_VENDOR.LICENSE.sha256, "TypeScript notice digest mapping changed");
+  validateProvenance(provenance);
   return { contents, provenance };
 }
 
@@ -322,7 +329,7 @@ export async function checkParserAssets(root = projectRoot) {
     const bytes = await readFile(path.join(root, ...asset.relativePath.split("/")));
     invariant(digest(bytes) === asset.sha256, `Selected parser asset drift: ${asset.role}`);
     if (asset.bytes !== undefined) invariant(bytes.byteLength === asset.bytes, `Selected parser asset length drift: ${asset.role}`);
-    if (EXPECTED_DYLINK[asset.role]) assert.deepEqual(inspectWasm(bytes).dylink, EXPECTED_DYLINK[asset.role], `dylink.0 drift: ${asset.role}`);
+    if (EXPECTED_DYLINK[asset.role]) validateDylink(asset.role, inspectWasm(bytes).dylink);
   }
 
   const runtimeLicense = await readFile(path.join(root, "node_modules", "web-tree-sitter", "LICENSE"));
