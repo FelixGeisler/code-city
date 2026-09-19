@@ -273,7 +273,7 @@ test("eligibility executes fixed authenticated bounded retrieval for open, close
       const result = await runEligibility(source, directory, fixture.scenario);
       assert.equal(result.code, fixture.code, result.stderr);
       assert.equal(result.output, fixture.output);
-      assert.equal(result.observer.url, "https://api.github.com/repos/FelixGeisler/code-city/issues/460");
+      assert.equal(result.observer.url, "https://api.github.com/repos/FelixGeisler/code-city/issues/537");
       assert.deepEqual(result.observer.options, {
         headers: {
           accept: "application/vnd.github+json",
@@ -289,8 +289,8 @@ test("eligibility executes fixed authenticated bounded retrieval for open, close
       assert.equal(result.observer.responseUrl, fixture.scenario.kind === "query-error"
         ? undefined
         : fixture.scenario.kind === "url-error"
-          ? "https://api.github.com/repos/FelixGeisler/code-city/issues/460/redirected"
-          : "https://api.github.com/repos/FelixGeisler/code-city/issues/460");
+          ? "https://api.github.com/repos/FelixGeisler/code-city/issues/537/redirected"
+          : "https://api.github.com/repos/FelixGeisler/code-city/issues/537");
       assert.equal(result.observer.responseStatus, fixture.scenario.kind === "query-error"
         ? undefined
         : fixture.scenario.kind === "status-error" ? 404 : 200);

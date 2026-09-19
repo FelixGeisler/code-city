@@ -32,7 +32,7 @@ That gate type-checks the main and worker contexts, runs tests, builds once, com
 
 ## Production evidence and finalization
 
-Pull requests run only the `verify` check. A protected-`main` push runs the separate publication workflow, builds once, deploys that exact Pages artifact, and—while [acceptance issue #460](https://github.com/FelixGeisler/code-city/issues/460) is open—collects a sealed seven-file production-evidence artifact. Collection runs without a GitHub token in the collector environment. The workflow summary records the authenticated artifact and packet bindings needed for local finalization.
+Pull requests run only the `verify` check. A protected-`main` push runs the separate publication workflow, builds once, deploys that exact Pages artifact, and—while [M2 acceptance issue #537](https://github.com/FelixGeisler/code-city/issues/537) is open—collects a sealed seven-file production-evidence artifact. Collection runs without a GitHub token in the collector environment. The workflow summary records the authenticated artifact and packet bindings needed for local finalization.
 
 After independently authenticating and downloading that artifact into a marker-free `sealed/` directory, save the workflow/API bindings as sibling `artifact-metadata.json` and run:
 

@@ -86,7 +86,7 @@ jobs:
       run: |
         node --input-type=module <<'NODE'
         import { appendFile } from "node:fs/promises";
-        const issueUrl = "https://api.github.com/repos/FelixGeisler/code-city/issues/460";
+        const issueUrl = "https://api.github.com/repos/FelixGeisler/code-city/issues/537";
         const maximumBytes = 1024 * 1024;
         if (!process.env.GH_TOKEN) throw new Error("eligibility authentication is unavailable");
         const response = await fetch(issueUrl, {

@@ -1063,7 +1063,7 @@ test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K,
     readValidatedEvidencePacket: async () => stored,
   });
   assert.deepEqual(result, { packetDigest: stored.packetDigest, status: "pass", reason: "none" });
-  assert.equal(PARENT_ISSUE_BODY_SHA256, "e82cfb55cae317388b0dd266b245b417afec52dae9b8476242cd87c977930775");
+  assert.equal(PARENT_ISSUE_BODY_SHA256, "f64751801dd6da6e3325ab3f14da4fef572768b14b7b0f7fb3cdbd8f47363846");
   assert.deepEqual(stored.binding, { issueBodySha256: PARENT_ISSUE_BODY_SHA256, eventSha: EVENT });
   const decoder = new TextDecoder();
   const persisted = Object.fromEntries([...stored.files]
