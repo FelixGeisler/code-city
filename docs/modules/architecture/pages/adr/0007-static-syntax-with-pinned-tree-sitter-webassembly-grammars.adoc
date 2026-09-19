@@ -14,8 +14,10 @@ source. A parser fallback would give the same module two meanings.
 |Choice |Value
 
 |Runtime |`web-tree-sitter@0.27.0`
-|Grammar assets |JavaScript, TypeScript, and TSX WASM from
-`@vscode/tree-sitter-wasm@0.3.1`
+|JavaScript grammar asset |WASM from `@vscode/tree-sitter-wasm@0.3.1`
+|TypeScript and TSX grammar assets |Pinned, locally patched WASM reproduced
+from `tree-sitter-typescript@0.23.2` as fixed by issue
+https://github.com/FelixGeisler/code-city/issues/577[#577]
 |`.js`, `.mjs`, `.cjs` |JavaScript grammar; visible JSX rejected
 |`.jsx` |JavaScript grammar with JSX
 |`.ts`, `.mts`, `.cts` |TypeScript grammar
@@ -44,9 +46,20 @@ the next module. Parser work begins only after the provider-drained barrier in
 xref:../06-runtime-view.adoc[Runtime View]; hard termination during the static
 phase relies on worker-realm disposal rather than per-object cleanup.
 
-Use no fallback parser, query layer, custom grammar, incremental tree, type
-checker, linter, dependency resolver, recursive JavaScript tree walk, parser
-logging, or source execution.
+Use no fallback parser, query layer, general custom-grammar mechanism,
+incremental tree, type checker, linter, dependency resolver, recursive
+JavaScript tree walk, parser logging, or source execution.
+
+Issue https://github.com/FelixGeisler/code-city/issues/577[#577] records the
+human-approved narrow exception to the former no-custom-grammar restriction.
+The human accepted the bounded pinned grammar correction with “OK. Go.” after
+being told it changes that restriction. The exception moves only the two
+`call_expression` / type-query-call pairs from precedence declarations to
+conflicts so valid `importOriginal<typeof import("...")>()` syntax is accepted.
+It does not authorize another grammar, a fork, runtime loading, fallback, or a
+general patch policy. The separate notice-packaging mechanism was selected
+later under delegated Requirements Engineer authority, not by that human
+approval.
 
 == Consequences
 

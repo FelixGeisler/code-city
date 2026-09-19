@@ -196,13 +196,13 @@ IMPORT	env	__memory_base	global	i32;mutable=false
 IMPORT	env	__table_base	global	i32;mutable=false
 IMPORT	env	iswalpha	function	type[2]
 IMPORT	env	iswspace	function	type[2]
-IMPORT	env	memory	memory	min=22;max=-;shared=false;memory64=false
+IMPORT	env	memory	memory	min=21;max=-;shared=false;memory64=false
 EXPORT	name	kind	index
 EXPORT	__wasm_apply_data_relocs	function	3
 EXPORT	__wasm_call_ctors	function	2
 EXPORT	tree_sitter_typescript	function	9
 MEMORY	index	origin	module	name	min-pages	max-pages	shared	memory64	min-bytes	max-bytes
-MEMORY	0	import	env	memory	22	-	false	false	1441792	-
+MEMORY	0	import	env	memory	21	-	false	false	1376256	-
 ASSET	tree-sitter-tsx.wasm
 IMPORT	module	name	kind	descriptor
 IMPORT	env	__indirect_function_table	table	funcref;min=7;max=-;shared=false;memory64=false

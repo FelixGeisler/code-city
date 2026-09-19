@@ -1,47 +1,91 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
+const vendorRoot = path.join(projectRoot, "vendor", "tree-sitter-typescript");
 
-export const SELECTED_ASSETS = [
-  {
-    role: "runtime-js",
-    relativePath: "node_modules/web-tree-sitter/web-tree-sitter.js",
-    sha256: "7c49e3c1d87e24e0bb4c2def909d17154dfde281f5f8280225450090bb4b8110",
-  },
-  {
-    role: "runtime-wasm",
-    relativePath: "node_modules/web-tree-sitter/web-tree-sitter.wasm",
-    sha256: "c03bccdc3b448a32848f5ae327e209c982bbb0840d43eec8bc2d5759544a1ed3",
-  },
-  {
-    role: "grammar-javascript",
-    relativePath: "node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm",
-    sha256: "5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240",
-    abi: 15,
-  },
-  {
-    role: "grammar-typescript",
-    relativePath: "node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm",
-    sha256: "778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d",
-    abi: 14,
-  },
-  {
-    role: "grammar-tsx",
-    relativePath: "node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-tsx.wasm",
-    sha256: "79e5da75ea62855a0cd67177685f0164eac87d5f630b3cbe1e0a099751ad30f8",
-    abi: 14,
-  },
-];
+export const VENDOR_FILES = Object.freeze([
+  "LICENSE",
+  "LICENSE.javascript",
+  "grammar.patch",
+  "provenance.json",
+  "wasm/tree-sitter-tsx.wasm",
+  "wasm/tree-sitter-typescript.wasm",
+]);
+
+export const SELECTED_ASSETS = Object.freeze([
+  Object.freeze({ role: "runtime-js", relativePath: "node_modules/web-tree-sitter/web-tree-sitter.js", sha256: "7c49e3c1d87e24e0bb4c2def909d17154dfde281f5f8280225450090bb4b8110" }),
+  Object.freeze({ role: "runtime-wasm", relativePath: "node_modules/web-tree-sitter/web-tree-sitter.wasm", sha256: "c03bccdc3b448a32848f5ae327e209c982bbb0840d43eec8bc2d5759544a1ed3" }),
+  Object.freeze({ role: "grammar-javascript", relativePath: "node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm", sha256: "5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240", abi: 15 }),
+  Object.freeze({ role: "grammar-typescript", relativePath: "vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm", sha256: "e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9", bytes: 1_362_713, abi: 14 }),
+  Object.freeze({ role: "grammar-tsx", relativePath: "vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm", sha256: "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7", bytes: 1_446_550, abi: 14 }),
+]);
+
+export const NOTICE_LABELS = Object.freeze({
+  typescript: "third-party-notice:source-grammar:tree-sitter-typescript@0.23.2",
+  javascript: "third-party-notice:source-grammar-dependency:tree-sitter-javascript@0.23.1",
+});
+
+const EXPECTED_VENDOR = Object.freeze({
+  LICENSE: Object.freeze({ sha256: "49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559", bytes: 1_080 }),
+  "LICENSE.javascript": Object.freeze({ sha256: "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1", bytes: 1_080 }),
+  "grammar.patch": Object.freeze({ sha256: "470d7029ad57d743704d5c1ab871449a4e817b9bd8c3266912aeb52b4ad4b62d", bytes: 963 }),
+  "provenance.json": Object.freeze({ sha256: "885ad8788f6ba6f50c82702ebb61179408f4825ba3ec1cbbee494d43b50f3bc3", bytes: 8_223 }),
+  "wasm/tree-sitter-typescript.wasm": Object.freeze({ sha256: "e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9", bytes: 1_362_713 }),
+  "wasm/tree-sitter-tsx.wasm": Object.freeze({ sha256: "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7", bytes: 1_446_550 }),
+});
+const EXPECTED_INVENTORY = Object.freeze({ sha256: "727c583b8823fdaa80204c3f3211c37ed4c6bd8b07a89afbf8bcc90bad28d931", bytes: 10_167, rows: 219 });
+const EXPECTED_PROVENANCE_VALUE_SHA256 = "aca712af736b438827b75ebfd4d0b6926f15de1fb33fc922674735e20d3adf5f";
+const EXPECTED_DYLINK = Object.freeze({
+  "grammar-typescript": Object.freeze({ memorySize: 1_330_484, memoryAlign: 4, tableSize: 7, tableAlign: 0, neededLibraries: Object.freeze([]), subsectionTypes: Object.freeze([1]) }),
+  "grammar-tsx": Object.freeze({ memorySize: 1_409_560, memoryAlign: 4, tableSize: 7, tableAlign: 0, neededLibraries: Object.freeze([]), subsectionTypes: Object.freeze([1]) }),
+});
+const EXPECTED_DECLARATIONS = Object.freeze([
+  "  <meta charset=\"UTF-8\">",
+  "  <meta name=\"referrer\" content=\"no-referrer\">",
+  "  <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'\">",
+]);
+const VIEWPORT = "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">";
 
 function invariant(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function digest(bytes) {
+export function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function assertJsonTree(value, location = "provenance") {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    invariant(Number.isSafeInteger(value), `${location} contains a non-integer or unsafe number`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) assertJsonTree(entry, `${location}[${index}]`);
+    return;
+  }
+  invariant(typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype, `${location} must be a plain closed JSON value`);
+  for (const key of Object.keys(value)) assertJsonTree(value[key], `${location}.${key}`);
+}
+
+export function validateProvenance(value) {
+  assertJsonTree(value);
+  const canonicalValue = Buffer.from(JSON.stringify(value), "utf8");
+  invariant(digest(canonicalValue) === EXPECTED_PROVENANCE_VALUE_SHA256, "Parser provenance closed schema or immutable value changed");
+  invariant(value.source.javascriptDependency.license.path === "vendor/tree-sitter-typescript/LICENSE.javascript", "JavaScript dependency notice mapping changed");
+  invariant(value.source.javascriptDependency.license.sha256 === EXPECTED_VENDOR["LICENSE.javascript"].sha256, "JavaScript dependency notice digest mapping changed");
+  invariant(value.source.license.sha256 === EXPECTED_VENDOR.LICENSE.sha256, "TypeScript notice digest mapping changed");
+  return true;
+}
+
+export function validateDylink(role, value) {
+  invariant(Object.hasOwn(EXPECTED_DYLINK, role), `Unknown dylink role: ${role}`);
+  assert.deepEqual(value, EXPECTED_DYLINK[role], `dylink.0 drift: ${role}`);
+  return true;
 }
 
 const utf8 = new TextEncoder();
@@ -94,16 +138,52 @@ function limitDescriptor(value) {
   return `min=${value.minimum};max=${value.maximum ?? "-"};shared=${value.shared};memory64=${value.memory64}`;
 }
 
-function parseCanonicalInventoryAsset(bytes) {
+export function inspectWasm(bytes) {
+  invariant(bytes instanceof Uint8Array, "WASM input must be bytes");
   invariant(bytes.length >= 8 && Buffer.from(bytes.subarray(0, 8)).equals(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0])), "Invalid WASM header");
   const input = reader(bytes, 8);
   const imports = [];
   const exports = [];
   const memories = [];
+  const dylinkSections = [];
+  const ordinarySections = new Set();
   while (!input.done) {
     const sectionId = input.byte();
     const section = input.subreader(input.varuint());
-    if (sectionId === 2) {
+    invariant(sectionId <= 13, "Unknown WASM section");
+    if (sectionId !== 0) {
+      invariant(!ordinarySections.has(sectionId), "Duplicate WASM section");
+      ordinarySections.add(sectionId);
+    }
+    if (sectionId === 0) {
+      const name = section.string();
+      if (name === "dylink.0") {
+        const subsectionTypes = [];
+        let memory;
+        let neededLibraries;
+        while (!section.done) {
+          const type = section.varuint();
+          const subsection = section.subreader(section.varuint());
+          invariant(!subsectionTypes.includes(type), "Duplicate dylink.0 subsection");
+          subsectionTypes.push(type);
+          if (type === 1) {
+            memory = {
+              memorySize: subsection.varuint(),
+              memoryAlign: subsection.varuint(),
+              tableSize: subsection.varuint(),
+              tableAlign: subsection.varuint(),
+            };
+          } else if (type === 2) {
+            neededLibraries = Array.from({ length: subsection.varuint() }, () => subsection.string());
+          } else {
+            throw new Error(`Unknown dylink.0 subsection ${type}`);
+          }
+          invariant(subsection.done, "Trailing dylink.0 subsection metadata");
+        }
+        invariant(memory, "Missing dylink.0 memory subsection");
+        dylinkSections.push({ ...memory, neededLibraries: neededLibraries ?? [], subsectionTypes });
+      }
+    } else if (sectionId === 2) {
       const count = section.varuint();
       for (let index = 0; index < count; index += 1) {
         const module = section.string();
@@ -148,7 +228,8 @@ function parseCanonicalInventoryAsset(bytes) {
       invariant(section.done, "Trailing WASM export bytes");
     }
   }
-  return { imports, exports, memories };
+  invariant(dylinkSections.length === 1, "WASM must contain exactly one dylink.0 section");
+  return { imports, exports, memories, dylink: dylinkSections[0] };
 }
 
 function unsignedTupleCompare(left, right) {
@@ -162,11 +243,11 @@ function unsignedTupleCompare(left, right) {
   return leftBytes.length - rightBytes.length;
 }
 
-export async function generateCanonicalWasmInventory() {
+export async function generateCanonicalWasmInventory(root = projectRoot) {
   const rows = [];
   for (const asset of SELECTED_ASSETS.filter((candidate) => candidate.relativePath.endsWith(".wasm"))) {
-    const bytes = await readFile(path.join(projectRoot, ...asset.relativePath.split("/")));
-    const parsed = parseCanonicalInventoryAsset(bytes);
+    const bytes = await readFile(path.join(root, ...asset.relativePath.split("/")));
+    const parsed = inspectWasm(bytes);
     rows.push(`ASSET\t${path.posix.basename(asset.relativePath)}`);
     rows.push("IMPORT\tmodule\tname\tkind\tdescriptor");
     for (const fields of parsed.imports.sort(unsignedTupleCompare)) rows.push(`IMPORT\t${fields.join("\t")}`);
@@ -174,54 +255,108 @@ export async function generateCanonicalWasmInventory() {
     for (const fields of parsed.exports.sort(unsignedTupleCompare)) rows.push(`EXPORT\t${fields.join("\t")}`);
     rows.push("MEMORY\tindex\torigin\tmodule\tname\tmin-pages\tmax-pages\tshared\tmemory64\tmin-bytes\tmax-bytes");
     for (const [index, memory] of parsed.memories.entries()) {
-      rows.push([
-        "MEMORY", index, memory.origin, memory.module, memory.name, memory.minimum, memory.maximum ?? "-",
-        memory.shared, memory.memory64, memory.minimum * 65_536,
-        memory.maximum === undefined ? "-" : memory.maximum * 65_536,
-      ].join("\t"));
+      rows.push(["MEMORY", index, memory.origin, memory.module, memory.name, memory.minimum, memory.maximum ?? "-", memory.shared, memory.memory64, memory.minimum * 65_536, memory.maximum === undefined ? "-" : memory.maximum * 65_536].join("\t"));
     }
   }
   const generated = Buffer.from(`${rows.join("\n")}\n`, "utf8");
-  invariant(generated.byteLength === 10_167, "Generated canonical WASM inventory byte length changed");
-  invariant(rows.length === 219, "Generated canonical WASM inventory row count changed");
-  invariant(digest(generated) === "55c040fa4f0cf095f1f6819b78984549d40884c75bf599d81da93e662b3f8637", "Generated canonical WASM inventory digest changed");
-  const fixture = await readFile(path.join(projectRoot, "test", "fixtures", "wasm-inventory.tsv"));
+  invariant(generated.byteLength === EXPECTED_INVENTORY.bytes, "Generated canonical WASM inventory byte length changed");
+  invariant(rows.length === EXPECTED_INVENTORY.rows, "Generated canonical WASM inventory row count changed");
+  invariant(digest(generated) === EXPECTED_INVENTORY.sha256, "Generated canonical WASM inventory digest changed");
+  const fixture = await readFile(path.join(root, "test", "fixtures", "wasm-inventory.tsv"));
   invariant(generated.equals(fixture), "Tracked canonical WASM inventory differs from generated evidence");
   return generated;
 }
 
-export async function checkParserAssets() {
+async function listVendorFiles(directory = vendorRoot, prefix = "") {
+  const entries = await readdir(directory, { withFileTypes: true });
+  entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+  const files = [];
+  for (const entry of entries) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const absolute = path.join(directory, entry.name);
+    const metadata = await lstat(absolute);
+    invariant(!metadata.isSymbolicLink(), `Parser vendor payload is a symbolic link: ${relative}`);
+    if (metadata.isDirectory()) files.push(...await listVendorFiles(absolute, relative));
+    else {
+      invariant(metadata.isFile(), `Parser vendor payload is not a file: ${relative}`);
+      files.push(relative);
+    }
+  }
+  return files;
+}
+
+export async function verifyVendorFiles(root = projectRoot) {
+  const rootPath = path.join(root, "vendor", "tree-sitter-typescript");
+  assert.deepEqual(await listVendorFiles(rootPath), [...VENDOR_FILES], "Parser vendor allowlist changed");
+  const contents = new Map();
+  for (const relativePath of VENDOR_FILES) {
+    const bytes = await readFile(path.join(rootPath, ...relativePath.split("/")));
+    const expected = EXPECTED_VENDOR[relativePath];
+    invariant(bytes.byteLength === expected.bytes, `Vendored parser byte length changed: ${relativePath}`);
+    invariant(digest(bytes) === expected.sha256, `Vendored parser digest changed: ${relativePath}`);
+    contents.set(relativePath, bytes);
+  }
+  const provenanceBytes = contents.get("provenance.json");
+  invariant(provenanceBytes.at(-1) === 0x0a && !provenanceBytes.includes(0x0d), "Parser provenance must be exact UTF-8/LF with final LF");
+  const provenance = JSON.parse(decoder.decode(provenanceBytes));
+  validateProvenance(provenance);
+  return { contents, provenance };
+}
+
+export async function expectedNoticeBlock(root = projectRoot) {
+  const typescript = await readFile(path.join(root, "vendor", "tree-sitter-typescript", "LICENSE"), "utf8");
+  const javascript = await readFile(path.join(root, "vendor", "tree-sitter-typescript", "LICENSE.javascript"), "utf8");
+  invariant(typescript.endsWith("\n") && javascript.endsWith("\n"), "Notice payloads must retain final LF");
+  return `<!-- ${NOTICE_LABELS.typescript}\n${typescript}-->\n  <!-- ${NOTICE_LABELS.javascript}\n${javascript}-->`;
+}
+
+export async function assertEntryNotices(bytes, label, root = projectRoot) {
+  invariant(bytes instanceof Uint8Array, `${label} index must be exact bytes`);
+  invariant(!bytes.includes(0x0d), `${label} index contains CR bytes`);
+  const html = decoder.decode(bytes);
+  for (const declaration of EXPECTED_DECLARATIONS) invariant((html.split(declaration).length - 1) === 1, `${label} index declaration changed or duplicated`);
+  const charsetEnd = Buffer.byteLength(html.slice(0, html.indexOf(EXPECTED_DECLARATIONS[0]) + EXPECTED_DECLARATIONS[0].length), "utf8");
+  invariant(charsetEnd <= 1_024, `${label} charset declaration is outside the first 1,024 UTF-8 bytes`);
+  const expected = `${EXPECTED_DECLARATIONS.join("\n")}\n  ${await expectedNoticeBlock(root)}\n${VIEWPORT}`;
+  invariant(html.includes(expected), `${label} notices are missing, modified, merged, swapped, relabelled, or misplaced`);
+  for (const noticeLabel of Object.values(NOTICE_LABELS)) invariant((html.split(noticeLabel).length - 1) === 1, `${label} notice label must occur exactly once: ${noticeLabel}`);
+  return true;
+}
+
+export async function checkParserAssets(root = projectRoot) {
+  const { provenance } = await verifyVendorFiles(root);
   for (const asset of SELECTED_ASSETS) {
-    const bytes = await readFile(path.join(projectRoot, ...asset.relativePath.split("/")));
+    const bytes = await readFile(path.join(root, ...asset.relativePath.split("/")));
     invariant(digest(bytes) === asset.sha256, `Selected parser asset drift: ${asset.role}`);
+    if (asset.bytes !== undefined) invariant(bytes.byteLength === asset.bytes, `Selected parser asset length drift: ${asset.role}`);
+    if (EXPECTED_DYLINK[asset.role]) validateDylink(asset.role, inspectWasm(bytes).dylink);
   }
 
-  const runtimeLicense = await readFile(path.join(projectRoot, "node_modules", "web-tree-sitter", "LICENSE"));
+  const runtimeLicense = await readFile(path.join(root, "node_modules", "web-tree-sitter", "LICENSE"));
   invariant(digest(runtimeLicense) === "c5cfb43042b6b72045f4ba997834d0a7786d2793d91680868b5815b39f14fc78", "web-tree-sitter license drift");
-  const grammarLicense = await readFile(path.join(projectRoot, "node_modules", "@vscode", "tree-sitter-wasm", "LICENSE"));
+  const grammarLicense = await readFile(path.join(root, "node_modules", "@vscode", "tree-sitter-wasm", "LICENSE"));
   invariant(digest(grammarLicense) === "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383", "@vscode/tree-sitter-wasm license drift");
 
   const runtimeAsset = SELECTED_ASSETS[0];
   const runtimeWasm = SELECTED_ASSETS[1];
-  const runtime = await import(pathToFileURL(path.join(projectRoot, ...runtimeAsset.relativePath.split("/"))).href);
+  const runtime = await import(pathToFileURL(path.join(root, ...runtimeAsset.relativePath.split("/"))).href);
   await runtime.Parser.init({
-    locateFile(requestedPath, _scriptDirectory) {
-      if (requestedPath === "web-tree-sitter.wasm") {
-        return pathToFileURL(path.join(projectRoot, ...runtimeWasm.relativePath.split("/"))).href;
-      }
+    locateFile(requestedPath) {
+      if (requestedPath === "web-tree-sitter.wasm") return pathToFileURL(path.join(root, ...runtimeWasm.relativePath.split("/"))).href;
       throw new Error("Unexpected parser runtime asset request");
     },
-    print() {},
-    printErr() {},
+    print() {}, printErr() {},
   });
   invariant(runtime.MIN_COMPATIBLE_VERSION === 13 && runtime.LANGUAGE_VERSION === 15, "Runtime ABI acceptance must remain 13 through 15");
   for (const asset of SELECTED_ASSETS.filter((candidate) => candidate.abi !== undefined)) {
-    const language = await runtime.Language.load(new Uint8Array(await readFile(path.join(projectRoot, ...asset.relativePath.split("/")))));
+    const language = await runtime.Language.load(new Uint8Array(await readFile(path.join(root, ...asset.relativePath.split("/")))));
     invariant(language.abiVersion === asset.abi, `Grammar ABI drift: ${asset.role}`);
   }
 
-  await generateCanonicalWasmInventory();
-  console.log("Verified selected parser hashes, licenses, runtime/grammar ABIs, and canonical WASM inventory.");
+  invariant(provenance.closedAssetContract.abi.typescript === 14 && provenance.closedAssetContract.abi.tsx === 14, "Provenance ABI pins changed");
+  await generateCanonicalWasmInventory(root);
+  await assertEntryNotices(await readFile(path.join(root, "index.html")), "Source", root);
+  console.log("Verified the six-file parser vendor closure, provenance, notices, hashes, ABIs, dylink.0, and canonical inventory.");
 }
 
 const invokedPath = process.argv[1] && path.resolve(process.argv[1]);

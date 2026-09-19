@@ -50,6 +50,8 @@ const nesting=core+"//"+"p".repeat(MAX-core.length-2);
 const million=";".repeat(1000000);
 const longString='"'+"x".repeat(MAX-3)+'";';
 const commentOnly="//"+"c".repeat(MAX-2);
+const typeQueryCall="importOriginal<typeof import('./module')>();";
+const typeQueryGlrStress=typeQueryCall+"//"+"g".repeat(MAX-typeQueryCall.length-2);
 const tsType="type X="+"(".repeat(10000)+"string"+")".repeat(10000)+";";
 const tsx="<A>".repeat(10000)+"x"+"</A>".repeat(10000)+";";
 const millionTuples=Array.from({length:1000000},(_,index)=>["valueAnchor",index,index+1]);
@@ -60,6 +62,7 @@ const cases=[
   {id:"js-long-string",family:"javascript-no-jsx",path:"stress.js",source:longString,tuples:[["valueAnchor",0,MAX]],S:1,U:1},
   {id:"js-comment-only",family:"javascript-no-jsx",path:"stress.js",source:commentOnly,tuples:[["lexicalExclusion",0,MAX]],S:0,U:0,unitForms:[],unitByteSpans:[]},
   {id:"ts-type-nesting-10000",family:"typescript",path:"stress.ts",source:tsType,tuples:[["typeOnly",0,tsType.length]],S:1,U:0,unitForms:[],unitByteSpans:[]},
+  {id:"ts-type-query-import-glr-2mib",family:"typescript",path:"stress.ts",source:typeQueryGlrStress,tuples:[["valueAnchor",0,typeQueryCall.length],["lexicalExclusion",typeQueryCall.length,MAX]],S:1,U:1},
   {id:"tsx-elements-10000",family:"tsx",path:"stress.tsx",source:tsx,tuples:tsxTuples,S:1,U:1},
 ];
 
@@ -81,6 +84,14 @@ for(const item of cases){
   console.log("browser-evidence:done:"+item.id);
 }
 
+for(const item of [
+  {family:"typescript",path:"malformed.ts",source:typeQueryCall+" }"},
+  {family:"tsx",path:"malformed.tsx",source:"const view=<A/>; "+typeQueryCall+" </B>"},
+]){
+  const tracker=resources();
+  const result=await processAdmittedBaseMetrics([{canonicalPath:item.path,normalizedSource:item.source}],createParser(tracker),(event)=>tracker.application(event));
+  if(JSON.stringify(result)!==JSON.stringify({kind:"failure",category:"Metric processing failed",code:"M1-MET-1"})||!Object.values(tracker.live).every((count)=>count===0)||JSON.stringify(tracker.cleanup)!==JSON.stringify({parserDeletes:1,treeDeletes:1,cursorDeletes:1,sourceReleases:1,observationStreamReleases:0}))throw new Error("patched grammar malformed rejection changed: "+item.family);
+}
 const matrixPaths=[];
 for(let index=0;index<4000;index++){
   const suffix=["js","jsx","ts","tsx"][index%4];

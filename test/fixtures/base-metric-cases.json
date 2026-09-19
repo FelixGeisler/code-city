@@ -4307,6 +4307,118 @@
       }
     },
     {
+      "id": "type-query-import-call-typescript",
+      "canonicalPath": "grammar.ts",
+      "source": "importOriginal<typeof import('./module')>();",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "grammar.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 44
+          }
+        ],
+        "digest": "d5ab739326dae343cf7c301fb928afff5f6a7a9a995fdce49f77c202124192eb"
+      }
+    },
+    {
+      "id": "type-query-import-call-tsx",
+      "canonicalPath": "grammar.tsx",
+      "source": "const view=<A/>; importOriginal<typeof import('./module')>();",
+      "grammarFamily": "tsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "grammar.tsx",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 16
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 11,
+            "endByte": 15
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 17,
+            "endByte": 61
+          }
+        ],
+        "digest": "648a6a8e9d9c23c757252a89b8ee2e86e8f58a2c14d5d30df3a7778477fffe80"
+      }
+    },
+    {
+      "id": "type-query-import-call-nested",
+      "canonicalPath": "grammar.ts",
+      "source": "const loaded=importOriginal<Promise<typeof import('./module')>>();",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "grammar.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 66
+          }
+        ],
+        "digest": "7e043bc234f8e969a28e6618ec0a1e973770205d789f61ba6a30068843a0a08b"
+      }
+    },
+    {
+      "id": "type-query-import-call-malformed-typescript",
+      "canonicalPath": "grammar.ts",
+      "source": "importOriginal<typeof import('./module')>(); }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
+      "id": "type-query-import-call-malformed-tsx",
+      "canonicalPath": "grammar.tsx",
+      "source": "const view=<A/>; importOriginal<typeof import('./module')>(); </B>",
+      "grammarFamily": "tsx",
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
       "id": "contextual-top-return",
       "canonicalPath": "c.js",
       "source": "return 1;",

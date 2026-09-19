@@ -27,8 +27,8 @@ const assets = {
   runtimeJavaScript: assetPath("node_modules/web-tree-sitter/web-tree-sitter.js"),
   runtimeWasm: assetPath("node_modules/web-tree-sitter/web-tree-sitter.wasm"),
   grammarJavaScript: assetPath("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm"),
-  grammarTypeScript: assetPath("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm"),
-  grammarTsx: assetPath("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-tsx.wasm"),
+  grammarTypeScript: assetPath("vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm"),
+  grammarTsx: assetPath("vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm"),
 };
 const bytesFromFileUrl = async (url) => new Uint8Array(await readFile(fileURLToPath(url)));
 const failure = { kind: "failure", category: "Metric processing failed", code: "M1-MET-1" };

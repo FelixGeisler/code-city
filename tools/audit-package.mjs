@@ -17,6 +17,7 @@ import {
 } from "./package-policy.mjs";
 import { closePackageServer, createPackageServer, listen } from "./serve-package.mjs";
 import { checkPackagedBrowserEvidence } from "./check-browser-evidence.mjs";
+import { assertEntryNotices } from "./check-parser-assets.mjs";
 
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const distDirectory = path.join(projectRoot, "dist");
@@ -65,8 +66,8 @@ function assertProductionShape(manifest) {
     "7c49e3c1d87e24e0bb4c2def909d17154dfde281f5f8280225450090bb4b8110",
     "c03bccdc3b448a32848f5ae327e209c982bbb0840d43eec8bc2d5759544a1ed3",
     "5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240",
-    "778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d",
-    "79e5da75ea62855a0cd67177685f0164eac87d5f630b3cbe1e0a099751ad30f8",
+    "e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9",
+    "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7",
   ]);
   const selectedAssets = manifest.files.filter((record) => expectedAssetDigests.has(record.sha256));
   invariant(selectedAssets.length === 5, "Packaged parser assets differ from the five accepted selected files");
@@ -148,6 +149,8 @@ export async function auditCanonicalPackage() {
     }
     invariant(remoteLiterals.length === 5, "Production contains an untracked remote URL literal");
 
+    const entryHtmlBytes = await readFile(path.join(distDirectory, "index.html"));
+    await assertEntryNotices(entryHtmlBytes, "Built");
     const entryHtml = packageFiles.get("index.html");
     inspectEntryPolicy(entryHtml);
     const references = collectRuntimeReferences(entryHtml, packageFiles);
@@ -184,6 +187,7 @@ export async function auditCanonicalPackage() {
       const content = Buffer.from(await response.arrayBuffer());
       invariant(content.byteLength === record.byteLength, `HTTP body length differs for ${route.path}`);
       invariant(digest(content) === record.sha256, `HTTP body digest differs for ${route.path}`);
+      if (route.path === "index.html") await assertEntryNotices(content, "HTTP-served");
     }
 
     const workerResponse = await fetch(`${origin}${PACKAGE_BASE_PATH}${workerAsset.path}`);

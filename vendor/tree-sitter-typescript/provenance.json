@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 2,
+  "source": {
+    "typescript": {
+      "package": "tree-sitter-typescript@0.23.2",
+      "metadataUrl": "https://registry.npmjs.org/tree-sitter-typescript/0.23.2",
+      "tarballUrl": "https://registry.npmjs.org/tree-sitter-typescript/-/tree-sitter-typescript-0.23.2.tgz",
+      "commit": "f975a621f4e7f532fe322e13c4f79495e0a7b2e7",
+      "npmIntegrity": "sha512-e04JUUKxTT53/x3Uq1zIL45DoYKVfHH4CZqwgZhPg5qYROl5nQjV+85ruFzFGZxu+QeFVbRTPDRnqL9UbU4VeA==",
+      "tarballSha256": "0fdf63c35930a75885145d75ee63cb879da2d49db9bfe454bd8e60b08ba778a1",
+      "tarballBytes": 2961431
+    },
+    "javascriptDependency": {
+      "package": "tree-sitter-javascript@0.23.1",
+      "metadataUrl": "https://registry.npmjs.org/tree-sitter-javascript/0.23.1",
+      "tarballUrl": "https://registry.npmjs.org/tree-sitter-javascript/-/tree-sitter-javascript-0.23.1.tgz",
+      "commit": "3a837b6f3658ca3618f2022f8707e29739c91364",
+      "npmIntegrity": "sha512-/bnhbrTD9frUYHQTiYnPcxyHORIw157ERBa6dqzaKxvR/x3PC4Yzd+D1pZIMS6zNg2v3a8BZ0oK7jHqsQo9fWA==",
+      "tarballSha256": "90e80b25a67517a4daf6ad751557bee21efbda7b7a5a554897933245d1734398",
+      "tarballBytes": 632551,
+      "license": {
+        "spdx": "MIT",
+        "description": "Source dependency notice for tree-sitter-javascript@0.23.1",
+        "path": "vendor/tree-sitter-typescript/LICENSE.javascript",
+        "sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1",
+        "bytes": 1080
+      }
+    },
+    "license": {
+      "spdx": "MIT",
+      "sha256": "49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559",
+      "bytes": 1080
+    }
+  },
+  "patch": {
+    "sha256": "470d7029ad57d743704d5c1ab871449a4e817b9bd8c3266912aeb52b4ad4b62d",
+    "bytes": 963,
+    "application": "patch --batch --fuzz=0 -p1",
+    "target": "common/define-grammar.js",
+    "change": "move call_expression/_type_query_call_expression and call_expression/_type_query_call_expression_in_type_annotation from precedences to conflicts",
+    "rationaleUrl": "https://github.com/canopy-labs/tree-sitter-typescript/pull/1",
+    "rationaleHead": "dbac36ba77450e21d22da12439bf02607f1239d1"
+  },
+  "toolchain": {
+    "generator": {
+      "package": "tree-sitter-cli@0.24.4",
+      "metadataUrl": "https://registry.npmjs.org/tree-sitter-cli/0.24.4",
+      "tarballUrl": "https://registry.npmjs.org/tree-sitter-cli/-/tree-sitter-cli-0.24.4.tgz",
+      "sourceCommit": "fc8c1863e2e5724a0c40bb6e6cfc8631bfe5908b",
+      "npmIntegrity": "sha512-I4sdtDidnujYL0tR0Re9q0UJt5KrITf2m+GMHjT4LH6IC6kpM6eLzSR7RS36Z4t5ZQBjDHvg2QUJHAWQi3P2TA==",
+      "tarballSha256": "2d33d29e83bd91fa338d8f08fb22db80a54ed93600e0ff6fc524f441652356d4",
+      "tarballBytes": 7065,
+      "executableGzipUrl": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.24.4/tree-sitter-linux-x64.gz",
+      "releaseAssetId": 205418044,
+      "gzipSha256": "60578f6e563e046d311d7cac4bf27207eb6982b97ddec6b78022a4afdf736a9b",
+      "gzipBytes": 8537215,
+      "executableSha256": "e62065f887c51079c943ace813a620a2ed4e69b7f0297192e6db6dc5c633715c",
+      "executableBytes": 23984272,
+      "upstreamPublishedChecksumAvailable": false
+    },
+    "builder": {
+      "package": "tree-sitter-cli@0.25.10",
+      "metadataUrl": "https://registry.npmjs.org/tree-sitter-cli/0.25.10",
+      "tarballUrl": "https://registry.npmjs.org/tree-sitter-cli/-/tree-sitter-cli-0.25.10.tgz",
+      "sourceCommit": "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
+      "npmIntegrity": "sha512-KoebQguKMCIghisEOdA372TIbrUl0kdnfZ9YQIBRAeOvNSKe85XbU4LuFW7hduRUwJj0rAG7pX5wo9sZhbBF1g==",
+      "tarballSha256": "351b439451769d7e883c24c852e9f2b6e219f429221ad42d7da0bf35145da261",
+      "tarballBytes": 7384,
+      "executableGzipUrl": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.25.10/tree-sitter-linux-x64.gz",
+      "releaseAssetId": 296134134,
+      "gzipSha256": "8283ddba69253c698f6e987ba0e2f9285e079c8db4d36ebe1394b5bb3a0ebdfd",
+      "gzipBytes": 6521182,
+      "publishedGzipSha256": "8283ddba69253c698f6e987ba0e2f9285e079c8db4d36ebe1394b5bb3a0ebdfd",
+      "executableSha256": "de21a99ed95e683526b26eee456e12352752487daed0d20afc85157212ab8e3d",
+      "executableBytes": 19078032
+    },
+    "emscripten": {
+      "version": "3.1.64",
+      "recipeCommit": "20edf6614564cd76acac8107d746ca1182d6f3c5e",
+      "recipeUrl": "https://github.com/emscripten-core/emsdk/commit/20edf6614564cd76acac8107d746ca1182d6f3c5e",
+      "image": "docker.io/emscripten/emsdk@sha256:8847dad4171ebc8a53d9ae5cda86a2546ef5b2e68834c14dc1ba2b2962e125cc",
+      "platform": "linux/amd64",
+      "pullPolicy": "never",
+      "networkDuringBuild": "none"
+    }
+  },
+  "build": {
+    "generate": {
+      "executable": "tree-sitter-cli@0.24.4 release binary",
+      "arguments": [
+        "generate",
+        "--abi",
+        "14"
+      ],
+      "dialects": [
+        "typescript",
+        "tsx"
+      ]
+    },
+    "compile": {
+      "executable": "tree-sitter-cli@0.25.10 release binary",
+      "arguments": [
+        "build",
+        "--wasm"
+      ],
+      "emscripten": "3.1.64"
+    },
+    "controls": 2,
+    "patched": 2,
+    "independentFreshSourceTrees": true
+  },
+  "reproduction": {
+    "control": {
+      "typescriptWasm": {
+        "sha256": "778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d",
+        "bytes": 1413849
+      },
+      "tsxWasm": {
+        "sha256": "79e5da75ea62855a0cd67177685f0164eac87d5f630b3cbe1e0a099751ad30f8",
+        "bytes": 1445638
+      },
+      "typescriptGrammarJson": {
+        "sha256": "99dc4b95424dff47c89acb50d5d3f25b081b07eaff43994b7881dccd4186b214",
+        "bytes": 281518
+      },
+      "typescriptParserC": {
+        "sha256": "74fe453edd70f4eae9af0a1050cbd7943d8971d59165b6aaebbaa0a0b716d1aa",
+        "bytes": 8745894
+      },
+      "tsxGrammarJson": {
+        "sha256": "f98a7830b67be266c9e9effb673a5fc154ad6aa26f87f7c6d4a9191e09d8b357",
+        "bytes": 281578
+      },
+      "tsxParserC": {
+        "sha256": "1902cb53fa7ff5179df89b2eea863165e84c8cc866226419dc26921d8c055885",
+        "bytes": 8769870
+      }
+    },
+    "patched": {
+      "typescriptWasm": {
+        "sha256": "e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9",
+        "bytes": 1362713
+      },
+      "tsxWasm": {
+        "sha256": "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7",
+        "bytes": 1446550
+      },
+      "typescriptGrammarJson": {
+        "sha256": "76fa04475c29a77c3f89793cf7769d19de57672e15bb837a0903cc4cd47c9fbb",
+        "bytes": 281310
+      },
+      "typescriptParserC": {
+        "sha256": "0e7e004cfa96d5487c02420ed5a66cd950e7935f1a29c6be2cad63281ba00d2a",
+        "bytes": 8429417
+      },
+      "tsxGrammarJson": {
+        "sha256": "9a58ec754c72a675b85efda53aa1640a52a0189a5311e71e030142abc9df4d56",
+        "bytes": 281370
+      },
+      "tsxParserC": {
+        "sha256": "0491086c6d03d60103ad87a8793fb4f3d3728f49ead650025c1135b60d27d2f9",
+        "bytes": 8777815
+      }
+    },
+    "nodeTypes": {
+      "typescript": {
+        "sha256": "c790a733fc756b54d4e54dceeb7d2d51e40d8b57136e70277753a75804cce3e3",
+        "bytes": 108583
+      },
+      "tsx": {
+        "sha256": "78b5789145286799a27a0a7ecc36cc1bcb151f94ec7fa631b248459867010c8c",
+        "bytes": 113345
+      },
+      "byteIdenticalAcrossControlPatchedAndUpstream": true
+    }
+  },
+  "closedAssetContract": {
+    "abi": {
+      "typescript": 14,
+      "tsx": 14
+    },
+    "canonicalInventory": {
+      "sha256": "727c583b8823fdaa80204c3f3211c37ed4c6bd8b07a89afbf8bcc90bad28d931",
+      "bytes": 10167,
+      "rows": 219,
+      "onlyDeltaFromBaseline": "TypeScript env.memory minimum 22 to exact 21 in IMPORT and normalized MEMORY projection; all other 217 rows byte-identical"
+    },
+    "dylink": {
+      "typescript": {
+        "memorySize": 1330484,
+        "memoryAlign": 4,
+        "tableSize": 7,
+        "tableAlign": 0,
+        "neededLibraries": [],
+        "subsectionTypes": [
+          1
+        ]
+      },
+      "tsx": {
+        "memorySize": 1409560,
+        "memoryAlign": 4,
+        "tableSize": 7,
+        "tableAlign": 0,
+        "neededLibraries": [],
+        "subsectionTypes": [
+          1
+        ]
+      }
+    }
+  }
+}

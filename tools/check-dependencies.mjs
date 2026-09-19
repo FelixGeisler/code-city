@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyVendorFiles } from "./check-parser-assets.mjs";
 
 function invariant(condition, message) {
   if (!condition) {
@@ -13,6 +14,7 @@ function isExactVersion(version) {
 }
 
 export async function inspectDependencyClosure(rootDirectory) {
+  await verifyVendorFiles(rootDirectory);
   const packagePath = path.join(rootDirectory, "package.json");
   const lockPath = path.join(rootDirectory, "package-lock.json");
   const packageManifest = JSON.parse(await readFile(packagePath, "utf8"));

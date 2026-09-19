@@ -1770,6 +1770,7 @@ function validateBrowserResult(result, expectedAssets) {
     { id: "js-long-string", family: "javascript-no-jsx" },
     { id: "js-comment-only", family: "javascript-no-jsx" },
     { id: "ts-type-nesting-10000", family: "typescript" },
+    { id: "ts-type-query-import-glr-2mib", family: "typescript" },
     { id: "tsx-elements-10000", family: "tsx" },
   ]);
   for (const [index, entry] of result.cases.entries()) {
