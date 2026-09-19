@@ -24,8 +24,17 @@
 successful current attempt.
 
 |Validated city
-|Controller-owned, non-aliasing geometry, inspection, and immutable-centre
+|Controller-owned, non-aliasing geometry, inspection, and numeric presentation
 snapshots produced by the sole city-payload validator.
+
+|Numeric presentation
+|An internal immutable value containing ordered district plate minima and
+dimensions, plate-inclusive `sceneBounds`, and their centre. It contains no
+path, group identity, label, projection, callback, or observer field.
+
+|District plate
+|One opaque, noninteractive prism under an existing packed virtual group cell.
+It is rendered before buildings and is never a pick or focus candidate.
 
 |Semantic state
 |The controller's current-generation inspection facts, hover, selection, and

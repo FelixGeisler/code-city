@@ -4,6 +4,7 @@ import { createTreeSitterAdapter } from ${JSON.stringify(`${projectRootUrl}src/e
 import { processAdmittedBaseMetrics } from ${JSON.stringify(`${projectRootUrl}src/application/base-metric-processing.ts`)};
 import { deriveBaseMetricAnalysis } from ${JSON.stringify(`${projectRootUrl}src/domain/base-metrics.ts`)};
 import { buildCity } from ${JSON.stringify(`${projectRootUrl}src/domain/city-model.ts`)};
+import { validateCityPayload } from ${JSON.stringify(`${projectRootUrl}src/application/city-payload.ts`)};
 import { createCityPresenter } from ${JSON.stringify(`${projectRootUrl}src/edge/city-presenter.ts`)};
 
 const ASSETS = ${JSON.stringify(assets)};
@@ -132,6 +133,35 @@ for(let run=0;run<2;run++){
   complexityMatrixRuns.push({modules:4000,normalizedBytes:41943040,expected:expectedComplexity,observed,densePackedByteLength,peakLive,cleanup,retainedOnlyFinalFacts,runDigest,pass});
   console.log("browser-evidence:done:complexity-matrix:"+run);
 }
+function exactClip(matrix,corner,column){const a=Math.fround(Math.fround(matrix[column])*Math.fround(corner[0]));const b=Math.fround(Math.fround(matrix[column+4])*Math.fround(corner[1]));const c=Math.fround(Math.fround(matrix[column+8])*Math.fround(corner[2]));const d=Math.fround(matrix[column+12]);return Math.fround(Math.fround(Math.fround(a+b)+c)+d);}
+function matrixOracle(matrix,bounds,centre,lateralFit){
+  if(!Array.isArray(matrix)||matrix.length!==16)throw new Error("maximum matrix missing");
+  let corners=0;
+  for(const x of [bounds[0],bounds[3]])for(const y of [bounds[1],bounds[4]])for(const z of [bounds[2],bounds[5]]){
+    const corner=[x-centre[0],y-centre[1],z-centre[2]];const clipX=exactClip(matrix,corner,0);const clipY=exactClip(matrix,corner,1);const clipZ=exactClip(matrix,corner,2);const clipW=exactClip(matrix,corner,3);const depth=Math.fround(clipZ/clipW);
+    if(!(clipW>0&&depth>-1&&depth<1))throw new Error("maximum strict W/depth oracle failed");
+    if(lateralFit&&!(-1<clipX/clipW&&clipX/clipW<1&&-1<clipY/clipW&&clipY/clipW<1))throw new Error("maximum overview framing failed");
+    corners++;
+  }
+  return {corners,positiveW:true,strictDepth:true,lateralFit};
+}
+function maximumGeometryOracle(city,buildingUpload,plateUpload){
+  const count=city.geometry.count;const origins=[...city.geometry.origins];const sizes=[...city.geometry.sizes];
+  const sourceBounds=[Math.min(...Array.from({length:count},(_,i)=>origins[i*3])),Math.min(...Array.from({length:count},(_,i)=>origins[i*3+1])),Math.min(...Array.from({length:count},(_,i)=>origins[i*3+2])),Math.max(...Array.from({length:count},(_,i)=>origins[i*3]+sizes[i*3])),Math.max(...Array.from({length:count},(_,i)=>origins[i*3+1]+sizes[i*3+1])),Math.max(...Array.from({length:count},(_,i)=>origins[i*3+2]+sizes[i*3+2]))];
+  if(JSON.stringify(sourceBounds)!==JSON.stringify([...city.geometry.bounds]))throw new Error("maximum source bounds changed");
+  const cells=Array.from({length:count},(_,index)=>({minimum:[origins[index*3]-3,-0.5,origins[index*3+2]-3],dimensions:[sizes[index*3]+6,0.5,sizes[index*3+2]+6]}));
+  const sceneBounds=[Math.min(sourceBounds[0],...cells.map(cell=>cell.minimum[0])),Math.min(sourceBounds[1],...cells.map(cell=>cell.minimum[1])),Math.min(sourceBounds[2],...cells.map(cell=>cell.minimum[2])),Math.max(sourceBounds[3],...cells.map(cell=>cell.minimum[0]+cell.dimensions[0])),Math.max(sourceBounds[4],...cells.map(cell=>cell.minimum[1]+cell.dimensions[1])),Math.max(sourceBounds[5],...cells.map(cell=>cell.minimum[2]+cell.dimensions[2]))];
+  const centre=[(sceneBounds[0]+sceneBounds[3])/2,(sceneBounds[1]+sceneBounds[4])/2,(sceneBounds[2]+sceneBounds[5])/2];
+  const buildingBytes=Uint8Array.from(buildingUpload);const buildingView=new DataView(buildingBytes.buffer);const plateBytes=Uint8Array.from(plateUpload);const plateView=new DataView(plateBytes.buffer);
+  if(buildingUpload.length!==count*28||plateUpload.length!==count*24)throw new Error("maximum instance byte count changed");
+  for(let index=0;index<count;index++)for(let axis=0;axis<3;axis++){
+    if(buildingView.getFloat32(index*28+axis*4,true)!==Math.fround(origins[index*3+axis]-centre[axis]))throw new Error("maximum building shared centre changed");
+    if(buildingView.getFloat32(index*28+12+axis*4,true)!==sizes[index*3+axis])throw new Error("maximum building dimensions changed");
+    if(plateView.getFloat32(index*24+axis*4,true)!==Math.fround(cells[index].minimum[axis]-centre[axis]))throw new Error("maximum exact plate minimum changed");
+    if(plateView.getFloat32(index*24+12+axis*4,true)!==cells[index].dimensions[axis])throw new Error("maximum exact plate dimensions changed");
+  }
+  return {sourceBounds,sceneBounds,centre,cells:cells.length};
+}
 function presentationPlatform(state,compileFailure=false){
   return {createCanvas(){
     const canvas=document.createElement("canvas");
@@ -145,19 +175,21 @@ function presentationPlatform(state,compileFailure=false){
       if(!actual)return null;
       state.actualContexts++;
       const programKinds=new Map();const vaoKinds=new Map();const uniformNames=new Map();
-      let programCount=0;let vaoCount=0;let currentProgram=null;let currentVao=null;
-      const resourceKind=(count)=>count===1?"city":"unexpected";
+      let programCount=0;let vaoCount=0;let currentProgram=null;let currentVao=null;let currentPass=null;
+      const programKind=(count)=>count===1?"city":"unexpected";
+      const vaoKind=(count)=>count===1?"building":count===2?"plate":"unexpected";
       return new Proxy(actual,{get(target,property){
-        if(property==="createProgram")return ()=>{const program=target.createProgram();if(program)programKinds.set(program,resourceKind(++programCount));return program;};
-        if(property==="createVertexArray")return ()=>{const vao=target.createVertexArray();if(vao)vaoKinds.set(vao,resourceKind(++vaoCount));return vao;};
+        if(property==="createProgram")return ()=>{const program=target.createProgram();if(program)programKinds.set(program,programKind(++programCount));return program;};
+        if(property==="createVertexArray")return ()=>{const vao=target.createVertexArray();if(vao)vaoKinds.set(vao,vaoKind(++vaoCount));return vao;};
         if(property==="useProgram")return (program)=>{currentProgram=program;return target.useProgram(program);};
         if(property==="bindVertexArray")return (vao)=>{currentVao=vao;return target.bindVertexArray(vao);};
         if(property==="bufferData")return (kind,data,usage)=>{state.uploads.push(Array.from(new Uint8Array(data.buffer,data.byteOffset,data.byteLength)));return target.bufferData(kind,data,usage);};
         if(property==="bufferSubData")return (kind,offset,data)=>{state.subUploads.push(Array.from(new Uint8Array(data.buffer,data.byteOffset,data.byteLength)));return target.bufferSubData(kind,offset,data);};
         if(property==="getUniformLocation")return (program,name)=>{const location=target.getUniformLocation(program,name);if(location)uniformNames.set(location,name);return location;};
-        if(property==="uniform1i")return (location,value)=>{state.uniforms.push({name:uniformNames.get(location),value});return target.uniform1i(location,value);};
+        if(property==="uniform1i")return (location,value)=>{const name=uniformNames.get(location);state.uniforms.push({name,value});if(name==="u_passKind")currentPass=value;return target.uniform1i(location,value);};
+        if(property==="uniformMatrix4fv")return (location,transpose,matrix)=>{state.matrices.push(Array.from(matrix));return target.uniformMatrix4fv(location,transpose,matrix);};
         if(property==="shaderSource")return (shader,source)=>{state.shaderSources.push(source);return target.shaderSource(shader,source);};
-        if(property==="drawElementsInstanced")return (...args)=>{const program=programKinds.get(currentProgram);const vao=vaoKinds.get(currentVao);if(program!=="city"||vao!=="city"||args[0]!==0x0004)throw new Error("Non-fill draw identity");state.draws++;state.operations.push("city");state.drawUniforms.push(state.uniforms.slice(-2).map(({name,value})=>({name,value})));return target.drawElementsInstanced(...args);};
+        if(property==="drawElementsInstanced")return (...args)=>{const program=programKinds.get(currentProgram);const vao=vaoKinds.get(currentVao);const expectedVao=currentPass===0?"plate":currentPass===1?"building":"unexpected";if(program!=="city"||vao!==expectedVao||args[0]!==0x0004)throw new Error("Non-fill draw identity");state.draws++;state.operations.push(expectedVao);if(currentPass===1)state.drawUniforms.push(state.uniforms.filter(({name})=>name==="u_hoverIndex"||name==="u_selectionIndex").slice(-2).map(({name,value})=>({name,value})));return target.drawElementsInstanced(...args);};
         if(property==="disable")return (...args)=>{if(args[0]===0x0b71)state.operations.push("depth:off");return target.disable(...args);};
         if(property==="enable")return (...args)=>{if(args[0]===0x0b71)state.operations.push("depth:on");if(args[0]===0x8037)state.polygonOffsetEnables++;return target.enable(...args);};
         if(property==="isContextLost"&&state.contextLost)return ()=>true;
@@ -190,11 +222,12 @@ function presentationHost(width,height){
   document.body.append(host,reset);
   return {host,dimensions,reset,resetEvidence:()=>({adds:resetAdds,removes:resetRemoves})};
 }
-const presentationModel=buildCity([{canonicalPath:"browser.js",S:1,U:1,M:1}]).geometry;
+const presentationCity=validateCityPayload(buildCity([{canonicalPath:"browser.js",S:1,U:1,M:1}]));
+const presentationModel=presentationCity.geometry;
 const emptyEventSink={hoverIndex(){},activationIndex(){},selectionAction(){}};
-function stageCommit(presenter,host,generation){
+function stageCommit(presenter,host,generation,city=presentationCity){
   const priorChildren=[...host.childNodes];
-  const staged=presenter.stage(generation,presentationModel,emptyEventSink);
+  const staged=presenter.stage(generation,city.geometry,city.presentation,emptyEventSink);
   if(staged.kind!=="staged")return staged;
   if(priorChildren.length!==host.childNodes.length||priorChildren.some((node,index)=>host.childNodes[index]!==node))throw new Error("Presenter stage was not detached");
   const committed=presenter.commit(staged.token);
@@ -203,8 +236,8 @@ function stageCommit(presenter,host,generation){
   if(presenter.setVisualState(generation,null,null).kind!=="applied")throw new Error("Initial visual state was not applied");
   return committed;
 }
-const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,focus:null,accessibility:null,inputCleanup:null,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossOrdering:null,lossCleanup:null,lossTerminalState:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,compileFailureTerminalState:null,pass:false};
-const makeState=()=>({canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],uploads:[],subUploads:[],uniforms:[],drawUniforms:[],shaderSources:[],operations:[],polygonOffsetEnables:0,contextLost:false,deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}});
+const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,focus:null,maximum:null,accessibility:null,inputCleanup:null,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossOrdering:null,lossCleanup:null,lossTerminalState:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,compileFailureTerminalState:null,pass:false};
+const makeState=()=>({canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],uploads:[],subUploads:[],uniforms:[],drawUniforms:[],matrices:[],shaderSources:[],operations:[],polygonOffsetEnables:0,contextLost:false,deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}});
 let focusPass=false;
 let faceShadingPass=false;
 {
@@ -236,8 +269,20 @@ let faceShadingPass=false;
   const shaderFocus=state.shaderSources.some((shader)=>shader.includes("uniform int u_hoverIndex;")&&shader.includes("uniform int u_selectionIndex;")&&shader.includes("displayed = 0.70 * ordinary;")&&shader.includes("mix(displayed, ordinary, 0.15)")&&shader.includes("mix(ordinary, vec3(1.0), 0.15)"));
   const initialUniforms=state.drawUniforms.slice(0,2);
   presentation.focus={allocationUploads:state.uploads.map((bytes)=>bytes.length),initialUniforms,selection,same,hover,clear,camera,reset,immutableUploads:JSON.stringify(state.uploads)===immutableUploads,subUploads:state.subUploads.length,shaderFocus,faceShading:faceShadingPass,polygonOffsetEnables:state.polygonOffsetEnables,cleanup:null};
-  focusPass=JSON.stringify(initialUniforms)===JSON.stringify([[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}],[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]])&&JSON.stringify(selection)===JSON.stringify({draws:1,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:0}]})&&JSON.stringify(same)===JSON.stringify({draws:1,uniforms:[{name:"u_hoverIndex",value:0},{name:"u_selectionIndex",value:0}]})&&JSON.stringify(hover)===JSON.stringify({draws:1,uniforms:[{name:"u_hoverIndex",value:0},{name:"u_selectionIndex",value:-1}]})&&JSON.stringify(clear)===JSON.stringify({draws:1,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]});
-  if(repeat.kind!=="committed"||presentation.initialDraws!==1||presentation.repeatDraws!==1||presentation.resizeDraws!==1||failures.length!==0||holder.host.firstChild!==activeCanvas||activeCanvas.width!==400||activeCanvas.height!==240)throw new Error("Actual WebGL2 present/repeat/focus/resize evidence failed");
+  focusPass=JSON.stringify(initialUniforms)===JSON.stringify([[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}],[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]])&&JSON.stringify(selection)===JSON.stringify({draws:2,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:0},{name:"u_passKind",value:0},{name:"u_passKind",value:1}]})&&JSON.stringify(same)===JSON.stringify({draws:2,uniforms:[{name:"u_hoverIndex",value:0},{name:"u_selectionIndex",value:0},{name:"u_passKind",value:0},{name:"u_passKind",value:1}]})&&JSON.stringify(hover)===JSON.stringify({draws:2,uniforms:[{name:"u_hoverIndex",value:0},{name:"u_selectionIndex",value:-1},{name:"u_passKind",value:0},{name:"u_passKind",value:1}]})&&JSON.stringify(clear)===JSON.stringify({draws:2,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1},{name:"u_passKind",value:0},{name:"u_passKind",value:1}]});
+  if(repeat.kind!=="committed"||presentation.initialDraws!==2||presentation.repeatDraws!==2||presentation.resizeDraws!==2||failures.length!==0||holder.host.firstChild!==activeCanvas||activeCanvas.width!==400||activeCanvas.height!==240)throw new Error("Actual WebGL2 present/repeat/focus/resize evidence failed");
+  const maximumCity=validateCityPayload(buildCity(Array.from({length:4000},(_,index)=>({canonicalPath:"district-"+String(index).padStart(4,"0")+"/module.js",S:0,U:0,M:0}))));
+  const maximumUploadStart=state.uploads.length;const maximumDrawStart=state.draws;const maximumPassStart=state.uniforms.filter(({name})=>name==="u_passKind").length;const maximumMatrixStart=state.matrices.length;
+  const maximumResult=stageCommit(presenter,holder.host,4000,maximumCity);
+  const maximumCanvas=state.canvases.at(-1);const maximumPhases=[{lateralFit:true,matrix:state.matrices.at(-1)}];
+  maximumCanvas.dispatchEvent(new KeyboardEvent("keydown",{key:"d",cancelable:true}));maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1)});
+  maximumCanvas.dispatchEvent(new KeyboardEvent("keydown",{key:"D",shiftKey:true,cancelable:true}));maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1)});
+  maximumCanvas.dispatchEvent(new WheelEvent("wheel",{deltaY:-120,cancelable:true}));maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1)});
+  holder.dimensions.width=480;holder.dimensions.height=300;state.observerCallbacks.at(-1)();maximumPhases.push({lateralFit:false,matrix:state.matrices.at(-1)});
+  holder.reset.click();maximumPhases.push({lateralFit:true,matrix:state.matrices.at(-1)});
+  const maximumUploads=state.uploads.slice(maximumUploadStart);const maximumGeometry=maximumGeometryOracle(maximumCity,maximumUploads[2],maximumUploads[3]);
+  const matrixOracles=maximumPhases.map(({matrix,lateralFit})=>matrixOracle(matrix,maximumGeometry.sceneBounds,maximumGeometry.centre,lateralFit));
+  presentation.maximum={result:maximumResult,groups:maximumGeometry.cells,uploads:maximumUploads.map((bytes)=>bytes.length),draws:state.draws-maximumDrawStart,passKinds:state.uniforms.filter(({name})=>name==="u_passKind").slice(maximumPassStart).map(({value})=>value),matrices:state.matrices.length-maximumMatrixStart,sourceBounds:maximumGeometry.sourceBounds,sceneBounds:maximumGeometry.sceneBounds,centre:maximumGeometry.centre,matrixOracles,exactPlateUpload:true};
   presentation.actualContexts+=state.actualContexts;
   presenter.dispose();
   presentation.focus.cleanup={...state.deletes};
@@ -268,8 +313,9 @@ let faceShadingPass=false;
   if(JSON.stringify(presentation.compileFailureTerminalState)!==JSON.stringify({retainedCallbacks:1,failures:0,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true}))throw new Error("Actual WebGL2 compile-failure retained callback was not inert");
   presentation.actualContexts+=state.actualContexts;holder.host.remove();holder.reset.remove();
 }
-const expectedInputCleanup={listenerAdds:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","pointerleave","lostpointercapture","contextmenu","blur","visibilitychange","pagehide","webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","pointerleave","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],listenerRemoves:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","pointerleave","lostpointercapture","contextmenu","blur","visibilitychange","pagehide","webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","pointerleave","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],reset:{adds:2,removes:2}};
-presentation.pass=focusPass&&faceShadingPass&&presentation.webgl2Available&&presentation.actualContexts===4&&presentation.initialDraws===1&&presentation.repeatDraws===1&&presentation.resizeDraws===1&&JSON.stringify(presentation.focus.allocationUploads)===JSON.stringify([384,36,28,384,36,28])&&JSON.stringify(presentation.focus.camera)===JSON.stringify({draws:1,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]})&&JSON.stringify(presentation.focus.reset)===JSON.stringify({draws:1,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]})&&presentation.focus.immutableUploads&&presentation.focus.subUploads===0&&presentation.focus.shaderFocus&&presentation.focus.faceShading&&presentation.focus.polygonOffsetEnables===0&&JSON.stringify(presentation.focus.cleanup)===JSON.stringify({deleteShader:4,deleteProgram:2,deleteBuffer:6,deleteVertexArray:2})&&JSON.stringify(presentation.accessibility)===JSON.stringify({tabIndex:0,label:"Interactive code city",description:"city-navigation-instructions",listenerAdds:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","pointerleave","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],resetText:"Reset view"})&&JSON.stringify(presentation.inputCleanup)===JSON.stringify(expectedInputCleanup)&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&JSON.stringify(presentation.lossFailures)===JSON.stringify([[3,"Presentation failed","M1-PRES-1"]])&&JSON.stringify(presentation.lossOrdering)===JSON.stringify({semanticPresentAtNotification:true,hostChildrenAtNotification:2,cleanupAtNotification:{deleteShader:2,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0},semanticPresentAfterControllerClear:false})&&JSON.stringify(presentation.lossCleanup)===JSON.stringify({deleteShader:2,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})&&JSON.stringify(presentation.lossTerminalState)===JSON.stringify({retainedCallbacks:1,failures:1,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true})&&JSON.stringify(presentation.compileFailureResult)===JSON.stringify({kind:"failure",category:"Presentation failed",code:"M1-PRES-1"})&&presentation.compileFailureDraws===0&&JSON.stringify(presentation.compileFailures)===JSON.stringify([])&&JSON.stringify(presentation.compileCleanup)===JSON.stringify({deleteShader:1,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})&&JSON.stringify(presentation.compileFailureTerminalState)===JSON.stringify({retainedCallbacks:1,failures:0,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true});
+const expectedLifecycleListeners=["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","pointerleave","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"];
+const expectedInputCleanup={listenerAdds:Array.from({length:3},()=>expectedLifecycleListeners).flat(),listenerRemoves:Array.from({length:3},()=>expectedLifecycleListeners).flat(),reset:{adds:3,removes:3}};
+presentation.pass=focusPass&&faceShadingPass&&presentation.webgl2Available&&presentation.actualContexts===5&&presentation.initialDraws===2&&presentation.repeatDraws===2&&presentation.resizeDraws===2&&JSON.stringify(presentation.focus.allocationUploads)===JSON.stringify([384,36,28,24,384,36,28,24])&&presentation.maximum.result.kind==="committed"&&presentation.maximum.groups===4000&&JSON.stringify(presentation.maximum.uploads)===JSON.stringify([384,36,112000,96000])&&presentation.maximum.draws===12&&JSON.stringify(presentation.maximum.passKinds)===JSON.stringify(Array.from({length:6},()=>[0,1]).flat())&&presentation.maximum.matrices===6&&presentation.maximum.matrixOracles.length===6&&presentation.maximum.matrixOracles.every((oracle)=>oracle.corners===8&&oracle.positiveW&&oracle.strictDepth)&&presentation.maximum.matrixOracles[0].lateralFit&&presentation.maximum.matrixOracles[5].lateralFit&&presentation.maximum.exactPlateUpload&&JSON.stringify(presentation.focus.camera)===JSON.stringify({draws:2,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]})&&JSON.stringify(presentation.focus.reset)===JSON.stringify({draws:2,uniforms:[{name:"u_hoverIndex",value:-1},{name:"u_selectionIndex",value:-1}]})&&presentation.focus.immutableUploads&&presentation.focus.subUploads===0&&presentation.focus.shaderFocus&&presentation.focus.faceShading&&presentation.focus.polygonOffsetEnables===0&&JSON.stringify(presentation.focus.cleanup)===JSON.stringify({deleteShader:6,deleteProgram:3,deleteBuffer:12,deleteVertexArray:6})&&JSON.stringify(presentation.accessibility)===JSON.stringify({tabIndex:0,label:"Interactive code city",description:"city-navigation-instructions",listenerAdds:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","pointerleave","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],resetText:"Reset view"})&&JSON.stringify(presentation.inputCleanup)===JSON.stringify(expectedInputCleanup)&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&JSON.stringify(presentation.lossFailures)===JSON.stringify([[3,"Presentation failed","M1-PRES-1"]])&&JSON.stringify(presentation.lossOrdering)===JSON.stringify({semanticPresentAtNotification:true,hostChildrenAtNotification:2,cleanupAtNotification:{deleteShader:2,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0},semanticPresentAfterControllerClear:false})&&JSON.stringify(presentation.lossCleanup)===JSON.stringify({deleteShader:2,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})&&JSON.stringify(presentation.lossTerminalState)===JSON.stringify({retainedCallbacks:1,failures:1,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true})&&JSON.stringify(presentation.compileFailureResult)===JSON.stringify({kind:"failure",category:"Presentation failed",code:"M1-PRES-1"})&&presentation.compileFailureDraws===0&&JSON.stringify(presentation.compileFailures)===JSON.stringify([])&&JSON.stringify(presentation.compileCleanup)===JSON.stringify({deleteShader:1,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})&&JSON.stringify(presentation.compileFailureTerminalState)===JSON.stringify({retainedCallbacks:1,failures:0,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true});
 const assetRequests=ASSETS.map(({role,path,sha256})=>({role,path,sha256}));
 const result={schemaVersion:1,assetRequests,cases:outputCases,matrixRuns,complexityMatrixRuns,presentation,browserExceptions:[],unexpectedNetworkRequests:[],overallPass:outputCases.every((entry)=>entry.pass)&&matrixRuns.every((entry)=>entry.pass)&&matrixRuns[0].runDigest===matrixRuns[1].runDigest&&complexityMatrixRuns.every((entry)=>entry.pass)&&complexityMatrixRuns[0].runDigest===complexityMatrixRuns[1].runDigest&&presentation.pass};
 document.querySelector("#result").textContent=JSON.stringify(result);

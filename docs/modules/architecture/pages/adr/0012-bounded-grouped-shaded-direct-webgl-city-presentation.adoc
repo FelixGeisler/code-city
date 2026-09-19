@@ -223,6 +223,19 @@ transactions, privacy, evidence schema, failures, and cleanup remain.
 
 ADR 0009 remains unchanged. No v1 or Three.js implementation is reused.
 
+== Subsequent refinement (issue 573)
+
+Issue https://github.com/FelixGeisler/code-city/issues/573[#573] makes each
+existing virtual group cell visible as one fixed plate without changing worker
+geometry, bounds, hash inputs, packing, palette, face shading, canonical
+building indices, or real-AABB picking. The controller's independent
+reconstruction retains translated numeric cells, derives plate-inclusive
+`sceneBounds`, and hands no group identity to the presenter. One shared program
+uses `u_passKind` for a fixed plate-first/building-second pair of draws. Exact
+immutable upload is `420 + 28N + 24G <= 208420` bytes for
+`1 <= G <= N <= 4000`. Labels and all semantic district publication remain
+deferred.
+
 == Consequences
 
 The current application gains one bounded, grouped, face-readable baseline

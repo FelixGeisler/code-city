@@ -16,8 +16,9 @@ validate closed, generation-tagged commands, outcomes, and lifecycle messages;
 reject stale messages
 
 |Interactive presenter |Main edge |Own stage tokens and sessions, canvas and DOM
-input, immutable-centre camera, pointer capture, request epoch, CPU picking,
-one-program WebGL city resources, and uniform-driven hover/selection surface focus
+input, immutable scene-centre camera, pointer capture, request epoch, building-only
+CPU picking, one-program/two-pass WebGL city resources, and uniform-driven
+hover/selection surface focus
 
 |Worker pipeline coordinator |Worker application |Sequence capabilities and
 suppress downstream work after failure or cancellation
@@ -44,8 +45,10 @@ own SLOC, executable-unit, ownership, and complexity rules
 `{geometry, inspection}` city
 |===
 
-The controller owns semantic facts; the presenter receives only opaque validated
-geometry. Presenter input listeners map DOM events to the three semantic event
+The controller owns semantic facts and independently reconstructs the numeric
+presentation snapshot. The presenter receives only opaque validated geometry
+plus plate minima/dimensions, plate-inclusive `sceneBounds`, and centre; it
+receives no group identity or path. Presenter input listeners map DOM events to the three semantic event
 families in
 xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]. The
 controller receives no DOM event and rejects stale generations or invalid indices
@@ -100,8 +103,11 @@ inspection}` value. Geometry contains dense origins, sizes, colours, and bounds;
 inspection contains aligned `{canonicalPath,S,U,M}` facts.
 
 |Validated city |Controller validator → controller/presenter |Controller-owned,
-non-aliasing geometry, inspection, and immutable centre snapshots. The presenter
-receives geometry only.
+non-aliasing geometry, inspection, and immutable numeric presentation snapshots.
+The numeric presentation contains only ordered plate minima/dimensions,
+plate-inclusive `sceneBounds`, and centre. The presenter receives geometry and
+that numeric presentation, never inspection, identity, label, projection, or
+callback data.
 
 |Semantic event |Presenter → controller |Generation plus hover or activation
 index, or one traversal action; never a DOM event, path, fact, or browser object
@@ -110,8 +116,8 @@ index, or one traversal action; never a DOM event, path, fact, or browser object
 selection inspector, and persistent noninteractive numeric complexity legend
 
 |Visual state |Controller → presenter |Generation plus opaque hover and selection
-indices; the presenter validates them and assigns both integer uniforms on every
-single-fill redraw; never inspection facts
+indices; the presenter validates them and assigns focus uniforms around the
+fixed plate-first/building-second redraw; never inspection facts or plate indices
 
 |Attempt outcome |Worker → controller |One closed, generation-tagged success or
 failure payload. Every post-selection outcome carries the selected full revision;

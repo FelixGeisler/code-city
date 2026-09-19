@@ -98,13 +98,27 @@ test("validateCityPayload creates immutable controller-owned non-aliasing city s
   const input = cloneCity();
   const before = cloneCity(input);
   const validated = validateCityPayload(input);
-  assert.deepEqual(Object.keys(validated), ["geometry", "inspection", "centre"]);
+  assert.deepEqual(Object.keys(validated), ["geometry", "inspection", "presentation"]);
   assert.equal(Object.isFrozen(validated), true);
   assert.equal(Object.isFrozen(validated.geometry), true);
   assert.equal(Object.isFrozen(validated.inspection), true);
   assert(validated.inspection.every(Object.isFrozen));
-  assert.equal(Object.isFrozen(validated.centre), true);
-  assert.deepEqual(validated.centre, [2.5, 6, 12]);
+  assert.equal(Object.isFrozen(validated.presentation), true);
+  assert.equal(Object.isFrozen(validated.presentation.plates), true);
+  assert(validated.presentation.plates.every((plate) => Object.isFrozen(plate)
+    && Object.isFrozen(plate.minimum) && Object.isFrozen(plate.dimensions)));
+  assert.equal(Object.isFrozen(validated.presentation.sceneBounds), true);
+  assert.equal(Object.isFrozen(validated.presentation.centre), true);
+  assert.deepEqual(validated.presentation, {
+    plates: [
+      { minimum: [-3, -0.5, -3], dimensions: [11, 0.5, 11] },
+      { minimum: [-3, -0.5, 16], dimensions: [11, 0.5, 11] },
+    ],
+    sceneBounds: [-3, -0.5, -3, 8, 12, 27],
+    centre: [2.5, 5.75, 12],
+  });
+  assert.deepEqual(Reflect.ownKeys(validated.presentation).sort(), ["centre", "plates", "sceneBounds"]);
+  assert.equal(JSON.stringify(validated.presentation).includes("src/"), false);
   for (const key of ["origins", "sizes", "rgba", "bounds"]) {
     assert.notEqual(validated.geometry[key], input.geometry[key], key);
     assert.notEqual(validated.geometry[key].buffer, input.geometry[key].buffer, `${key}.buffer`);
@@ -122,6 +136,7 @@ test("validateCityPayload creates immutable controller-owned non-aliasing city s
   assert.deepEqual([...validated.geometry.rgba], [...before.geometry.rgba]);
   assert.deepEqual([...validated.geometry.bounds], [...before.geometry.bounds]);
   assert.deepEqual(validated.inspection, before.inspection);
+  assert.deepEqual(validated.presentation, validateCityPayload(before).presentation);
 });
 
 test("city and inspection containers require exact own enumerable data without inherited, symbol, accessor, sparse, or extra input", () => {
@@ -241,6 +256,50 @@ test("validator enforces exact and one-over aggregate executable-unit bounds wit
   const incrementIndex = oneOverFacts.findIndex((fact) => fact.U < MAX_MODULE_UNITS);
   oneOverFacts[incrementIndex].U += 1;
   fails(cloneCity(buildCity(oneOverFacts)), "U aggregate one over");
+});
+
+test("concentrated and N=G=4,000 reconstruction yields exact plate cells, scene bounds, centres, and quarter-integer endpoints", () => {
+  const cases = [
+    {
+      id: "concentrated",
+      path: (index) => `all/${String(index).padStart(4, "0")}.ts`,
+      plates: 1,
+      bounds: [-3, -0.5, -3, 316, 4, 321],
+      centre: [156.5, 1.75, 159],
+      first: { minimum: [-3, -0.5, -3], dimensions: [319, 0.5, 324] },
+      last: { minimum: [-3, -0.5, -3], dimensions: [319, 0.5, 324] },
+    },
+    {
+      id: "many groups",
+      path: (index) => `g${String(index).padStart(4, "0")}/m.ts`,
+      plates: 4000,
+      bounds: [-3, -0.5, -3, 1060, 4, 1077],
+      centre: [528.5, 1.75, 537],
+      first: { minimum: [-3, -0.5, -3], dimensions: [9, 0.5, 9] },
+      last: { minimum: [507, -0.5, 1068], dimensions: [9, 0.5, 9] },
+    },
+  ];
+  for (const entry of cases) {
+    const city = validateCityPayload(buildCity(Array.from({ length: 4000 }, (_, index) => ({
+      canonicalPath: entry.path(index), S: 0, U: 0, M: 0,
+    }))));
+    assert.equal(city.presentation.plates.length, entry.plates, entry.id);
+    assert.deepEqual(city.presentation.sceneBounds, entry.bounds, entry.id);
+    assert.deepEqual(city.presentation.centre, entry.centre, entry.id);
+    assert.deepEqual(city.presentation.plates[0], entry.first, entry.id);
+    assert.deepEqual(city.presentation.plates.at(-1), entry.last, entry.id);
+    assert.equal(JSON.stringify(city.presentation).match(/canonicalPath|identity|root|label|anchor|projection|callback/giu), null, entry.id);
+    for (const plate of city.presentation.plates) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        for (const endpoint of [plate.minimum[axis], plate.minimum[axis] + plate.dimensions[axis]]) {
+          const relative = endpoint - city.presentation.centre[axis];
+          assert.equal(Math.fround(relative), relative, `${entry.id}: axis ${axis}`);
+          assert.equal(Number.isInteger(relative * 4), true, `${entry.id}: quarter integer axis ${axis}`);
+          assert(Math.abs(relative) < 68003, `${entry.id}: relative envelope axis ${axis}`);
+        }
+      }
+    }
+  }
 });
 
 test("validated geometry preserves exact bytes while inspection contributes no geometry bytes", () => {

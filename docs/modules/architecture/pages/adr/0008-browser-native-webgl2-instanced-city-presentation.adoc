@@ -94,3 +94,11 @@ canvas/context, renderer-neutral geometry, immutable instance upload, real
 AABBs, CPU picking, and the lifecycle/failure boundary. The committed resource
 envelope is now one program, one VAO, three buffers, and one draw; no new ADR
 or technology boundary is introduced.
+
+Issue https://github.com/FelixGeisler/code-city/issues/573[#573] subsequently
+adds a numeric-only district snapshot and a fixed plate pass while retaining
+this direct-WebGL boundary, one trusted program, shared cube/index buffers, one
+canvas/context, and renderer-neutral worker geometry. The current envelope is
+one program, two VAOs, four buffers, and plate-first/building-second instanced
+draws; actual context loss still performs no restoration and now skips all
+WebGL deletion while releasing JavaScript ownership.
