@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { PassThrough, Writable } from "node:stream";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -445,39 +447,203 @@ test("builder ownership fakes cover create races and uncertain post-create conta
   }
 });
 
-test("builder terminal flow stops and awaits owned children before cleanup for SIGINT and SIGTERM", async () => {
-  for (const signal of ["SIGINT", "SIGTERM"]) {
-    const events = [];
-    let settle;
-    const controller = createCleanupController({ removeOutput: async () => { events.push("remove-output"); } });
-    controller.claimOutput(path.join(os.tmpdir(), `owned-${signal}`));
-    const record = {
-      child: { kill: () => { events.push(`stop-${signal}`); settle(); return true; } },
-      settled: new Promise((resolve) => { settle = () => { events.push(`settled-${signal}`); resolve(); }; }),
-    };
-    controller.trackChild(record);
-    await controller.finish({ signal });
-    assert.deepEqual(events, [`stop-${signal}`, `settled-${signal}`, "remove-output"]);
+function fakeChild({ code = 0, signal = null, stdout = "", stderr = "", waitForKill = false } = {}) {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+  let closed = false;
+  const close = (exitCode = code, exitSignal = signal) => {
+    if (closed) return;
+    closed = true;
+    if (stdout) child.stdout.write(stdout);
+    if (stderr) child.stderr.write(stderr);
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", exitCode, exitSignal);
+  };
+  child.kill = () => { queueMicrotask(() => close(143, "SIGTERM")); return true; };
+  if (!waitForKill) queueMicrotask(close);
+  return child;
+}
+
+function dockerSpawn(responses, commands) {
+  return (command, args) => {
+    commands.push([command, ...args]);
+    assert.equal(command, "docker");
+    if (args[0] === "rm") return fakeChild(responses.remove);
+    if (args[0] === "container" && args[1] === "inspect") return fakeChild(responses.inspect);
+    if (args[0] === "run") return fakeChild({ waitForKill: true });
+    assert.fail(`Unexpected fake command: ${command} ${args.join(" ")}`);
+  };
+}
+
+test("the stopped production controller permits only real owned-container cleanup dispatch and proves success", async () => {
+  const commands = [];
+  const controller = createCleanupController({
+    spawnImpl: dockerSpawn({
+      remove: { code: 0 },
+      inspect: { code: 1, stderr: "Error: No such container: code-city-parser-577-fake-owned" },
+    }, commands),
+  });
+  controller.trackContainer("code-city-parser-577-fake-owned");
+  controller.requestStop("SIGINT");
+  await assert.rejects(() => controller.runNormalCommand("docker", ["image", "inspect", "unowned"]), /cancellation/u);
+  const terminal = controller.finish({ signal: "SIGINT" });
+  assert.strictEqual(controller.finish(), terminal, "terminal cleanup must have one idempotent promise");
+  await terminal;
+  assert.deepEqual(commands, [
+    ["docker", "rm", "-f", "code-city-parser-577-fake-owned"],
+    ["docker", "container", "inspect", "code-city-parser-577-fake-owned"],
+  ]);
+});
+
+test("the stopped production controller retains container and output ownership when real cleanup cannot prove absence", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "code-city-cleanup-failure-"));
+  const output = path.join(root, "owned");
+  await mkdir(output);
+  const commands = [];
+  const controller = createCleanupController({
+    spawnImpl: dockerSpawn({
+      remove: { code: 1, stderr: "removal denied" },
+      inspect: { code: 0, stdout: "still-present" },
+    }, commands),
+  });
+  controller.claimOutput(output);
+  controller.trackContainer("code-city-parser-577-fake-owned");
+  controller.requestStop("SIGTERM");
+  try {
+    await assert.rejects(() => controller.finish({ signal: "SIGTERM" }), (error) => {
+      assert(error instanceof AggregateError);
+      const detail = error.errors.map(String).join("\n");
+      assert.match(detail, /Failed to remove owned container/u);
+      assert.match(detail, /still exists/u);
+      assert.match(detail, /output retained because container absence was not verified/u);
+      assert.match(detail, /containers retained because absence was not verified/u);
+      return true;
+    });
+    assert.equal((await lstat(output)).isDirectory(), true);
+    assert.deepEqual(commands, [
+      ["docker", "rm", "-f", "code-city-parser-577-fake-owned"],
+      ["docker", "container", "inspect", "code-city-parser-577-fake-owned"],
+    ]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 
-test("builder terminal flow aggregates child-adjacent, container, and output cleanup failures without claiming clean state", async () => {
-  const controller = createCleanupController({
-    removeOutput: async () => { throw new Error("output cleanup failed"); },
-    removeContainer: async () => { throw new Error("container cleanup failed"); },
-    containerAbsent: async () => false,
-  });
-  controller.claimOutput(path.join(os.tmpdir(), "owned-cleanup-failure"));
-  controller.trackContainer("code-city-parser-577-fake-owned");
-  await assert.rejects(() => controller.finish(), (error) => {
-    assert(error instanceof AggregateError);
-    const detail = error.errors.map(String).join("\n");
-    assert.match(detail, /Failed to remove owned container/u);
-    assert.match(detail, /still exists/u);
-    assert.match(detail, /Owned output retained/u);
-    assert.match(detail, /absence was not verified/u);
-    return true;
-  });
+test("SIGINT and SIGTERM fence pending download, mkdir, file write, and Docker child work before output cleanup", async (t) => {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    await t.test(`${signal} aborts a pending bounded download`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "code-city-pending-download-"));
+      const output = path.join(root, "owned");
+      await mkdir(output);
+      const controller = createCleanupController();
+      controller.claimOutput(output);
+      const workflow = controller.runNormal((abortSignal) => fetchBounded("https://example.invalid/pinned", 1, "application/octet-stream", async (_url, options) => ({
+        status: 200,
+        headers: new Headers(),
+        body: {
+          async *[Symbol.asyncIterator]() {
+            await new Promise((resolve, reject) => {
+              if (options.signal.aborted) reject(options.signal.reason);
+              else options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+            });
+            yield Buffer.from("x");
+          },
+        },
+      }), abortSignal));
+      controller.setWorkflow(workflow);
+      controller.requestStop(signal);
+      await assert.rejects(workflow, /cancellation requested/u);
+      await controller.finish({ signal });
+      await assert.rejects(() => lstat(output), { code: "ENOENT" });
+      await rm(root, { force: true, recursive: true });
+    });
+
+    await t.test(`${signal} awaits a pending exclusive mkdir and removes its late result`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "code-city-pending-mkdir-"));
+      const output = path.join(root, "owned");
+      let release;
+      let markStarted;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const started = new Promise((resolve) => { markStarted = resolve; });
+      const controller = createCleanupController();
+      const workflow = acquireOutputPath(output, controller, {
+        mkdir: async (value) => { markStarted(); await gate; await mkdir(value); },
+        lstat,
+        realpath,
+      });
+      controller.setWorkflow(workflow);
+      await started;
+      controller.requestStop(signal);
+      const terminal = controller.finish({ signal });
+      let terminalSettled = false;
+      void terminal.finally(() => { terminalSettled = true; });
+      await Promise.resolve();
+      assert.equal(terminalSettled, false);
+      release();
+      await assert.rejects(workflow, /cancellation/u);
+      await terminal;
+      await assert.rejects(() => lstat(output), { code: "ENOENT" });
+      await rm(root, { force: true, recursive: true });
+    });
+
+    await t.test(`${signal} awaits a pending file write and prevents post-cleanup recreation`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "code-city-pending-write-"));
+      const output = path.join(root, "owned");
+      await mkdir(output);
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const controller = createCleanupController();
+      controller.claimOutput(output);
+      const workflow = controller.runNormal(async () => {
+        await gate;
+        await writeFile(path.join(output, "late"), "late");
+      });
+      controller.setWorkflow(workflow);
+      controller.requestStop(signal);
+      const terminal = controller.finish({ signal });
+      let terminalSettled = false;
+      void terminal.finally(() => { terminalSettled = true; });
+      await Promise.resolve();
+      assert.equal(terminalSettled, false);
+      release();
+      await assert.rejects(workflow, /cancellation/u);
+      await terminal;
+      await new Promise((resolve) => setImmediate(resolve));
+      await assert.rejects(() => lstat(output), { code: "ENOENT" });
+      await rm(root, { force: true, recursive: true });
+    });
+
+    await t.test(`${signal} stops and awaits an active Docker child before verified absence and output cleanup`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "code-city-active-child-"));
+      const output = path.join(root, "owned");
+      await mkdir(output);
+      const commands = [];
+      const name = `code-city-parser-577-${signal.toLowerCase()}`;
+      const controller = createCleanupController({
+        spawnImpl: dockerSpawn({ inspect: { code: 1, stderr: `Error: No such container: ${name}` } }, commands),
+      });
+      controller.claimOutput(output);
+      controller.trackContainer(name);
+      const workflow = (async () => {
+        try { await controller.runNormalCommand("docker", ["run", "--name", name]); }
+        finally { await controller.confirmContainerAbsent(name); }
+      })();
+      controller.setWorkflow(workflow);
+      assert.equal(commands.length, 1, "the Docker child must be active before cancellation");
+      controller.requestStop(signal);
+      await assert.rejects(workflow, /failed/u);
+      await controller.finish({ signal });
+      assert.deepEqual(commands, [
+        ["docker", "run", "--name", name],
+        ["docker", "container", "inspect", name],
+      ]);
+      await assert.rejects(() => lstat(output), { code: "ENOENT" });
+      await rm(root, { force: true, recursive: true });
+    });
+  }
 });
 
 test("the maintainer parser builder is manual, pinned, bounded, offline during builds, and absent from ordinary automation", async () => {
