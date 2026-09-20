@@ -285,7 +285,7 @@ test("direct invalid CLI emits only the fixed safe summary and never creates out
   const code = await new Promise((resolve) => child.once("exit", resolve));
   assert.equal(code, 1);
   assert.equal(stdout, "");
-  assert.equal(stderr, "Production evidence collection failed safely.\n");
+  assert.equal(stderr, "Production evidence collection failed safely.\nProduction evidence checker first-observed diagnostic: CHECKER-UNKNOWN.\n");
   await assert.rejects(import("node:fs/promises").then(({ lstat }) => lstat(output)), { code: "ENOENT" });
   await rm(temporary, { recursive: true, force: true });
 });
@@ -5278,6 +5278,215 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
   };
 }
 
+const CHECKER_DIAGNOSTIC_PAYLOADS = Object.freeze({
+  contention: "CHECKER-BODY-SLOT-CONTENTION",
+  absent: "CHECKER-BODY-CAPTURE-ABSENT",
+  cleared: "CHECKER-BODY-CAPTURE-CLEARED",
+  loading: "CHECKER-PROVIDER-LOADING-FAILED",
+  policy: "CHECKER-PROVIDER-POLICY-EVENT",
+  command: "CHECKER-CDP-BODY-COMMAND-FAILED",
+  content: "CHECKER-CONTENT-IDENTITY-FAILED",
+  cleanup: "CHECKER-CLEANUP-FAILED",
+  unknown: "CHECKER-UNKNOWN",
+});
+const COLLECTOR_CLI_ARGS = [
+  "--origin", PRODUCTION_ORIGIN, "--manifest", "manifest.json", "--output", "diagnostic-output",
+];
+
+function expectedDiagnosticPayload(code) {
+  return `Production evidence collection failed safely.\nProduction evidence checker first-observed diagnostic: ${code}.\n`;
+}
+
+function diagnosticCliCapture(seams, sink = "success") {
+  const writes = [];
+  let stdout = "";
+  seams.writeStdout = (value) => { stdout += value; return true; };
+  seams.writeStderr = (value) => {
+    writes.push(value);
+    if (sink === "throw") throw new Error("private terminal sink failure");
+    return sink !== "false";
+  };
+  return {
+    writes,
+    get stdout() { return stdout; },
+  };
+}
+
+function nativeSmokeDiagnosticScenario(kind, {
+  cleanupFailure = false,
+  loadingFailureParams,
+} = {}) {
+  let stored;
+  let payloadReads = 0;
+  let cleanupCount = 0;
+  const bodyGate = deferredValue();
+  const seams = collectorMatrixSeams({
+    packetSink(value) { if (value) stored = value; return stored; },
+  });
+  const fallbackFactory = seams.createBrowserEvidenceSession;
+  seams.rm = async () => {
+    cleanupCount += 1;
+    if (cleanupFailure) throw new Error("private cleanup failure");
+  };
+  seams.createBrowserEvidenceSession = async (args) => {
+    const inheritedBodySlot = Object.getOwnPropertyDescriptor(Object.prototype, "bodySlot");
+    let bodySlotPrototypeRestored = kind !== "absent";
+    if (kind === "absent") Object.defineProperty(Object.prototype, "bodySlot", {
+      configurable: true,
+      get() { return undefined; },
+      set() {},
+    });
+    const restoreBodySlotPrototype = () => {
+      if (bodySlotPrototypeRestored) return;
+      bodySlotPrototypeRestored = true;
+      if (inheritedBodySlot) Object.defineProperty(Object.prototype, "bodySlot", inheritedBodySlot);
+      else delete Object.prototype.bodySlot;
+    };
+    const harness = fakeCdpHarness({
+      async bodyImpl({ params, value }) {
+        if (kind === "command") throw new Error("private CDP rejection");
+        if (["contention", "cleared"].includes(kind) && params.requestId === `${kind}-first`) {
+          await bodyGate.promise;
+        }
+        return value;
+      },
+    });
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({
+        child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id",
+      }),
+      connectImpl: () => harness.cdp,
+    });
+    const fallback = await fallbackFactory(args);
+    const waitForSubmission = async () => {
+      for (let attempts = 0; !harness.calls.some(({ method, params }) => (
+        method === "Runtime.evaluate" && params.expression.includes("requestSubmit")
+      )); attempts += 1) {
+        assert(attempts < 30, `${kind}: browser submission did not start`);
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    const drive = async () => {
+      await waitForSubmission();
+      const revision = revisionUrl("FelixGeisler/code-city");
+      if (kind === "loading") {
+        harness.emit("Network.requestWillBeSent", {
+          requestId: "private-loading-id", request: { url: revision, method: "GET", headers: {} },
+        }, "worker-session");
+        const params = loadingFailureParams ?? new Proxy({
+          requestId: "private-loading-id", errorText: "private loading payload",
+        }, {
+          get(target, property, receiver) {
+            payloadReads += 1;
+            return Reflect.get(target, property, receiver);
+          },
+        });
+        harness.emit("Network.loadingFailed", params, "worker-session");
+        return;
+      }
+      if (kind === "policy") {
+        const params = new Proxy({
+          requestId: "private-policy-id", policy: "private policy payload",
+        }, {
+          get() { payloadReads += 1; throw new Error("policy payload read"); },
+        });
+        harness.emit("Network.policyUpdated", params, "worker-session");
+        return;
+      }
+      const body = kind === "content" ? JSON.stringify([{ sha: "not-a-revision" }])
+        : JSON.stringify([{ sha: EVENT }]);
+      await emitBrowserGet(harness, {
+        requestId: `${kind}-first`, url: revision, body,
+      });
+      await waitForBodyCalls(harness, 1);
+      if (kind === "content" || kind === "command") return;
+      if (kind === "cleared") {
+        const closing = native.close();
+        bodyGate.resolve();
+        await closing;
+        return;
+      }
+      if (kind === "contention") {
+        const commit = commitUrl("FelixGeisler/code-city", EVENT);
+        harness.bodies.set("contention-second", JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }));
+        harness.emit("Network.requestWillBeSent", {
+          requestId: "contention-second", request: { url: commit, method: "GET", headers: {} },
+        }, "worker-session");
+        harness.emit("Network.requestWillBeSentExtraInfo", {
+          requestId: "contention-second", headers: {}, associatedCookies: [],
+        }, "worker-session");
+        harness.emit("Network.responseReceived", { requestId: "contention-second", response: {
+          url: commit, status: 200, headers: { "Access-Control-Allow-Origin": "*" },
+          fromDiskCache: false, fromServiceWorker: false,
+        } }, "worker-session");
+        harness.emit("Network.loadingFinished", {
+          requestId: "contention-second", encodedDataLength: 1,
+        }, "worker-session");
+      }
+    };
+    return Object.freeze({
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      snapshot: native.snapshot,
+      async collectSmoke(emit, startedMs) {
+        const pending = native.collectSmoke(emit, startedMs);
+        void drive();
+        if (kind !== "cleared") return pending;
+        const fatal = new Promise((_, reject) => {
+          if (native.fatalSignal.aborted) reject(native.fatalSignal.reason);
+          else native.fatalSignal.addEventListener("abort", () => reject(native.fatalSignal.reason), { once: true });
+        });
+        return Promise.race([pending, fatal]);
+      },
+      clearTrace: native.clearTrace,
+      collectCapacity: fallback.collectCapacity,
+      async close() {
+        try { await native.close(); } finally { restoreBodySlotPrototype(); }
+        if (cleanupFailure) throw new Error("private browser cleanup failure");
+      },
+    });
+  };
+  return {
+    seams,
+    get stored() { return stored; },
+    get payloadReads() { return payloadReads; },
+    get cleanupCount() { return cleanupCount; },
+  };
+}
+
+function cleanupDiagnosticScenario() {
+  let stored;
+  let cleanupCount = 0;
+  const seams = collectorMatrixSeams({
+    packetSink(value) { if (value) stored = value; return stored; },
+  });
+  seams.rm = async () => {
+    cleanupCount += 1;
+    throw new Error("private cleanup-only failure");
+  };
+  return {
+    seams,
+    get stored() { return stored; },
+    get cleanupCount() { return cleanupCount; },
+  };
+}
+
+function assertDiagnosticPacketIsClosed(stored, ...sentinels) {
+  assert(stored);
+  const validated = validateEvidencePacket(stored.files, stored.binding);
+  assert.deepEqual([...validated.files.keys()].sort(), [
+    "artifact.json", "capacity.json", "index.json", "lifecycle.json",
+    "qualification.json", "requests.json", "smoke.json",
+  ]);
+  for (const bytes of validated.files.values()) {
+    const text = new TextDecoder().decode(bytes);
+    assert(!text.includes("CHECKER-"));
+    for (const sentinel of sentinels) assert(!text.includes(sentinel));
+  }
+}
+
 async function runCollectorTeardownFailure({ stimulus, releaseError = null }) {
   let stored;
   let cleanupCount = 0;
@@ -5427,6 +5636,44 @@ test("collector teardown failures preserve healthy versus unsafe ownership, exac
   assert.equal(delayedCloseCount, 1);
 });
 
+test("valid CLI arguments with pre-binding publication failure emit UNKNOWN and create no packet", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "collector-pre-binding-test-"));
+  const manifestPath = path.join(temporary, "package-manifest.json");
+  const output = path.join(temporary, "packet");
+  const calls = { publication: 0, create: 0, write: 0, read: 0 };
+  const seams = {
+    async readPublicationInput() {
+      calls.publication += 1;
+      throw new Error("private pre-binding publication failure");
+    },
+    createEvidencePacket() {
+      calls.create += 1;
+      throw new Error("packet producer must not run before binding");
+    },
+    async writeValidatedEvidencePacket() {
+      calls.write += 1;
+      throw new Error("packet writer must not run before binding");
+    },
+    async readValidatedEvidencePacket() {
+      calls.read += 1;
+      throw new Error("packet read-back must not run before binding");
+    },
+  };
+  const args = [
+    "--origin", PRODUCTION_ORIGIN, "--manifest", manifestPath, "--output", output,
+  ];
+  assert.deepEqual(parseCollectorArguments(args), {
+    origin: PRODUCTION_ORIGIN, manifestPath, output,
+  });
+  const capture = diagnosticCliCapture(seams);
+  assert.equal(await runCollectorCli(args, seams), 1);
+  assert.equal(capture.stdout, "");
+  assert.deepEqual(capture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.unknown)]);
+  assert.deepEqual(calls, { publication: 1, create: 0, write: 0, read: 0 });
+  assert.deepEqual(await import("node:fs/promises").then(({ readdir }) => readdir(temporary)), []);
+  await rm(temporary, { recursive: true, force: true });
+});
+
 test("successful CLI output is sparse privacy-safe progress on stderr and digest-only stdout", async () => {
   let stored;
   const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
@@ -5455,6 +5702,330 @@ test("successful CLI output is sparse privacy-safe progress on stderr and digest
   assert.equal(stderr, expected);
   assert(stderr.split("\n").filter(Boolean).every((line) => /^Production evidence qualification: [0-9]+\/4001 candidates validated\.$/u.test(line)));
   assert(!/https?:|\.ts|[0-9a-f]{40}|header|reason|body/iu.test(stderr));
+});
+
+test("closed checker diagnostics traverse the native collector and CLI without entering canonical packets", async () => {
+  const cases = [
+    ["contention", "provider-failure"],
+    ["absent", "provider-failure"],
+    ["cleared", "infrastructure-failure"],
+    ["loading", "provider-failure"],
+    ["policy", "unexpected-request"],
+    ["command", "infrastructure-failure"],
+    ["content", "smoke-failure"],
+  ];
+  for (const [kind, reason] of cases) {
+    const direct = nativeSmokeDiagnosticScenario(kind);
+    const directResult = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+      output: path.resolve(`diagnostic-direct-${kind}`),
+    }, direct.seams);
+    assert.deepEqual([directResult.status, directResult.reason], ["fail", reason], kind);
+    assertDiagnosticPacketIsClosed(direct.stored, `private-${kind}`);
+    assert.equal(direct.payloadReads, 0, kind);
+
+    const cli = nativeSmokeDiagnosticScenario(kind);
+    const captured = diagnosticCliCapture(cli.seams);
+    assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, cli.seams), 1, kind);
+    assert.equal(captured.stdout, "", kind);
+    assert.deepEqual(captured.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS[kind])], kind);
+    assertDiagnosticPacketIsClosed(cli.stored, `private-${kind}`);
+    assert.equal(cli.payloadReads, 0, kind);
+  }
+
+  const directCleanup = cleanupDiagnosticScenario();
+  const cleanupResult = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve("diagnostic-direct-cleanup"),
+  }, directCleanup.seams);
+  assert.deepEqual([cleanupResult.status, cleanupResult.reason], ["fail", "cleanup-failure"]);
+  assertDiagnosticPacketIsClosed(directCleanup.stored, "private cleanup-only failure");
+
+  const cliCleanup = cleanupDiagnosticScenario();
+  const cleanupCapture = diagnosticCliCapture(cliCleanup.seams);
+  assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, cliCleanup.seams), 1);
+  assert.equal(cleanupCapture.stdout, "");
+  assert.deepEqual(cleanupCapture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.cleanup)]);
+  assertDiagnosticPacketIsClosed(cliCleanup.stored, "private cleanup-only failure");
+});
+
+test("CDP diagnostic owning path does not inspect or disclose sentinel metadata surfaces", async () => {
+  const sentinels = Object.freeze({
+    url: "private-url-sentinel",
+    header: "private-header-sentinel",
+    source: "private-source-sentinel",
+    path: "private-path-sentinel",
+    payload: "private-payload-sentinel",
+    identifier: "private-identifier-sentinel",
+    counter: "private-counter-sentinel",
+    symbol: "private-symbol-sentinel",
+    accessor: "private-accessor-sentinel",
+    coercion: "private-coercion-sentinel",
+  });
+  const reads = { get: 0, prototype: 0, keys: 0, accessor: 0, coercion: 0 };
+  const metadataSymbol = Symbol(sentinels.symbol);
+  const metadataTarget = {
+    url: `https://private.invalid/${sentinels.url}`,
+    headers: { "X-Private-Sentinel": sentinels.header },
+    source: sentinels.source,
+    path: `/private/${sentinels.path}.ts`,
+    payload: { privateValue: sentinels.payload },
+    requestId: sentinels.identifier,
+    dataLength: sentinels.counter,
+    encodedDataLength: sentinels.counter,
+    [metadataSymbol]: sentinels.symbol,
+  };
+  Object.defineProperty(metadataTarget, "privateAccessor", {
+    enumerable: true,
+    get() { reads.accessor += 1; return sentinels.accessor; },
+  });
+  Object.defineProperty(metadataTarget, Symbol.toPrimitive, {
+    value() { reads.coercion += 1; return sentinels.coercion; },
+  });
+  const metadata = new Proxy(metadataTarget, {
+    get(target, property, receiver) {
+      reads.get += 1;
+      return Reflect.get(target, property, receiver);
+    },
+    getPrototypeOf(target) {
+      reads.prototype += 1;
+      return Reflect.getPrototypeOf(target);
+    },
+    ownKeys(target) {
+      reads.keys += 1;
+      return Reflect.ownKeys(target);
+    },
+  });
+  const scenario = nativeSmokeDiagnosticScenario("loading", { loadingFailureParams: metadata });
+  const capture = diagnosticCliCapture(scenario.seams);
+
+  assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, scenario.seams), 1);
+  assert.equal(capture.stdout, "");
+  assert.deepEqual(capture.writes, [
+    expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.loading),
+  ]);
+  assert.deepEqual(reads, { get: 0, prototype: 0, keys: 0, accessor: 0, coercion: 0 });
+  const allSentinels = Object.values(sentinels);
+  const observableOutput = `${capture.stdout}${capture.writes.join("")}`;
+  for (const sentinel of allSentinels) assert(!observableOutput.includes(sentinel), sentinel);
+  assertDiagnosticPacketIsClosed(scenario.stored, ...allSentinels);
+});
+
+test("diagnostic brands are restricted to the approved owning blocks and selection is identity-only", async () => {
+  const source = await readFile(new URL("../tools/collect-production-evidence.mjs", import.meta.url), "utf8");
+  for (const code of Object.values(CHECKER_DIAGNOSTIC_PAYLOADS)) {
+    assert.equal((source.match(new RegExp(`"${code}"`, "gu")) ?? []).length, 1, code);
+  }
+  for (const owner of [
+    ["bodySlotContention", "browser response body slot contention"],
+    ["bodyCaptureAbsent", "browser response body capture is absent"],
+    ["bodyCaptureCleared", "browser response body capture was cleared"],
+    ["providerLoadingFailed", "browser request failed"],
+    ["providerPolicyEvent", "unexpected browser network event"],
+    ["cdpBodyCommandFailed", "browser response body command failed"],
+    ["contentIdentityFailed", "throw brandCheckerFailure(error"],
+    ["cleanupFailed", "new CollectorFailure(\"capacity\", \"cleanup-failure\")"],
+  ]) {
+    assert(source.includes(`CHECKER_DIAGNOSTICS.${owner[0]}`), owner[0]);
+    assert(source.includes(owner[1]), owner[0]);
+  }
+  const helperBlock = source.slice(
+    source.indexOf("function canCarryCheckerDiagnostic"),
+    source.indexOf("function invariant"),
+  );
+  assert.doesNotMatch(helperBlock, /instanceof|String\s*\(|toString|\.message|\.stack|\.cause|Reflect|getPrototype|ownKeys|Object\.keys/u);
+  assert.match(helperBlock, /CHECKER_DIAGNOSTIC_PROVENANCE\.get\(error\)/u);
+  assert.match(helperBlock, /CHECKER_DIAGNOSTIC_PROVENANCE\.delete\(error\)/u);
+  const cliBlock = source.slice(source.indexOf("function finishFailedCollectorCli"), source.indexOf("const invokedPath"));
+  assert.doesNotMatch(cliBlock, /catch\s*\([^)]/u);
+  assert.match(cliBlock, /catch \{\s*return finishFailedCollectorCli/u);
+});
+
+test("untrusted values and known-looking text select UNKNOWN without diagnostic inspection or disclosure", async () => {
+  const knownPhrases = [
+    "browser response body slot contention", "browser response body capture is absent",
+    "browser body capture was cleared", "browser request failed", "unexpected browser network event",
+    "browser response body command failed", "browser candidate content invalid", "cleanup-failure",
+    ...Object.values(CHECKER_DIAGNOSTIC_PAYLOADS),
+  ].join(" | ");
+  const secret = "<private-unknown>\u202Etoken";
+  const variants = [
+    new Error(`${knownPhrases} ${secret}`, { cause: new Error(secret) }),
+    Object.assign(new Error(knownPhrases), { code: CHECKER_DIAGNOSTIC_PAYLOADS.command, label: secret }),
+    "unbranded primitive private value",
+  ];
+  for (const [index, thrown] of variants.entries()) {
+    let stored;
+    const seams = collectorMatrixSeams({
+      packetSink(value) { if (value) stored = value; return stored; },
+    });
+    const fallback = seams.createBrowserEvidenceSession;
+    seams.createBrowserEvidenceSession = async (args) => {
+      const session = await fallback(args);
+      return { ...session, async collectSmoke() { throw thrown; } };
+    };
+    const capture = diagnosticCliCapture(seams);
+    assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, seams), 1, String(index));
+    assert.deepEqual(capture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.unknown)]);
+    assert.equal(capture.stdout, "");
+    assert(!capture.writes[0].includes(secret));
+    assertDiagnosticPacketIsClosed(stored, secret, "unbranded primitive private value");
+  }
+
+  let trapCount = 0;
+  const proxy = new Proxy({}, {
+    get() { trapCount += 1; throw new Error("private get trap"); },
+    getPrototypeOf() { trapCount += 1; throw new Error("private prototype trap"); },
+    ownKeys() { trapCount += 1; throw new Error("private ownKeys trap"); },
+  });
+  Object.defineProperty(proxy, Symbol.toPrimitive, {
+    value() { trapCount += 1; throw new Error("private coercion trap"); },
+  });
+  const seams = collectorMatrixSeams();
+  seams.createEvidencePacket = () => { throw proxy; };
+  const capture = diagnosticCliCapture(seams);
+  assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, seams), 1);
+  assert.equal(trapCount, 0);
+  assert.deepEqual(capture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.unknown)]);
+
+  let observedProxy;
+  try {
+    await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+      output: path.resolve("diagnostic-proxy-wrapper"),
+    }, seams);
+  } catch (error) {
+    observedProxy = error;
+  }
+  assert.equal(observedProxy, proxy);
+  assert.equal(trapCount, 0);
+});
+
+test("first diagnostic survives cleanup replacement and each finalization boundary", async () => {
+  const knownPrimary = nativeSmokeDiagnosticScenario("loading", { cleanupFailure: true });
+  const knownCapture = diagnosticCliCapture(knownPrimary.seams);
+  assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, knownPrimary.seams), 1);
+  assert.deepEqual(knownCapture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.loading)]);
+  const knownIndex = JSON.parse(new TextDecoder().decode(knownPrimary.stored.files.get("index.json")));
+  assert.equal(knownIndex.firstFailure, "infrastructure-failure");
+  assert(knownPrimary.cleanupCount >= 1);
+
+  let unknownPacket;
+  const unknownPrimary = collectorMatrixSeams({
+    packetSink(value) { if (value) unknownPacket = value; return unknownPacket; },
+  });
+  const unknownFallback = unknownPrimary.createBrowserEvidenceSession;
+  unknownPrimary.createBrowserEvidenceSession = async (args) => {
+    const session = await unknownFallback(args);
+    return {
+      ...session,
+      async collectSmoke() { throw new Error("private unknown primary"); },
+      async close() { await session.close(); throw new Error("private cleanup replacement"); },
+    };
+  };
+  const unknownCapture = diagnosticCliCapture(unknownPrimary);
+  assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, unknownPrimary), 1);
+  assert.deepEqual(unknownCapture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.unknown)]);
+  const unknownIndex = JSON.parse(new TextDecoder().decode(unknownPacket.files.get("index.json")));
+  assert.equal(unknownIndex.firstFailure, "infrastructure-failure");
+
+  for (const boundary of ["create", "write", "read"]) for (const valueKind of ["primitive", "proxy"]) {
+    let trapCount = 0;
+    const thrown = valueKind === "primitive" ? `private-${boundary}-primitive` : new Proxy({}, {
+      get() { trapCount += 1; throw new Error("private finalization get"); },
+      getPrototypeOf() { trapCount += 1; throw new Error("private finalization prototype"); },
+      ownKeys() { trapCount += 1; throw new Error("private finalization keys"); },
+    });
+    const scenario = cleanupDiagnosticScenario();
+    if (boundary === "create") scenario.seams.createEvidencePacket = () => { throw thrown; };
+    if (boundary === "write") scenario.seams.writeValidatedEvidencePacket = async () => { throw thrown; };
+    if (boundary === "read") scenario.seams.readValidatedEvidencePacket = async () => { throw thrown; };
+    const capture = diagnosticCliCapture(scenario.seams);
+    assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, scenario.seams), 1, `${boundary}/${valueKind}`);
+    assert.deepEqual(capture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.cleanup)], `${boundary}/${valueKind}`);
+    assert.equal(trapCount, 0, `${boundary}/${valueKind}`);
+
+    const direct = cleanupDiagnosticScenario();
+    if (boundary === "create") direct.seams.createEvidencePacket = () => { throw thrown; };
+    if (boundary === "write") direct.seams.writeValidatedEvidencePacket = async () => { throw thrown; };
+    if (boundary === "read") direct.seams.readValidatedEvidencePacket = async () => { throw thrown; };
+    let observed;
+    try {
+      await collectProductionEvidence({
+        origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+        output: path.resolve(`diagnostic-${boundary}-${valueKind}`),
+      }, direct.seams);
+    } catch (error) {
+      observed = error;
+    }
+    assert.equal(observed, thrown, `${boundary}/${valueKind}`);
+    assert.equal(trapCount, 0, `${boundary}/${valueKind}`);
+
+    let unknownTrapCount = 0;
+    const unknownThrown = valueKind === "primitive" ? `private-unknown-${boundary}` : new Proxy({}, {
+      get() { unknownTrapCount += 1; throw new Error("private unknown finalization get"); },
+      getPrototypeOf() { unknownTrapCount += 1; throw new Error("private unknown finalization prototype"); },
+      ownKeys() { unknownTrapCount += 1; throw new Error("private unknown finalization keys"); },
+    });
+    const noPrimary = collectorMatrixSeams();
+    if (boundary === "create") noPrimary.createEvidencePacket = () => { throw unknownThrown; };
+    if (boundary === "write") noPrimary.writeValidatedEvidencePacket = async () => { throw unknownThrown; };
+    if (boundary === "read") noPrimary.readValidatedEvidencePacket = async () => { throw unknownThrown; };
+    const unknownFinalCapture = diagnosticCliCapture(noPrimary);
+    assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, noPrimary), 1, `unknown/${boundary}/${valueKind}`);
+    assert.deepEqual(unknownFinalCapture.writes,
+      [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.unknown)],
+      `unknown/${boundary}/${valueKind}`);
+    assert.equal(unknownTrapCount, 0, `unknown/${boundary}/${valueKind}`);
+  }
+});
+
+test("concurrent and sequential CLI diagnostics remain invocation-local across delayed finalization", async () => {
+  const writeGate = deferredValue();
+  let knownStored;
+  let knownWriteStarted = false;
+  const known = cleanupDiagnosticScenario();
+  const nativeWrite = known.seams.writeValidatedEvidencePacket;
+  known.seams.writeValidatedEvidencePacket = async (...args) => {
+    knownWriteStarted = true;
+    await writeGate.promise;
+    await nativeWrite(...args);
+    knownStored = known.stored;
+  };
+  const knownCapture = diagnosticCliCapture(known.seams);
+  const knownPending = runCollectorCli(COLLECTOR_CLI_ARGS, known.seams);
+  for (let attempts = 0; !knownWriteStarted && attempts < 30; attempts += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(knownWriteStarted, true);
+
+  const unknown = collectorMatrixSeams();
+  unknown.createEvidencePacket = () => { throw "private concurrent unknown"; };
+  const unknownCapture = diagnosticCliCapture(unknown);
+  assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, unknown), 1);
+  assert.deepEqual(unknownCapture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.unknown)]);
+
+  writeGate.resolve();
+  assert.equal(await knownPending, 1);
+  assert.deepEqual(knownCapture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.cleanup)]);
+  assertDiagnosticPacketIsClosed(knownStored);
+
+  const followup = collectorMatrixSeams({ failStage: "artifact", reason: "artifact-mismatch" });
+  const followupCapture = diagnosticCliCapture(followup);
+  assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, followup), 1);
+  assert.deepEqual(followupCapture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.unknown)]);
+});
+
+test("terminal stderr false and throw outcomes are ignored after exactly one final attempt", async () => {
+  for (const sink of ["false", "throw"]) {
+    const scenario = cleanupDiagnosticScenario();
+    const capture = diagnosticCliCapture(scenario.seams, sink);
+    assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, scenario.seams), 1, sink);
+    assert.equal(capture.stdout, "", sink);
+    assert.deepEqual(capture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.cleanup)], sink);
+    assertDiagnosticPacketIsClosed(scenario.stored, "private terminal sink failure");
+    assert(scenario.cleanupCount >= 1, sink);
+  }
 });
 
 test("browser failure mapping reserves credential-header for literal credential presence", async () => {

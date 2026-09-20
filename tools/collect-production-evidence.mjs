@@ -52,6 +52,65 @@ const SAFE_HEADERS = new Set([
 const SOURCE_SUFFIXES = [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"];
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const QUALIFICATION_IDENTITIES = new WeakMap();
+const CHECKER_DIAGNOSTICS = Object.freeze({
+  bodySlotContention: "CHECKER-BODY-SLOT-CONTENTION",
+  bodyCaptureAbsent: "CHECKER-BODY-CAPTURE-ABSENT",
+  bodyCaptureCleared: "CHECKER-BODY-CAPTURE-CLEARED",
+  providerLoadingFailed: "CHECKER-PROVIDER-LOADING-FAILED",
+  providerPolicyEvent: "CHECKER-PROVIDER-POLICY-EVENT",
+  cdpBodyCommandFailed: "CHECKER-CDP-BODY-COMMAND-FAILED",
+  contentIdentityFailed: "CHECKER-CONTENT-IDENTITY-FAILED",
+  cleanupFailed: "CHECKER-CLEANUP-FAILED",
+  unknown: "CHECKER-UNKNOWN",
+});
+const CHECKER_DIAGNOSTIC_SET = new Set(Object.values(CHECKER_DIAGNOSTICS));
+const CHECKER_DIAGNOSTIC_PROVENANCE = new WeakMap();
+
+function createCheckerDiagnosticRecord() {
+  let code = null;
+  return Object.freeze({
+    lock(candidate) {
+      if (code === null && CHECKER_DIAGNOSTIC_SET.has(candidate)) code = candidate;
+    },
+    read() { return code; },
+  });
+}
+
+function canCarryCheckerDiagnostic(value) {
+  return value !== null && (typeof value === "object" || typeof value === "function");
+}
+
+function brandCheckerFailure(error, code) {
+  if (canCarryCheckerDiagnostic(error) && CHECKER_DIAGNOSTIC_SET.has(code)
+      && !CHECKER_DIAGNOSTIC_PROVENANCE.has(error)) {
+    CHECKER_DIAGNOSTIC_PROVENANCE.set(error, code);
+  }
+  return error;
+}
+
+function checkerFailure(message, code) {
+  return brandCheckerFailure(new Error(message), code);
+}
+
+function checkerInvariant(condition, message, code) {
+  if (!condition) throw checkerFailure(message, code);
+}
+
+function transferCheckerDiagnostic(source, target) {
+  if (!canCarryCheckerDiagnostic(source)) return target;
+  const code = CHECKER_DIAGNOSTIC_PROVENANCE.get(source);
+  CHECKER_DIAGNOSTIC_PROVENANCE.delete(source);
+  return code === undefined ? target : brandCheckerFailure(target, code);
+}
+
+function lockCheckerDiagnostic(record, error) {
+  let code;
+  if (canCarryCheckerDiagnostic(error)) {
+    code = CHECKER_DIAGNOSTIC_PROVENANCE.get(error);
+    CHECKER_DIAGNOSTIC_PROVENANCE.delete(error);
+  }
+  record.lock(code ?? CHECKER_DIAGNOSTICS.unknown);
+}
 
 function invariant(condition, message = "collector invariant failed") {
   if (!condition) throw new Error(message);
@@ -793,7 +852,10 @@ async function cdpBody(cdp, sessionId, requestId, cap) {
   try {
     value = await cdp.send("Network.getResponseBody", { requestId }, sessionId);
   } catch (error) {
-    const failure = new Error("browser response body command failed", { cause: error });
+    const failure = brandCheckerFailure(
+      new Error("browser response body command failed", { cause: error }),
+      CHECKER_DIAGNOSTICS.cdpBodyCommandFailed,
+    );
     failure.unsafeBrowserOwnership = true;
     throw failure;
   }
@@ -1391,7 +1453,8 @@ export async function createBrowserEvidenceSession({
     }
     function maybeStartBodyCapture(entry) {
       if (entry.method !== "GET" || !entry.response || !entry.finished || entry.bodySlot) return;
-      invariant(bodySlot === null, "browser response body slot contention");
+      checkerInvariant(bodySlot === null, "browser response body slot contention",
+        CHECKER_DIAGNOSTICS.bodySlotContention);
       const slot = {
         entry, generation: entry.generation, stage: entry.route.stage,
         state: "pending", bytes: null, cleared: false, promise: null,
@@ -1406,7 +1469,9 @@ export async function createBrowserEvidenceSession({
       slot.promise = cdpBody(cdp, entry.sessionId, entry.requestId, entry.cap).then((bytes) => {
         if (bodySlot !== slot || slot.cleared || fatal.value) {
           bytes.fill(0);
-          throw fatal.value ?? new Error("browser body capture was cleared");
+          throw fatal.value ?? checkerFailure(
+            "browser body capture was cleared", CHECKER_DIAGNOSTICS.bodyCaptureCleared,
+          );
         }
         slot.state = "captured";
         slot.bytes = bytes;
@@ -1645,60 +1710,64 @@ export async function createBrowserEvidenceSession({
         requestRecords.push(requestRecord(get, logicalGetStart, semanticGetEnd));
       }
       const slot = get.bodySlot;
-      invariant(slot && bodySlot === slot && slot.entry === get,
-        "browser response body capture is absent");
+      checkerInvariant(slot && bodySlot === slot && slot.entry === get,
+        "browser response body capture is absent", CHECKER_DIAGNOSTICS.bodyCaptureAbsent);
       let bytes;
       let projection;
       const semanticRecord = Object.freeze({ ...get.route });
       try {
         await slot.promise;
-        invariant(mode === current && bodySlot === slot && slot.state === "captured"
+        checkerInvariant(mode === current && bodySlot === slot && slot.state === "captured"
           && slot.bytes instanceof Uint8Array,
-        "browser response body capture was cleared");
+        "browser response body capture was cleared", CHECKER_DIAGNOSTICS.bodyCaptureCleared);
         bytes = slot.bytes;
-        if (get.route.stage === "revision") {
-          projection = { revision: projectRevision(bytes) };
-        } else if (get.route.stage === "commit") {
-          invariant(get.route.identity === current.revision, "browser commit identity mismatch");
-          projection = { rootTree: projectCommit(bytes, current.revision) };
-        } else if (get.route.stage === "tree") {
-          invariant(get.route.identity === current.rootTree, "browser tree identity mismatch");
-          projection = { tree: projectTree(bytes, current.rootTree, current.revision.length, undefined,
-            current.generation === 1 ? Infinity : 4001) };
-          if (current.generation === 2) {
-            invariant(current.expectedIdentities?.length === 4001
-              && projection.tree.candidates.length >= 4001
-              && current.expectedIdentities.every((expected, index) => {
-                const observed = projection.tree.candidates[index];
-                return observed.rawPath === expected.rawPath
-                  && observed.canonicalPath === expected.canonicalPath
-                  && candidateBlobId(observed, current.revision.length) === expected.blobId;
-              }), "capacity inventory differs from qualification");
+        try {
+          if (get.route.stage === "revision") {
+            projection = { revision: projectRevision(bytes) };
+          } else if (get.route.stage === "commit") {
+            invariant(get.route.identity === current.revision, "browser commit identity mismatch");
+            projection = { rootTree: projectCommit(bytes, current.revision) };
+          } else if (get.route.stage === "tree") {
+            invariant(get.route.identity === current.rootTree, "browser tree identity mismatch");
+            projection = { tree: projectTree(bytes, current.rootTree, current.revision.length, undefined,
+              current.generation === 1 ? Infinity : 4001) };
+            if (current.generation === 2) {
+              invariant(current.expectedIdentities?.length === 4001
+                && projection.tree.candidates.length >= 4001
+                && current.expectedIdentities.every((expected, index) => {
+                  const observed = projection.tree.candidates[index];
+                  return observed.rawPath === expected.rawPath
+                    && observed.canonicalPath === expected.canonicalPath
+                    && candidateBlobId(observed, current.revision.length) === expected.blobId;
+                }), "capacity inventory differs from qualification");
+            }
+          } else {
+            const index = current.rawFacts.length;
+            const projected = current.projected?.[index];
+            const custodied = current.generation === 2 ? current.expectedIdentities?.[index] : null;
+            const expected = custodied ?? projected;
+            invariant(projected && expected && projected.rawPath === expected.rawPath
+              && projected.canonicalPath === expected.canonicalPath
+              && (!custodied || candidateBlobId(projected, current.revision.length) === custodied.blobId)
+              && get.route.identity === current.revision && get.route.path === expected.rawPath,
+            "browser raw sequence mismatch");
+            const expectedBlob = custodied?.blobId ?? candidateBlobId(projected, current.revision.length);
+            const blobId = computeGitBlobId(bytes, current.revision.length);
+            let normalizedBytes;
+            try { normalizedBytes = normalizeSourceBytes(bytes); }
+            catch { throw new Error("browser candidate content invalid"); }
+            const nextAggregate = current.aggregate + normalizedBytes;
+            const fact = {
+              index: index + 1, path: expected.canonicalPath, blobId: expectedBlob, normalizedBytes,
+              runningAggregate: nextAggregate, hashMatched: blobId === expectedBlob,
+              contentValid: normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES,
+            };
+            invariant(fact.contentValid, "browser candidate content invalid");
+            invariant(fact.hashMatched, "browser candidate blob mismatch");
+            projection = { fact, nextAggregate };
           }
-        } else {
-          const index = current.rawFacts.length;
-          const projected = current.projected?.[index];
-          const custodied = current.generation === 2 ? current.expectedIdentities?.[index] : null;
-          const expected = custodied ?? projected;
-          invariant(projected && expected && projected.rawPath === expected.rawPath
-            && projected.canonicalPath === expected.canonicalPath
-            && (!custodied || candidateBlobId(projected, current.revision.length) === custodied.blobId)
-            && get.route.identity === current.revision && get.route.path === expected.rawPath,
-          "browser raw sequence mismatch");
-          const expectedBlob = custodied?.blobId ?? candidateBlobId(projected, current.revision.length);
-          const blobId = computeGitBlobId(bytes, current.revision.length);
-          let normalizedBytes;
-          try { normalizedBytes = normalizeSourceBytes(bytes); }
-          catch { throw new Error("browser candidate content invalid"); }
-          const nextAggregate = current.aggregate + normalizedBytes;
-          const fact = {
-            index: index + 1, path: expected.canonicalPath, blobId: expectedBlob, normalizedBytes,
-            runningAggregate: nextAggregate, hashMatched: blobId === expectedBlob,
-            contentValid: normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES,
-          };
-          invariant(fact.contentValid, "browser candidate content invalid");
-          invariant(fact.hashMatched, "browser candidate blob mismatch");
-          projection = { fact, nextAggregate };
+        } catch (error) {
+          throw brandCheckerFailure(error, CHECKER_DIAGNOSTICS.contentIdentityFailed);
         }
       } finally {
         bytes = null;
@@ -1886,12 +1955,16 @@ export async function createBrowserEvidenceSession({
         }
         if (message.method === "Network.policyUpdated") {
           if (sessionRole === "page") return;
-          setFatal(new Error("unexpected browser network event"));
+          setFatal(checkerFailure(
+            "unexpected browser network event", CHECKER_DIAGNOSTICS.providerPolicyEvent,
+          ));
           return;
         }
         try {
           if (message.method === "Network.loadingFailed") {
-            throw new Error("browser request failed");
+            throw checkerFailure(
+              "browser request failed", CHECKER_DIAGNOSTICS.providerLoadingFailed,
+            );
           }
           if (message.method === "Network.requestWillBeSentExtraInfo") {
             const requestId = correlationId(message);
@@ -2596,37 +2669,38 @@ function failurePayloads(state, failure) {
 
 function mapBrowserFailure(stage, error) {
   if (error instanceof CollectorFailure) return error;
+  const mapped = (reason) => transferCheckerDiagnostic(error, new CollectorFailure(stage, reason));
   const message = String(error?.message);
-  if (message === "credential header observed") return new CollectorFailure(stage, "credential-header");
-  if (/CORS/iu.test(message)) return new CollectorFailure(stage, "cors-failure");
+  if (message === "credential header observed") return mapped("credential-header");
+  if (/CORS/iu.test(message)) return mapped("cors-failure");
   if (/stale worker observation|teardown owner|unsafe owner|unsafe stale final Worker generation|duplicate final Worker termination/iu.test(message)) {
-    return new CollectorFailure(stage, "infrastructure-failure");
+    return mapped("infrastructure-failure");
   }
-  if (/stale/iu.test(message)) return new CollectorFailure(stage, "stale-publication");
-  if (/overlap/iu.test(message)) return new CollectorFailure(stage, "request-overlap");
+  if (/stale/iu.test(message)) return mapped("stale-publication");
+  if (/overlap/iu.test(message)) return mapped("request-overlap");
   if (/unexpected browser (?:request|asset|network (?:event|session))/iu.test(message)) {
-    return new CollectorFailure(stage, "unexpected-request");
+    return mapped("unexpected-request");
   }
   if (/sequence|cardinality|redirected|duplicate|unmatched|correlation (?:is malformed|are incomplete)/iu.test(message)) {
-    return new CollectorFailure(stage, "request-sequence");
+    return mapped("request-sequence");
   }
-  if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
+  if (/quiescent/iu.test(message)) return mapped("quiescence-failure");
   if (/browser response body command failed/iu.test(message)) {
-    return new CollectorFailure(stage, "infrastructure-failure");
+    return mapped("infrastructure-failure");
   }
   if (/browser response body slot contention/iu.test(message)) {
-    return new CollectorFailure(stage, "provider-failure");
+    return mapped("provider-failure");
   }
   if (stage === "smoke" && /tree|blob|candidate|UTF-8|NUL|content|identity|revision|commit|supported|encoded data|JSON|Unexpected token|property name/iu.test(message)) {
-    return new CollectorFailure(stage, "smoke-failure");
+    return mapped("smoke-failure");
   }
-  if (/tree evidence is incomplete/iu.test(message)) return new CollectorFailure(stage, "tree-incomplete");
-  if (/blob|candidate mismatch/iu.test(message)) return new CollectorFailure(stage, "hash-mismatch");
-  if (/UTF-8|NUL|content/iu.test(message)) return new CollectorFailure(stage, "content-invalid");
-  if (/invalid (?:revision|commit) evidence|revision differs|inventory.*differs|root identity|identity mismatch/iu.test(message)) return new CollectorFailure(stage, "identity-mismatch");
-  if (/terminal|limit ordering|cardinality/iu.test(message)) return new CollectorFailure(stage, stage === "smoke" ? "smoke-failure" : "limit-order");
-  if (/request failed|response|transfer size/iu.test(message)) return new CollectorFailure(stage, "provider-failure");
-  return new CollectorFailure(stage, "infrastructure-failure");
+  if (/tree evidence is incomplete/iu.test(message)) return mapped("tree-incomplete");
+  if (/blob|candidate mismatch/iu.test(message)) return mapped("hash-mismatch");
+  if (/UTF-8|NUL|content/iu.test(message)) return mapped("content-invalid");
+  if (/invalid (?:revision|commit) evidence|revision differs|inventory.*differs|root identity|identity mismatch/iu.test(message)) return mapped("identity-mismatch");
+  if (/terminal|limit ordering|cardinality/iu.test(message)) return mapped(stage === "smoke" ? "smoke-failure" : "limit-order");
+  if (/request failed|response|transfer size/iu.test(message)) return mapped("provider-failure");
+  return mapped("infrastructure-failure");
 }
 
 export async function readPublicationInput(manifestPath) {
@@ -2639,6 +2713,10 @@ export async function readPublicationInput(manifestPath) {
 }
 
 export async function collectProductionEvidence(options, seams = {}) {
+  return collectProductionEvidenceCore(options, seams, createCheckerDiagnosticRecord());
+}
+
+async function collectProductionEvidenceCore(options, seams, diagnosticRecord) {
   invariant(options?.origin === PRODUCTION_ORIGIN && path.isAbsolute(options.manifestPath) && path.isAbsolute(options.output), "collector options are invalid");
   const clock = seams.clock ?? (() => performance.now());
   const epoch = clock();
@@ -2799,10 +2877,13 @@ export async function collectProductionEvidence(options, seams = {}) {
       await (seams.rm ?? rm)(profile, { recursive: true, force: true });
       profile = null;
     } catch {
-      fail("capacity", "cleanup-failure");
+      throw brandCheckerFailure(
+        new CollectorFailure("capacity", "cleanup-failure"), CHECKER_DIAGNOSTICS.cleanupFailed,
+      );
     }
     emit("collector-complete", 0);
   } catch (error) {
+    lockCheckerDiagnostic(diagnosticRecord, error);
     failure = error instanceof CollectorFailure ? error : new CollectorFailure(activeStage, "infrastructure-failure");
     if (["smoke", "qualification", "capacity"].includes(activeStage) && stageGetOverlap(state, activeStage) > 1) {
       failure = new CollectorFailure(activeStage, "request-overlap");
@@ -2832,22 +2913,30 @@ export async function collectProductionEvidence(options, seams = {}) {
   return Object.freeze({ packetDigest: packet.packetDigest, status: failure ? "fail" : "pass", reason: failure?.reason ?? "none" });
 }
 
+function finishFailedCollectorCli(writeStderr, diagnosticRecord) {
+  diagnosticRecord.lock(CHECKER_DIAGNOSTICS.unknown);
+  const code = diagnosticRecord.read();
+  try {
+    writeStderr(
+      `Production evidence collection failed safely.\nProduction evidence checker first-observed diagnostic: ${code}.\n`,
+    );
+  } catch {}
+  return 1;
+}
+
 export async function runCollectorCli(args = process.argv.slice(2), seams = {}) {
+  const diagnosticRecord = createCheckerDiagnosticRecord();
   const writeStdout = seams.writeStdout ?? process.stdout.write.bind(process.stdout);
   const writeStderr = seams.writeStderr ?? process.stderr.write.bind(process.stderr);
   let options;
   try {
     options = parseCollectorArguments(args);
-    const result = await collectProductionEvidence(options, seams);
-    if (result.status !== "pass") {
-      writeStderr("Production evidence collection failed safely.\n");
-      return 1;
-    }
+    const result = await collectProductionEvidenceCore(options, seams, diagnosticRecord);
+    if (result.status !== "pass") return finishFailedCollectorCli(writeStderr, diagnosticRecord);
     writeStdout(`${result.packetDigest}\n`);
     return 0;
   } catch {
-    writeStderr("Production evidence collection failed safely.\n");
-    return 1;
+    return finishFailedCollectorCli(writeStderr, diagnosticRecord);
   }
 }
 

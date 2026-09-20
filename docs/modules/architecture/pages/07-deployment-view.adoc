@@ -64,9 +64,11 @@ Only a validated marker permits upload. The marker itself is excluded; the seven
 canonical JSON files are retained for 90 days in the single artifact named from the
 event commit and run attempt. Handled product or provider failure remains a failed
 job after preserving its validated packet. Privacy, schema, or unsafe-storage failure
-deletes the output and creates no evidence artifact. The job summary records the
-Actions artifact ID and URL, platform digest, packet digest, event commit, run,
-attempt, and retention binding for authenticated finalization.
+deletes the output and creates no evidence artifact. A closed CLI diagnostic names
+only the first observed checker cause; it is unauthenticated, noncanonical
+operational output and cannot support acceptance or substitute for the packet. The
+job summary records the Actions artifact ID and URL, platform digest, packet digest,
+event commit, run, attempt, and retention binding for authenticated finalization.
 
 == Local finalization
 
