@@ -5312,7 +5312,10 @@ function diagnosticCliCapture(seams, sink = "success") {
   };
 }
 
-function nativeSmokeDiagnosticScenario(kind, { cleanupFailure = false } = {}) {
+function nativeSmokeDiagnosticScenario(kind, {
+  cleanupFailure = false,
+  loadingFailureParams,
+} = {}) {
   let stored;
   let payloadReads = 0;
   let cleanupCount = 0;
@@ -5372,7 +5375,9 @@ function nativeSmokeDiagnosticScenario(kind, { cleanupFailure = false } = {}) {
         harness.emit("Network.requestWillBeSent", {
           requestId: "private-loading-id", request: { url: revision, method: "GET", headers: {} },
         }, "worker-session");
-        const params = new Proxy({ requestId: "private-loading-id", errorText: "private loading payload" }, {
+        const params = loadingFailureParams ?? new Proxy({
+          requestId: "private-loading-id", errorText: "private loading payload",
+        }, {
           get(target, property, receiver) {
             payloadReads += 1;
             return Reflect.get(target, property, receiver);
@@ -5631,6 +5636,44 @@ test("collector teardown failures preserve healthy versus unsafe ownership, exac
   assert.equal(delayedCloseCount, 1);
 });
 
+test("valid CLI arguments with pre-binding publication failure emit UNKNOWN and create no packet", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "collector-pre-binding-test-"));
+  const manifestPath = path.join(temporary, "package-manifest.json");
+  const output = path.join(temporary, "packet");
+  const calls = { publication: 0, create: 0, write: 0, read: 0 };
+  const seams = {
+    async readPublicationInput() {
+      calls.publication += 1;
+      throw new Error("private pre-binding publication failure");
+    },
+    createEvidencePacket() {
+      calls.create += 1;
+      throw new Error("packet producer must not run before binding");
+    },
+    async writeValidatedEvidencePacket() {
+      calls.write += 1;
+      throw new Error("packet writer must not run before binding");
+    },
+    async readValidatedEvidencePacket() {
+      calls.read += 1;
+      throw new Error("packet read-back must not run before binding");
+    },
+  };
+  const args = [
+    "--origin", PRODUCTION_ORIGIN, "--manifest", manifestPath, "--output", output,
+  ];
+  assert.deepEqual(parseCollectorArguments(args), {
+    origin: PRODUCTION_ORIGIN, manifestPath, output,
+  });
+  const capture = diagnosticCliCapture(seams);
+  assert.equal(await runCollectorCli(args, seams), 1);
+  assert.equal(capture.stdout, "");
+  assert.deepEqual(capture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.unknown)]);
+  assert.deepEqual(calls, { publication: 1, create: 0, write: 0, read: 0 });
+  assert.deepEqual(await import("node:fs/promises").then(({ readdir }) => readdir(temporary)), []);
+  await rm(temporary, { recursive: true, force: true });
+});
+
 test("successful CLI output is sparse privacy-safe progress on stderr and digest-only stdout", async () => {
   let stored;
   const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
@@ -5704,6 +5747,68 @@ test("closed checker diagnostics traverse the native collector and CLI without e
   assert.equal(cleanupCapture.stdout, "");
   assert.deepEqual(cleanupCapture.writes, [expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.cleanup)]);
   assertDiagnosticPacketIsClosed(cliCleanup.stored, "private cleanup-only failure");
+});
+
+test("CDP diagnostic owning path does not inspect or disclose sentinel metadata surfaces", async () => {
+  const sentinels = Object.freeze({
+    url: "private-url-sentinel",
+    header: "private-header-sentinel",
+    source: "private-source-sentinel",
+    path: "private-path-sentinel",
+    payload: "private-payload-sentinel",
+    identifier: "private-identifier-sentinel",
+    counter: "private-counter-sentinel",
+    symbol: "private-symbol-sentinel",
+    accessor: "private-accessor-sentinel",
+    coercion: "private-coercion-sentinel",
+  });
+  const reads = { get: 0, prototype: 0, keys: 0, accessor: 0, coercion: 0 };
+  const metadataSymbol = Symbol(sentinels.symbol);
+  const metadataTarget = {
+    url: `https://private.invalid/${sentinels.url}`,
+    headers: { "X-Private-Sentinel": sentinels.header },
+    source: sentinels.source,
+    path: `/private/${sentinels.path}.ts`,
+    payload: { privateValue: sentinels.payload },
+    requestId: sentinels.identifier,
+    dataLength: sentinels.counter,
+    encodedDataLength: sentinels.counter,
+    [metadataSymbol]: sentinels.symbol,
+  };
+  Object.defineProperty(metadataTarget, "privateAccessor", {
+    enumerable: true,
+    get() { reads.accessor += 1; return sentinels.accessor; },
+  });
+  Object.defineProperty(metadataTarget, Symbol.toPrimitive, {
+    value() { reads.coercion += 1; return sentinels.coercion; },
+  });
+  const metadata = new Proxy(metadataTarget, {
+    get(target, property, receiver) {
+      reads.get += 1;
+      return Reflect.get(target, property, receiver);
+    },
+    getPrototypeOf(target) {
+      reads.prototype += 1;
+      return Reflect.getPrototypeOf(target);
+    },
+    ownKeys(target) {
+      reads.keys += 1;
+      return Reflect.ownKeys(target);
+    },
+  });
+  const scenario = nativeSmokeDiagnosticScenario("loading", { loadingFailureParams: metadata });
+  const capture = diagnosticCliCapture(scenario.seams);
+
+  assert.equal(await runCollectorCli(COLLECTOR_CLI_ARGS, scenario.seams), 1);
+  assert.equal(capture.stdout, "");
+  assert.deepEqual(capture.writes, [
+    expectedDiagnosticPayload(CHECKER_DIAGNOSTIC_PAYLOADS.loading),
+  ]);
+  assert.deepEqual(reads, { get: 0, prototype: 0, keys: 0, accessor: 0, coercion: 0 });
+  const allSentinels = Object.values(sentinels);
+  const observableOutput = `${capture.stdout}${capture.writes.join("")}`;
+  for (const sentinel of allSentinels) assert(!observableOutput.includes(sentinel), sentinel);
+  assertDiagnosticPacketIsClosed(scenario.stored, ...allSentinels);
 });
 
 test("diagnostic brands are restricted to the approved owning blocks and selection is identity-only", async () => {
