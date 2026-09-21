@@ -47,8 +47,9 @@ new submission resolves the head again.
 . After submission, any previous result disappears. The page shows that Code
   City is working and offers Cancel.
 . On success, the page shows the selected commit ID and one complete city.
-  Users can navigate it, select any building by keyboard or pointer, and read
-  its canonical path and exact M1 metric explanation.
+  Users can navigate it, select any building by keyboard or pointer, search
+  canonical module paths by exact case-sensitive substring, reveal a matching
+  building, and read its canonical path and exact M1 metric explanation.
 . On failure, the page shows a short explanation and no city. It also shows the
   commit ID when one was selected.
 . After cancellation, the page shows a cancellation message and no city.

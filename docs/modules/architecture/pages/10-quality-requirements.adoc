@@ -9,10 +9,11 @@
 city; identical camera state and input produce the same matrix and exact CPU hit
 
 |Safety and privacy
-|Adversarial repository and provider data remains inert, uses only the fixed
-network boundary, and creates no credential or active content. Inspection paths
-and approved group labels remain controller-owned `textContent`; identity does
-not enter attributes, styles, WebGL, callbacks, logs, or release evidence
+|Adversarial repository, query, and provider data remains inert, uses only the
+fixed network boundary, and creates no credential or active content. Inspection
+and result paths use only isolated `textContent`; paths/queries do not enter
+attributes, styles, URLs, WebGL, telemetry, provider traffic, logs, observers,
+or release evidence
 
 |Completeness
 |When the fixed provider path returns complete source, a supported repository
@@ -24,9 +25,10 @@ partial one
 maxima with dense and deep valid syntax and no private lower limit
 
 |Atomicity
-|Geometry, inspection, numeric district presentation/projection, aligned
-semantic labels, canvas, inspector, persistent complexity legend, and revision
-publish as one transaction; replacement,
+|Geometry, inspection, empty native search and its listeners, numeric district
+presentation/projection, aligned semantic labels, canvas, inspector, persistent
+complexity legend, and revision publish as one transaction; search reveal is a
+complete camera/selection/inspector/search/focus transaction; replacement,
 cancellation, failure, resize, context loss, or stale interaction cannot publish
 partial or stale output
 
@@ -36,14 +38,16 @@ lifetime and exactly-once cleanup rules
 
 |Numeric correctness
 |Concentrated and `N=G=4000` scenes renew plate-inclusive camera, exact
-four-row label projection, deterministic accepted-only collision layout,
+four-row label projection and selected-AABB strict X/Y/W/depth reveal,
+deterministic accepted-only collision layout,
 building-only picking, shared-centre exact `float32` representation, and the
 `420+28N+24G <= 208420` upload envelope
 
 |Accessibility
-|Keyboard users can navigate and select every building without pointer
-emulation; focus, instructions, status text, paths, facts, formulas, and palette
-bands do not rely on colour alone
+|Keyboard users can navigate and select every building and natively scroll/focus
+every current search result without pointer emulation; search activation returns
+focus to the canvas; instructions, status text, paths, facts, formulas, and
+palette bands do not rely on colour alone
 
 |Visual quality
 |The city remains the visual focus, controls and interaction are intentional and

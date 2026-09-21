@@ -931,6 +931,8 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       return {draws:context.draws.length,selectionFocusDraws:context.selectionFocusDraws.length,hoverFocusDraws:context.hoverFocusDraws.length,matrices:context.matrices.length,selectionFocusMatrices:context.selectionFocusMatrices.length,hoverFocusMatrices:context.hoverFocusMatrices.length,subUploads:context.subUploads.length,operations:context.operations.length,uploads:context.uploads.map(bytes=>bytes.length),matrix:context.matrices.at(-1),eventCounts:Object.fromEntries(Object.entries(globalThis.__navigationEvidence).map(([key,value])=>[key,value.length])),rect:(()=>{const r=canvas.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()};
     })()`);
     await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
+    const focusedSearch = await evaluate("document.activeElement===document.querySelector('[data-path-search-input]')");
+    await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
     const focusedCanvas = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); const style=getComputedStyle(canvas); return {active:document.activeElement===canvas,tabIndex:canvas.tabIndex,label:canvas.getAttribute("aria-label"),description:canvas.getAttribute("aria-describedby"),outlineStyle:style.outlineStyle,outlineWidth:style.outlineWidth,outlineColor:style.outlineColor}; })()`);
 
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, text: "d" });
@@ -1117,6 +1119,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.deepEqual(observed.contexts[0].draws, [[36, 5121, 0, 1]]);
     assert.deepEqual(observed.contexts[1].matrices[0], observed.contexts[0].matrices[0]);
     assert.deepEqual(observed.contexts[1].draws[0], [36, 5121, 0, 1]);
+    assert.equal(focusedSearch, true);
     assert.equal(focusedCanvas.active, true);
     assert.equal(focusedCanvas.tabIndex, 0);
     assert.equal(focusedCanvas.label, "Interactive code city");
@@ -1529,6 +1532,77 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     assert.deepEqual(initialDistrict.sceneBounds, [-3,-0.5,-3,49,23,58]);
     assert.deepEqual(initialDistrict.centre, [23,11.25,27.5]);
 
+    const typeNativeText = async (value) => {
+      for (const character of value) {
+        await dispatchKey({
+          key: character,
+          code: character === "/" ? "Slash" : character === "." ? "Period" : `Key${character.toUpperCase()}`,
+          virtualKey: character.toUpperCase().charCodeAt(0),
+          text: character,
+        });
+      }
+    };
+    const initialCityHeight = await evaluate("document.querySelector('[data-city]').getBoundingClientRect().height");
+    const searchInputPoint = await evaluate(`(() => { const rectangle=document.querySelector('[data-path-search-input]').getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
+    await nativeClick(searchInputPoint);
+    await typeNativeText("/");
+    const overflowEvidence = await evaluate(`(() => {
+      const region=document.querySelector('[data-path-search-results]');
+      const buttons=[...document.querySelectorAll('[data-path-search-buttons] button')];
+      const regionRect=region.getBoundingClientRect();
+      const cityRect=document.querySelector('[data-city]').getBoundingClientRect();
+      const minimum=parseFloat(getComputedStyle(buttons[0]).minHeight);
+      return {count:buttons.length,summaryOk:document.querySelector('[data-path-search-summary]').textContent===buttons.length+' matching modules.',height:regionRect.height,controlHeight:minimum,viewportHeight:innerHeight,scrollHeight:region.scrollHeight,clientHeight:region.clientHeight,normalFlow:regionRect.bottom<=cityRect.top,cityHeight:cityRect.height,safe:buttons.every(button=>button.type==='button'&&button.children.length===1&&button.firstElementChild.tagName==='BDI'&&button.firstElementChild.getAttribute('dir')==='auto'&&button.firstElementChild.textContent.length>0&&![button.id,button.className,button.title,button.getAttribute('aria-label'),button.getAttribute('value')].some(Boolean))};
+    })()`);
+    assert.equal(overflowEvidence.count, 18);
+    assert.equal(overflowEvidence.summaryOk, true);
+    assert(overflowEvidence.height <= overflowEvidence.controlHeight * 5);
+    assert(overflowEvidence.height <= overflowEvidence.viewportHeight * 0.4);
+    assert(overflowEvidence.scrollHeight > overflowEvidence.clientHeight);
+    assert.equal(overflowEvidence.normalFlow, true);
+    assert.equal(overflowEvidence.cityHeight, initialCityHeight);
+    assert.equal(overflowEvidence.safe, true);
+    const resultPoint = await evaluate(`(() => { const rectangle=document.querySelector('[data-path-search-results]').getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...resultPoint, deltaX: 0, deltaY: overflowEvidence.scrollHeight }, sessionId);
+    await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
+    assert.equal(await evaluate("document.activeElement===document.querySelector('[data-path-search-buttons] button')"), true);
+    for (let index = 1; index < overflowEvidence.count; index += 1) await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
+    assert.equal(await evaluate("document.activeElement===document.querySelector('[data-path-search-buttons] button:last-child' )"), true);
+    const scrolledDown = await evaluate("document.querySelector('[data-path-search-results]').scrollTop>0");
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...resultPoint, deltaX: 0, deltaY: -overflowEvidence.scrollHeight }, sessionId);
+    for (let index = 1; index < overflowEvidence.count; index += 1) await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9, modifiers: 8 });
+    assert.equal(await evaluate("document.activeElement===document.querySelector('[data-path-search-buttons] button')"), true);
+    const scrolledUp = await evaluate("document.querySelector('[data-path-search-results]').scrollTop===0");
+    assert.equal(scrolledDown && scrolledUp, true);
+    await dispatchKey({ key: "Enter", code: "Enter", virtualKey: 13, text: "\r" });
+    const firstActivation = await evaluate("({focused:document.activeElement===document.querySelector('[data-city] canvas'),activeTag:document.activeElement?.tagName,queryCleared:document.querySelector('[data-path-search-input]').value==='',resultsHidden:document.querySelector('[data-path-search-results]').hidden,status:document.querySelector('[data-status]').textContent,buttons:document.querySelectorAll('[data-path-search-buttons] button').length})");
+    assert.deepEqual(firstActivation, { focused: true, activeTag: "CANVAS", queryCleared: true, resultsHidden: true, status: "", buttons: 0 });
+
+    const activateTargetBy = async (key) => {
+      const point = await evaluate(`(() => { const input=document.querySelector('[data-path-search-input]'); input.scrollIntoView({block:'center'}); input.focus(); const rectangle=input.getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
+      await nativeClick(point);
+      await typeNativeText("outlier");
+      assert.equal(await evaluate("document.querySelectorAll('[data-path-search-buttons] button').length===1"), true);
+      await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
+      await dispatchKey({ key, code: key === " " ? "Space" : "Enter", virtualKey: key === " " ? 32 : 13, text: key === " " ? " " : "\r" });
+      assert.equal(await evaluate("document.activeElement===document.querySelector('[data-city] canvas')&&document.querySelector('[data-path-search-input]').value===''&&document.querySelector('[data-path-search-results]').hidden"), true);
+    };
+    await activateTargetBy("Enter");
+    await activateTargetBy(" ");
+    const targetIndex = orderedPaths.indexOf(targetPath);
+    const targetBox = initialDistrict.boxes[targetIndex];
+    const revealMatrix = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].matrices.at(-1)");
+    assertSceneMatrix(revealMatrix, [
+      ...targetBox.origin,
+      ...targetBox.origin.map((component, axis) => component + targetBox.size[axis]),
+    ], initialDistrict.centre, { label: "native search reveal", lateralFit: true });
+    const revealEvidence = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); return {selected:!inspector.hidden&&inspector.querySelector('[data-canonical-path]').textContent===${JSON.stringify(targetPath)},focused:document.activeElement===document.querySelector('[data-city] canvas'),queryCleared:document.querySelector('[data-path-search-input]').value==='',resultCount:document.querySelectorAll('[data-path-search-buttons] button').length}; })()`);
+    assert.deepEqual(revealEvidence, { selected: true, focused: true, queryCleared: true, resultCount: 0 });
+    await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
+    await dispatchKey({ key: "0", code: "Digit0", virtualKey: 48, text: "0" });
+    assert.equal(await evaluate("document.querySelector('[data-inspector]').hidden"), true);
+    const searchEvidence = { matches: overflowEvidence.count, overflow: scrolledDown && scrolledUp, nativeTraversal: true, nativeActivation: true, strictReveal: true };
+
     await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); globalThis.__interactivePointerEvents=[]; for (const type of ['pointerdown','pointerup']) canvas.addEventListener(type,event=>globalThis.__interactivePointerEvents.push({type:event.type,pointerId:event.pointerId,button:event.button,clientX:event.clientX,clientY:event.clientY,defaultPrevented:event.defaultPrevented})); return true; })()`);
     const phaseEvidence = [];
     const observation = async () => evaluate(`(() => {
@@ -1752,7 +1826,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     await assertPhase("Reset");
 
     const finalDraws = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length");
-    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; label-layout-phases=${labelEvidence.length}; native-phases=${phaseEvidence.map(({ label }) => label).join(",")}; exact-plate-upload-and-shared-centre=true; strict-w-depth-every-phase=true; deterministic-label-layout=true; visible-label-click-through=true; overview-reset-lateral-fit=true; plate-interior-padding-group-gap-misses=true; projected-plate-building-hit=true; plate-first-two-pass-per-frame=true; observed-frames=${finalDraws}.`);
+    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; label-layout-phases=${labelEvidence.length}; native-phases=${phaseEvidence.map(({ label }) => label).join(",")}; exact-plate-upload-and-shared-centre=true; strict-w-depth-every-phase=true; deterministic-label-layout=true; visible-label-click-through=true; overview-reset-lateral-fit=true; plate-interior-padding-group-gap-misses=true; projected-plate-building-hit=true; path-search-matches=${searchEvidence.matches}; path-search-overflow=${searchEvidence.overflow}; path-search-native-traversal=${searchEvidence.nativeTraversal}; path-search-native-activation=${searchEvidence.nativeActivation}; path-search-strict-reveal=${searchEvidence.strictReveal}; plate-first-two-pass-per-frame=true; observed-frames=${finalDraws}.`);
   } finally {
     cdp.listeners.delete(listener);
     try { await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId); } catch {}

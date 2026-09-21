@@ -2,7 +2,11 @@ import { parseWorkerMessage, readGeneration, type ParsedWorkerMessage, type Work
 import type { InspectionFact, NumericPresentation, ValidatedCity, ValidatedGeometry } from "./city-payload";
 import type { FailureCode } from "./resolution";
 import { parseRepositoryReference } from "../domain/repository-reference";
-import type { DistrictProjectionSnapshot } from "../domain/camera-picking-policy";
+import {
+  createBuildingRevealCommand,
+  type BuildingRevealCommand,
+  type DistrictProjectionSnapshot,
+} from "../domain/camera-picking-policy";
 
 export type WorkerTransport = Readonly<{
   send(command: WorkerCommand): void;
@@ -19,12 +23,21 @@ export type SelectionAction = "next" | "previous" | "first" | "last" | "clear";
 
 export type ControllerCanvas = Readonly<{
   remove(): void;
+  focus(): void;
   getBoundingClientRect(): Readonly<{ left: number; top: number; width: number; height: number }>;
 }>;
+export type SemanticPublicationIdentity = Readonly<object>;
+export type ControllerSearchEventSink = Readonly<{
+  queryChanged(generation: number, identity: SemanticPublicationIdentity, query: string): void;
+  resultActivated(generation: number, identity: SemanticPublicationIdentity, query: string, index: number): void;
+}>;
 export type ControllerPublication = Readonly<{
+  searchIdentity: SemanticPublicationIdentity;
   commit(canvas: ControllerCanvas, snapshot: DistrictProjectionSnapshot): void;
   districtProjection(snapshot: DistrictProjectionSnapshot): void;
   setSelection(index: number | null): void;
+  setSearchResults(query: string, indices: readonly number[]): void;
+  clearSearch(): void;
   rollback(): void;
 }>;
 
@@ -39,6 +52,8 @@ export type AttemptView = Readonly<{
     revision: string,
     inspection: readonly InspectionFact[],
     districts: ValidatedCity["districts"],
+    generation: number,
+    searchSink: ControllerSearchEventSink,
   ): ControllerPublication;
 }>;
 
@@ -61,6 +76,8 @@ export type ControllerCommitResult = Readonly<{
   snapshot: DistrictProjectionSnapshot;
 }> | Readonly<{ kind: "stale" }>;
 export type ControllerVisualResult = Readonly<{ kind: "applied" }> | Readonly<{ kind: "stale" }> | ControllerPresentationFailure;
+export type ControllerRevealResult = Readonly<{ kind: "applied"; snapshot: DistrictProjectionSnapshot }>
+  | Readonly<{ kind: "stale" }> | ControllerPresentationFailure;
 export type ControllerEventSink<G> = Readonly<{
   hoverIndex(generation: G, index: number | null): void;
   activationIndex(generation: G, index: number | null): void;
@@ -78,6 +95,8 @@ export type ControllerPresenter<G, T = object, C extends ControllerCanvas = Cont
   commit(token: T): ControllerCommitResult;
   rollback(token: T): void;
   setVisualState(generation: G, hover: number | null, selection: number | null): ControllerVisualResult;
+  revealSelection(generation: G, command: BuildingRevealCommand): ControllerRevealResult;
+  focusCanvas(generation: G): ControllerVisualResult;
   dispose(): void;
 }>;
 
@@ -118,6 +137,8 @@ type CurrentPresentation = {
   token: unknown;
   hover: number | null;
   selection: number | null;
+  query: string;
+  matches: readonly number[];
 };
 
 export type MainController = Readonly<{
@@ -320,6 +341,69 @@ export function createMainController(
     }
   }
 
+  const searchSink: ControllerSearchEventSink = Object.freeze({
+    queryChanged(callbackGeneration, identity, query) {
+      const publication = current;
+      if (!publication || publication.generation !== callbackGeneration
+        || publication.publication.searchIdentity !== identity) return;
+      try {
+        const matches: number[] = [];
+        if (query !== "") {
+          for (let index = 0; index < publication.city.inspection.length; index += 1) {
+            if (publication.city.inspection[index]!.canonicalPath.includes(query)) matches.push(index);
+          }
+        }
+        publication.publication.setSearchResults(query, matches);
+        if (current !== publication) return;
+        publication.query = query;
+        publication.matches = Object.freeze(matches);
+      } catch {
+        failPresentation(callbackGeneration);
+      }
+    },
+    resultActivated(callbackGeneration, identity, query, index) {
+      const publication = current;
+      if (!publication || publication.generation !== callbackGeneration
+        || publication.publication.searchIdentity !== identity || query !== publication.query) return;
+      if (!Number.isSafeInteger(index) || index < 0 || index >= publication.city.geometry.count
+        || !publication.matches.includes(index)) {
+        failPresentation(callbackGeneration);
+        return;
+      }
+      try {
+        const derived = createBuildingRevealCommand(publication.city.geometry, index);
+        if (derived.kind === "failure") {
+          failPresentation(callbackGeneration);
+          return;
+        }
+        const revealed = presenter.revealSelection(callbackGeneration, derived.command);
+        if (revealed.kind === "failure") {
+          failPresentation(callbackGeneration);
+          return;
+        }
+        if (revealed.kind !== "applied" || current !== publication) return;
+        publication.publication.districtProjection(revealed.snapshot);
+        if (current !== publication) return;
+        publication.publication.setSelection(index);
+        if (current !== publication) return;
+        publication.publication.clearSearch();
+        if (current !== publication) return;
+        const focused = presenter.focusCanvas(callbackGeneration);
+        if (focused.kind === "failure") {
+          failPresentation(callbackGeneration);
+          return;
+        }
+        if (focused.kind !== "applied" || current !== publication) return;
+        publication.hover = null;
+        publication.selection = index;
+        publication.query = "";
+        publication.matches = Object.freeze([]);
+      } catch {
+        failPresentation(callbackGeneration);
+      }
+    },
+  });
+
   function eventSink(token: () => unknown): ControllerEventSink<number> {
     const publicationFor = (callbackGeneration: number): CurrentPresentation | undefined => {
       const publication = current;
@@ -393,7 +477,13 @@ export function createMainController(
         cleanup(bridge);
         return;
       }
-      candidate.publication = view.stagePublication(message.revision, message.city.inspection, message.city.districts);
+      candidate.publication = view.stagePublication(
+        message.revision,
+        message.city.inspection,
+        message.city.districts,
+        bridge.generation,
+        searchSink,
+      );
       if (!transactionStillEligible(candidate)) {
         rollbackTransaction(candidate);
         cleanup(bridge);
@@ -429,6 +519,8 @@ export function createMainController(
         token: staged.token,
         hover: null,
         selection: null,
+        query: "",
+        matches: Object.freeze([]),
       };
       transaction = undefined;
       current = publication;

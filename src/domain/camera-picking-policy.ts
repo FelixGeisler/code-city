@@ -56,6 +56,14 @@ export type CameraTransitionResult =
   | Readonly<{ kind: "success"; state: CameraState; view: CameraView }>
   | PresentationPolicyFailure;
 
+export type BuildingRevealCommand = Readonly<{
+  index: number;
+  target: Vector3;
+}>;
+export type BuildingRevealCommandResult =
+  | Readonly<{ kind: "success"; command: BuildingRevealCommand; bounds: Bounds3 }>
+  | PresentationPolicyFailure;
+
 export type BackingPoint = Readonly<{ x: number; y: number }>;
 export type Ray = Readonly<{ origin: Vector3; direction: Vector3 }>;
 export type CanvasRectangle = Readonly<{ left: number; top: number; width: number; height: number }>;
@@ -318,30 +326,33 @@ function snapshotFloat32Matrix(matrixValue: readonly number[] | Float32Array): r
   }));
 }
 
+function calculateClipComponents(
+  matrixValue: readonly number[] | Float32Array,
+  cornerValue: Vector3,
+): readonly [number, number, number, number] {
+  const matrix = snapshotFloat32Matrix(matrixValue);
+  const coordinates = vector(fround(cornerValue[0]), fround(cornerValue[1]), fround(cornerValue[2]));
+  const clip: number[] = [];
+  for (let row = 0; row < 4; row += 1) {
+    const p0 = fround(multiply(matrix[row]!, coordinates[0]));
+    const p1 = fround(multiply(matrix[row + 4]!, coordinates[1]));
+    const p2 = fround(multiply(matrix[row + 8]!, coordinates[2]));
+    const p3 = fround(multiply(matrix[row + 12]!, fround(1)));
+    const s0 = fround(add(p0, p1));
+    const s1 = fround(add(s0, p2));
+    clip.push(fround(add(s1, p3)));
+  }
+  return Object.freeze(clip) as unknown as readonly [number, number, number, number];
+}
+
 export function calculateOracleProjection(
   matrixValue: readonly number[] | Float32Array,
   cornerValue: Vector3,
 ): ProjectionValueResult {
   try {
-    const matrix = snapshotFloat32Matrix(matrixValue);
-    const [x, y, z] = vector(fround(cornerValue[0]), fround(cornerValue[1]), fround(cornerValue[2]));
-
-    const zp0 = fround(multiply(matrix[2]!, x));
-    const zp1 = fround(multiply(matrix[6]!, y));
-    const zp2 = fround(multiply(matrix[10]!, z));
-    const zp3 = fround(multiply(matrix[14]!, fround(1)));
-    const zs0 = fround(add(zp0, zp1));
-    const zs1 = fround(add(zs0, zp2));
-    const clipZ = fround(add(zs1, zp3));
-
-    const wp0 = fround(multiply(matrix[3]!, x));
-    const wp1 = fround(multiply(matrix[7]!, y));
-    const wp2 = fround(multiply(matrix[11]!, z));
-    const wp3 = fround(multiply(matrix[15]!, fround(1)));
-    const ws0 = fround(add(wp0, wp1));
-    const ws1 = fround(add(ws0, wp2));
-    const clipW = fround(add(ws1, wp3));
-
+    const clip = calculateClipComponents(matrixValue, cornerValue);
+    const clipZ = clip[2];
+    const clipW = clip[3];
     const quotient = divide(clipZ, clipW);
     const depth = fround(quotient);
     return Object.freeze({ kind: "success", clipZ, clipW, quotient, depth });
@@ -581,6 +592,74 @@ function transition(
 ): CameraTransitionResult {
   try {
     return evaluate(change(snapshotState(current)), bounds, dimensions);
+  } catch {
+    return PRESENTATION_FAILURE;
+  }
+}
+
+function buildingBounds(geometry: PickingGeometry, index: number): Bounds3 {
+  if (!Number.isSafeInteger(geometry.count) || geometry.count < 1 || geometry.count > MAX_PICK_INSTANCES
+    || geometry.origins.length !== geometry.count * 3 || geometry.sizes.length !== geometry.count * 3
+    || !Number.isSafeInteger(index) || index < 0 || index >= geometry.count) throw new Error("invalid reveal index");
+  const offset = index * 3;
+  const minimumX = finite(geometry.origins[offset]!);
+  const minimumY = finite(geometry.origins[offset + 1]!);
+  const minimumZ = finite(geometry.origins[offset + 2]!);
+  const maximumX = add(minimumX, finite(geometry.sizes[offset]!));
+  const maximumY = add(minimumY, finite(geometry.sizes[offset + 1]!));
+  const maximumZ = add(minimumZ, finite(geometry.sizes[offset + 2]!));
+  return snapshotBounds([minimumX, minimumY, minimumZ, maximumX, maximumY, maximumZ]);
+}
+
+export function createBuildingRevealCommand(geometry: PickingGeometry, index: number): BuildingRevealCommandResult {
+  try {
+    const bounds = buildingBounds(geometry, index);
+    const target = vector(
+      divide(add(bounds[0], bounds[3]), 2),
+      divide(add(bounds[1], bounds[4]), 2),
+      divide(add(bounds[2], bounds[5]), 2),
+    );
+    return Object.freeze({ kind: "success", command: Object.freeze({ index, target }), bounds });
+  } catch {
+    return PRESENTATION_FAILURE;
+  }
+}
+
+function strictRevealContainment(bounds: Bounds3, centre: Vector3, matrix: readonly number[]): void {
+  for (const corner of corners(bounds, centre, true)) {
+    const clip = calculateClipComponents(matrix, corner);
+    const clipW = clip[3];
+    if (!(clipW > 0)) throw new Error("reveal corner has non-positive W");
+    const ndcX = fround(divide(clip[0], clipW));
+    const ndcY = fround(divide(clip[1], clipW));
+    const ndcZ = fround(divide(clip[2], clipW));
+    if (!(-1 < ndcX && ndcX < 1) || !(-1 < ndcY && ndcY < 1) || !(-1 < ndcZ && ndcZ < 1)) {
+      throw new Error("reveal corner outside strict frustum");
+    }
+  }
+}
+
+export function revealBuildingCamera(
+  current: CameraState,
+  sceneBounds: readonly number[] | Float32Array,
+  dimensions: PositiveDimensions,
+  geometry: PickingGeometry,
+  command: BuildingRevealCommand,
+): CameraTransitionResult {
+  try {
+    const accepted = snapshotState(current);
+    const derived = createBuildingRevealCommand(geometry, command.index);
+    if (derived.kind === "failure") return derived;
+    const suppliedTarget = vector(command.target[0], command.target[1], command.target[2]);
+    if (suppliedTarget.some((component, axis) => component !== derived.command.target[axis])) {
+      throw new Error("reveal target differs from selected AABB centre");
+    }
+    const candidate = state(suppliedTarget, accepted.azimuth, accepted.elevation, 1, accepted.D, accepted.R, accepted.V);
+    const transition = evaluate(candidate, sceneBounds, dimensions);
+    if (transition.kind === "failure") return transition;
+    const { centre } = boundsValues(sceneBounds);
+    strictRevealContainment(derived.bounds, centre, transition.view.matrix);
+    return transition;
   } catch {
     return PRESENTATION_FAILURE;
   }

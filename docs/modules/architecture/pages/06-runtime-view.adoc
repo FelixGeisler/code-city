@@ -20,14 +20,16 @@ image::runtime.svg[Successful aligned city validation, staging, commit, and inte
 . Stage an interactive presenter token with a direct numeric projection
   snapshot and detached semantic publication, recheck current-generation
   eligibility, commit the token and its latest snapshot, apply null visual
-  state, and perform exactly one ordered
-  `replaceChildren(canvas, labels, inspector, legend)`.
+  state, and atomically publish the native empty search controls immediately
+  before the city viewport with its ordered canvas, labels, inspector, and
+  legend.
 . While attached, validate the canvas/overlay rectangles and lay out labels
   before assigning current ownership.
 
-Geometry, facts, revision, canvas, district-label overlay, inspector container,
-persistent numeric complexity legend, direct projection snapshot, and empty
-initial hover and selection publish as one
+Geometry, facts, revision, native search nodes/listeners, canvas,
+district-label overlay, inspector container, persistent numeric complexity
+legend, direct projection snapshot, and empty initial query, results, hover, and
+selection publish as one
 transaction. Each stage receives one complete
 predecessor result or does not run. A failure suppresses later stages and
 publishes no partial city.
@@ -42,6 +44,9 @@ presenter.commit(token) -> committed(snapshot) | stale
 presenter.rollback(token) -> idempotent
 presenter.setVisualState(generation, hover, selection)
   -> applied | stale | M1-PRES-1
+presenter.revealSelection(generation, {index, target})
+  -> applied(snapshot) | stale | M1-PRES-1
+presenter.focusCanvas(generation) -> applied | stale | M1-PRES-1
 ----
 
 Stage eligibility is the active, unterminated generation after
@@ -54,10 +59,13 @@ roll back candidate and current semantic and visual state and produce
 `M1-PRES-1`; stale tokens,
 sessions, generations, callbacks, and request epochs perform cleanup only.
 
-The presenter owns DOM input and sends only generation-tagged semantic events.
-The controller owns traversal, facts, inspector publication, and authoritative
-indices. It rejects stale or out-of-bounds events before updating semantics and
-then sends only opaque indices back through `setVisualState`.
+The presenter owns canvas DOM input and sends only generation-tagged semantic
+events. Semantic publication owns the native path-search controls/listeners and
+sends exact query and numeric-index callbacks through generation and publication
+identity. The controller owns matching, result validation, traversal, facts,
+inspector publication, and authoritative indices. It rejects stale generation,
+publication, query, or result values before updating semantics. Reveal sends
+only a validated numeric index/AABB-centre command to the presenter.
 
 == Worker lifecycle
 
@@ -97,7 +105,7 @@ Listener, transport, semantic, and presentation cleanup is exactly once.
 
 The complete observable lifecycle matrix is owned by
 xref:requirements:city-and-failures.adoc#_atomic_lifecycle[City and Failures].
-Camera action, resize, and Reset preserve facts and selection, invalidate hover
+Camera action, resize, and Reset preserve facts, current query/results, and selection, invalidate hover
 work, draw and project all districts from the same matrix/CSS dimensions, and
 atomically accept state before forwarding the numeric snapshot. Selection
 remeasures the inspector and relayouts the cached projection; hover does no
@@ -106,6 +114,11 @@ selection and inspector. New or invalid submission, cancellation, current
 attempt/city/provider failure, candidate publication failure, context loss, and
 controller disposal clear facts and semantic/visual state before rollback or
 disposal. Replacement does not alter the current committed city.
+
+A current search activation synchronously invalidates hover, ends gesture and
+capture, validates and commits the reveal camera/projection and selection,
+publishes inspector/label layout, clears search, and focuses the canvas. Any
+failure uses complete `M1-PRES-1` rollback; stale search callbacks are inert.
 
 The presenter uses one request epoch for frame-coalesced hover. Camera changes,
 resize, Reset, gesture start, pointer leave, replacement, and disposal invalidate
@@ -149,18 +162,20 @@ and aligned semantic district snapshots remain. Inspection and district
 identity never enter the presenter.
 
 |Staging
-|One detached presenter candidate and detached semantic publication exist. They
-have no callback or publication rights.
+|One detached presenter candidate and detached semantic publication, including
+empty search controls and listeners, exist. They have no mutation or
+publication rights outside current identity gates.
 
 |Presentation
 |One committed presenter session with one program, two VAOs, four immutable
 buffers, two fixed instanced draws, current numeric projection snapshot,
-controller semantic label/inspector snapshot and legend, and opaque building
-visual indices is current. Camera and focus changes never
+controller search query/results/listeners, semantic label/inspector snapshot
+and legend, and opaque building visual indices is current. Camera and focus changes never
 rewrite building or plate buffers.
 
 |Terminal
-|Owned facts, inspector content, listeners, capture, frame work, buffers, parser
+|Owned facts, query/results, search and presenter listeners, inspector content,
+capture, frame work, buffers, parser
 handles, WebGL resources, canvas, and worker realm are released at their owning
 boundary.
 |===

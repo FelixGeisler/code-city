@@ -16,6 +16,7 @@ const input = requiredElement<HTMLInputElement>("input[name=repository]");
 const feedback = requiredElement<HTMLElement>("[data-feedback]");
 const status = requiredElement<HTMLElement>("[data-status]");
 const commit = requiredElement<HTMLOutputElement>("[data-commit]");
+const cityPublication = requiredElement<HTMLElement>("[data-city-publication]");
 const city = requiredElement<HTMLElement>("[data-city]");
 const cityReset = requiredElement<HTMLButtonElement>("[data-city-reset]");
 
@@ -58,8 +59,18 @@ const view: AttemptView = {
     commit.textContent = "";
     replaceStatus("Cancelled");
   },
-  stagePublication(revision, inspection, districts) {
-    return stageSemanticPublication(document, city, commit, revision, inspection, districts);
+  stagePublication(revision, inspection, districts, generation, searchSink) {
+    return stageSemanticPublication(
+      document,
+      cityPublication,
+      commit,
+      revision,
+      inspection,
+      districts,
+      generation,
+      searchSink,
+      city,
+    );
   },
 };
 
@@ -117,6 +128,8 @@ const controller = createMainController(createWorkerTransport, view, (hooks) => 
     commit: (token) => presenter.commit(token as PresenterToken),
     rollback: (token) => presenter.rollback(token as PresenterToken),
     setVisualState: presenter.setVisualState,
+    revealSelection: presenter.revealSelection,
+    focusCanvas: presenter.focusCanvas,
     dispose: presenter.dispose,
   };
 });

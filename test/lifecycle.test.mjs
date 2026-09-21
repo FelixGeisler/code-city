@@ -49,19 +49,21 @@ function fixture({
   let liveWorkers = 0;
   let maximumLiveWorkers = 0;
   const failures = [];
-  const presentation = { clears: 0, calls: [], commits: [], disposes: 0, eventSinks: [], hooks: undefined, publications: [], rollbacks: [], visual: [] };
+  const presentation = { clears: 0, calls: [], commits: [], disposes: 0, eventSinks: [], searchSinks: [], hooks: undefined, publications: [], rollbacks: [], visual: [], reveals: [], focuses: 0 };
   const view = {
     clear() { visibleState = "empty"; },
-    stagePublication(revision, inspection, districts) {
+    stagePublication(revision, inspection, districts, generation, searchSink) {
       events.push("semantic:stage");
+      presentation.searchSinks.push(searchSink);
       if (publicationStageThrows) throw new Error("semantic stage");
       if (publicationFactory) {
-        const publication = publicationFactory(revision, inspection, districts);
+        const publication = publicationFactory(revision, inspection, districts, generation, searchSink);
         presentation.publications.push(publication);
         return publication;
       }
       let active = true;
       const publication = {
+        searchIdentity: Object.freeze({}),
         commits: 0,
         commit(canvas, snapshot) {
           events.push("publication:commit");
@@ -76,6 +78,14 @@ function fixture({
         districtProjection(snapshot) {
           events.push("semantic:projection");
           this.snapshot = snapshot;
+        },
+        setSearchResults(query, indices) {
+          events.push("semantic:search");
+          this.search = { query, indices: [...indices] };
+        },
+        clearSearch() {
+          events.push("semantic:search-clear");
+          this.search = { query: "", indices: [] };
         },
         setSelection(index) {
           events.push("semantic:selection");
@@ -151,6 +161,7 @@ function fixture({
           token: Object.freeze({ generation }),
           canvas: {
             remove() {},
+            focus() {},
             getBoundingClientRect() { return { left: 0, top: 0, width: 200, height: 100 }; },
           },
           snapshot: PROJECTION,
@@ -163,6 +174,16 @@ function fixture({
         presentation.visual.push({ generation, hover, selection });
         if (visualThrows) throw new Error("visual");
         return visualResult;
+      },
+      revealSelection(generation, command) {
+        events.push("reveal");
+        presentation.reveals.push({ generation, command });
+        return { kind: "applied", snapshot: PROJECTION };
+      },
+      focusCanvas() {
+        events.push("focus");
+        presentation.focuses += 1;
+        return { kind: "applied" };
       },
     };
   });
@@ -415,6 +436,73 @@ test("committed event sink gates generation and token before authoritative visua
   assert.deepEqual(f.presentation.publications[0].selections, [0, null]);
 });
 
+test("controller owns exact literal search, canonical all-result order, identity gates, and coherent reveal completion", () => {
+  const city = buildCity([
+    { canonicalPath: "src/A.ts", S: 0, U: 0, M: 0 },
+    { canonicalPath: "src/a.ts", S: 0, U: 0, M: 0 },
+    { canonicalPath: "src/[x]*.ts", S: 0, U: 0, M: 0 },
+    { canonicalPath: "src/bidi-\u202E.ts", S: 0, U: 0, M: 0 },
+  ]);
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city });
+  const publication = f.presentation.publications[0];
+  const sink = f.presentation.searchSinks[0];
+
+  sink.queryChanged(999, publication.searchIdentity, "src/");
+  sink.queryChanged(1, Object.freeze({}), "src/");
+  assert.equal(f.events.includes("semantic:search"), false);
+  sink.queryChanged(1, publication.searchIdentity, "src/");
+  assert.deepEqual(publication.search, { query: "src/", indices: [0, 1, 2, 3] });
+  sink.queryChanged(1, publication.searchIdentity, "A");
+  assert.deepEqual(publication.search.indices.map((index) => city.inspection[index].canonicalPath), ["src/A.ts"]);
+  sink.queryChanged(1, publication.searchIdentity, "[x]*");
+  assert.deepEqual(publication.search.indices.map((index) => city.inspection[index].canonicalPath), ["src/[x]*.ts"]);
+  sink.queryChanged(1, publication.searchIdentity, " SRC ");
+  assert.deepEqual(publication.search.indices, []);
+  sink.queryChanged(1, publication.searchIdentity, "");
+  assert.deepEqual(publication.search, { query: "", indices: [] });
+
+  const index = city.inspection.findIndex(({ canonicalPath }) => canonicalPath === "src/a.ts");
+  sink.queryChanged(1, publication.searchIdentity, "a.ts");
+  sink.resultActivated(1, publication.searchIdentity, "stale", index);
+  assert.deepEqual(f.presentation.reveals, []);
+  sink.resultActivated(1, publication.searchIdentity, "a.ts", index);
+  assert.equal(f.presentation.reveals.length, 1);
+  assert.equal(f.presentation.reveals[0].command.index, index);
+  assert.deepEqual(f.presentation.reveals[0].command.target, [
+    city.geometry.origins[index * 3] + city.geometry.sizes[index * 3] / 2,
+    city.geometry.origins[index * 3 + 1] + city.geometry.sizes[index * 3 + 1] / 2,
+    city.geometry.origins[index * 3 + 2] + city.geometry.sizes[index * 3 + 2] / 2,
+  ]);
+  assert.deepEqual(publication.selections, [index]);
+  assert.equal(f.presentation.focuses, 1);
+  assert.deepEqual(publication.search, { query: "", indices: [] });
+  assert.deepEqual(f.events.slice(-5), ["reveal", "semantic:projection", "semantic:selection", "semantic:search-clear", "focus"]);
+});
+
+test("current malformed search activation fails closed while stale generation/publication/query activations remain inert", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
+  const publication = f.presentation.publications[0];
+  const sink = f.presentation.searchSinks[0];
+  sink.queryChanged(1, publication.searchIdentity, "a");
+  sink.resultActivated(2, publication.searchIdentity, "a", 99);
+  sink.resultActivated(1, Object.freeze({}), "a", 99);
+  sink.resultActivated(1, publication.searchIdentity, "different", 99);
+  assert.deepEqual(f.failures, []);
+  sink.resultActivated(1, publication.searchIdentity, "a", 99);
+  assert.deepEqual(f.failures, [{ category: "Presentation failed", code: "M1-PRES-1", revision: SHA }]);
+  assert.equal(f.presentation.clears, 1);
+});
+
 test("district projection uses the captured presenter token and current generation while staging and stale callbacks stay inert", () => {
   let stagedSink;
   const f = fixture({ onStage({ eventSink }) { stagedSink = eventSink; eventSink.districtProjection(1, PROJECTION); } });
@@ -505,6 +593,12 @@ test("controller traversal is no-wrap over canonical first, last, single, advers
   })));
   const maximum = fixture();
   const maximumSink = publish(maximum, maximumCity);
+  const maximumPublication = maximum.presentation.publications[0];
+  maximum.presentation.searchSinks[0].queryChanged(1, maximumPublication.searchIdentity, "maximum/");
+  assert.equal(maximumPublication.search.indices.length, 4_000);
+  assert.equal(new Set(maximumPublication.search.indices).size, 4_000);
+  assert.deepEqual(maximumPublication.search.indices.slice(0, 2), [0, 1]);
+  assert.deepEqual(maximumPublication.search.indices.slice(-2), [3_998, 3_999]);
   maximumSink.selectionAction(1, "last");
   maximumSink.selectionAction(1, "next");
   maximumSink.selectionAction(1, "first");
@@ -559,6 +653,8 @@ test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an
       return this.children.length ? this.children.map((child) => child.textContent ?? "").join("") : this.value;
     }
     setAttribute(name, value) { this.attributes.set(name, String(value)); }
+    addEventListener(type, listener) { this.listeners ??= new Map(); const values = this.listeners.get(type) ?? new Set(); values.add(listener); this.listeners.set(type, values); }
+    removeEventListener(type, listener) { this.listeners?.get(type)?.delete(listener); }
     append(...children) {
       for (const child of children) { child.parent = this; this.children.push(child); }
     }
@@ -598,13 +694,15 @@ test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an
     },
   };
   const f = fixture({
-    publicationFactory: (selectedRevision, inspection, districts) => stageSemanticPublication(
+    publicationFactory: (selectedRevision, inspection, districts, generation, searchSink) => stageSemanticPublication(
       documentTarget,
       root,
       revision,
       selectedRevision,
       inspection,
       districts,
+      generation,
+      searchSink,
     ),
   });
   f.controller.submit(VALID);
@@ -613,7 +711,7 @@ test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an
   transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
   transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
 
-  const inspector = created[0];
+  const inspector = created.find((element) => Object.hasOwn(element.dataset, "inspector"));
   const sink = f.presentation.eventSinks[0];
   sink.selectionAction(1, "first");
   const path = created.find((element) => Object.hasOwn(element.dataset, "canonicalPath"));
@@ -635,6 +733,10 @@ test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an
   assert.deepEqual(operations, [
     "SECTION:hidden:true",
     "SECTION:replace",
+    "P:text:",
+    "DIV:replace",
+    "DIV:hidden:true",
+    "SECTION:remove",
     "SECTION:hidden:true",
     "SECTION:replace",
     "DIV:replace",

@@ -8,7 +8,9 @@ import {
   projectDistricts,
   resetCamera,
   resizeCamera,
+  revealBuildingCamera,
   zoomCamera,
+  type BuildingRevealCommand,
   type CameraState,
   type CameraTransitionResult,
   type CameraView,
@@ -128,6 +130,9 @@ export type PresenterCommitResult = Readonly<{
 }> | Readonly<{ kind: "stale" }>;
 export type PresenterVisualResult = Readonly<{ kind: "applied" }> | Readonly<{ kind: "stale" }>
   | Readonly<{ kind: "failure"; category: PresentationFailureCategory; code: PresentationFailureCode }>;
+export type PresenterRevealResult = Readonly<{ kind: "applied"; snapshot: DistrictProjectionSnapshot }>
+  | Readonly<{ kind: "stale" }>
+  | Readonly<{ kind: "failure"; category: PresentationFailureCategory; code: PresentationFailureCode }>;
 type ControllerFailureResult = Readonly<{ kind: "failure"; category: PresentationFailureCategory; code: PresentationFailureCode }>;
 
 const APPLIED: PresenterVisualResult = Object.freeze({ kind: "applied" });
@@ -212,6 +217,8 @@ export type CityPresenter<G> = Readonly<{
   commit(token: PresenterToken): PresenterCommitResult;
   rollback(token: PresenterToken): void;
   setVisualState(generation: G, hover: number | null, selection: number | null): PresenterVisualResult;
+  revealSelection(generation: G, command: BuildingRevealCommand): PresenterRevealResult;
+  focusCanvas(generation: G): PresenterVisualResult;
   dispose(): void;
 }>;
 
@@ -1205,6 +1212,66 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           const size = dimensions(host);
           draw(session as Session<unknown>, size, session.cameraView!);
         }
+        return APPLIED;
+      } catch {
+        failSession(session);
+        return PRESENTATION_FAILURE;
+      }
+    },
+    revealSelection(generation: G, command: BuildingRevealCommand): PresenterRevealResult {
+      const session = current;
+      if (!session?.active || !session.committed || session.generation !== generation) return STALE;
+      if (!eligible(session)) {
+        if (session.active) removeSession(session);
+        return STALE;
+      }
+      try {
+        const size = dimensions(host);
+        const transition = revealBuildingCamera(
+          session.cameraState!,
+          session.presentation!.sceneBounds,
+          size,
+          session.model!,
+          command,
+        );
+        if (transition.kind === "failure") {
+          failSession(session);
+          return PRESENTATION_FAILURE;
+        }
+        const projected = projectDistricts(
+          session.presentation!.plates,
+          session.presentation!.centre,
+          transition.view.matrix,
+          size,
+        );
+        if (projected.kind === "failure") {
+          failSession(session);
+          return PRESENTATION_FAILURE;
+        }
+        invalidateHover(session);
+        releaseGesture(session);
+        session.hover = null;
+        session.selection = command.index;
+        draw(session as Session<unknown>, size, transition.view);
+        session.cameraState = transition.state;
+        session.cameraView = transition.view;
+        session.projection = projected.snapshot;
+        queueHover(session);
+        return Object.freeze({ kind: "applied", snapshot: projected.snapshot });
+      } catch {
+        failSession(session);
+        return PRESENTATION_FAILURE;
+      }
+    },
+    focusCanvas(generation: G): PresenterVisualResult {
+      const session = current;
+      if (!session?.active || !session.committed || session.generation !== generation) return STALE;
+      if (!eligible(session)) {
+        if (session.active) removeSession(session);
+        return STALE;
+      }
+      try {
+        session.canvas!.focus();
         return APPLIED;
       } catch {
         failSession(session);
