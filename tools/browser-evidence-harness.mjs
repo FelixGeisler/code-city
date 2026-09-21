@@ -322,7 +322,9 @@ const emptyEventSink={hoverIndex(){},activationIndex(){},selectionAction(){},dis
 function stageCommit(presenter,host,generation,city=presentationCity,semantic=false,capture){
   const priorChildren=[...host.childNodes];
   const revision=document.createElement("output");
-  const publication=semantic?stageSemanticPublication(document,host,revision,"a".repeat(40),city.inspection,city.districts):undefined;
+  const publicationRoot=semantic?document.createElement("div"):undefined;
+  if(publicationRoot){host.parentNode.insertBefore(publicationRoot,host);publicationRoot.append(host);}
+  const publication=semantic?stageSemanticPublication(document,publicationRoot,revision,"a".repeat(40),city.inspection,city.districts,generation,{queryChanged(){},resultActivated(){}},host):undefined;
   const eventSink=semantic?{...emptyEventSink,activationIndex(callbackGeneration,index){publication.setSelection(index);capture?.activations.push({generation:callbackGeneration,index});},districtProjection(_generation,snapshot){publication.districtProjection(snapshot);capture?.projections.push(snapshot);}}:emptyEventSink;
   const staged=presenter.stage(generation,city.geometry,city.presentation,eventSink);
   if(staged.kind!=="staged")return staged;

@@ -155,6 +155,27 @@ xref:requirements:city-and-failures.adoc[City and Failures]. Immutable
 bounds-centre-relative uploads, pure camera/picking ownership, controls,
 real-AABB slabs and ties, presenter lifecycle, failures, and privacy remain.
 
+=== M3 amendment: native path-search controls
+
+Amendment status:: Accepted
+Acceptance authority:: Human (explicit): `OK. Go. Implement M3.`
+Accepted proposal:: SHA-256 `5149e551c49d34dfee0be735ed7750a4814f553b049dd2a69b270e7072f1c324`
+
+For current-city path search only, semantic publication owns the native search
+input, result buttons, and their DOM listeners. It sends exact query and
+canonical-index semantic callbacks, never DOM events, to the controller through
+the current generation and semantic-publication identity gate. This is one
+additional semantic-control event boundary.
+
+The controller remains the sole owner of inspection facts, matching, result
+validation, selection, and failure decisions. The presenter remains the sole
+owner of canvas, camera, picking, traversal, Reset, and input suppression, and
+receives only numeric presentation state and a validated numeric reveal
+command—never inspection facts, query text, canonical paths, or search-control
+nodes. Search listener lifetime follows semantic-publication staging, rollback,
+replacement, failure, pagehide, and disposal. All other ADR 0011 decisions
+remain unchanged.
+
 === Immutable-centre camera and picking
 
 The validated bounds centre `C` is immutable for the session. Each instance

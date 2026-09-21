@@ -26,6 +26,10 @@ class FakeElement {
     this.style = {};
     this.rectangle = rectangle ?? { left: 10, top: 20, width: 600, height: 400 };
     this.measurements = 0;
+    this.listeners = new Map();
+    this.type = "";
+    this.autocomplete = "";
+    this.spellcheck = true;
   }
   get parentNode() { return this.parent; }
   set textContent(value) {
@@ -38,6 +42,10 @@ class FakeElement {
     return this.children.length ? this.children.map((child) => child.textContent ?? "").join("") : this.value;
   }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  addEventListener(type, listener) { const entries = this.listeners.get(type) ?? new Set(); entries.add(listener); this.listeners.set(type, entries); }
+  removeEventListener(type, listener) { this.listeners.get(type)?.delete(listener); }
+  dispatch(type) { for (const listener of [...(this.listeners.get(type) ?? [])]) listener(new Event(type)); }
+  focus() { this.focused = (this.focused ?? 0) + 1; }
   append(...children) {
     for (const child of children) {
       if (child instanceof FakeElement) child.parent = this;
@@ -120,8 +128,22 @@ function fixture(options = {}) {
     remove() { this.removed += 1; },
     getBoundingClientRect() { return { left: 10, top: 20, width: 600, height: 400 }; },
   };
-  const publication = stageSemanticPublication(documentTarget, root, revision, "a".repeat(40), facts, identities);
-  return { root, revision, created, facts, canvas, publication };
+  const searchEvents = [];
+  const searchSink = {
+    queryChanged(generation, identity, query) { searchEvents.push({ kind: "query", generation, identity, query }); },
+    resultActivated(generation, identity, query, index) { searchEvents.push({ kind: "activation", generation, identity, query, index }); },
+  };
+  const publication = stageSemanticPublication(
+    documentTarget,
+    root,
+    revision,
+    "a".repeat(40),
+    facts,
+    identities,
+    7,
+    searchSink,
+  );
+  return { root, revision, created, facts, canvas, publication, searchEvents };
 }
 
 function descendants(element) {
@@ -161,7 +183,8 @@ test("semantic publication commits canvas, safe HTML labels, inspector, and lege
   ]);
 
   f.publication.commit(f.canvas, snapshot);
-  assert.deepEqual(f.root.children, [f.canvas, overlay, inspector, legend]);
+  const search = f.created.find((element) => Object.hasOwn(element.dataset, "pathSearch"));
+  assert.deepEqual(f.root.children, [search, f.canvas, overlay, inspector, legend]);
   assert.equal(f.revision.textContent, "a".repeat(40));
   assert(overlay.children.every((label) => label.style.width === "144px" && /^translate\(-?\d+(?:\.\d+)?px, -?\d+(?:\.\d+)?px\)$/u.test(label.style.transform)));
   const outerDisclosure = JSON.stringify({
@@ -170,6 +193,56 @@ test("semantic publication commits canvas, safe HTML labels, inspector, and lege
     labels: overlay.children.map((label) => ({ dataset: label.dataset, attributes: [...label.attributes], style: label.style })),
   });
   for (const identity of identities.slice(1, 6).map(({ identity }) => identity)) assert.equal(outerDisclosure.includes(identity), false);
+});
+
+test("native path search publishes exact safe results, semantic callbacks, empty/no-match/count states, and bounded cleanup", () => {
+  const f = committedFixture();
+  const input = byDataset(f.root, "pathSearchInput");
+  const results = byDataset(f.root, "pathSearchResults");
+  const summary = byDataset(f.root, "pathSearchSummary");
+  const buttons = byDataset(f.root, "pathSearchButtons");
+  assert.equal(input.tagName, "INPUT");
+  assert.equal(input.type, "search");
+  assert.equal(input.autocomplete, "off");
+  assert.equal(input.spellcheck, false);
+  assert.equal(results.hidden, true);
+
+  input.value = "paths/";
+  input.dispatch("input");
+  assert.deepEqual(f.searchEvents.at(-1), { kind: "query", generation: 7, identity: f.publication.searchIdentity, query: "paths/" });
+  f.publication.setSearchResults("paths/", [0, 1, 8]);
+  assert.equal(summary.textContent, "3 matching modules.");
+  assert.equal(results.hidden, false);
+  assert.equal(buttons.children.length, 3);
+  assert(buttons.children.every((button) => button.tagName === "BUTTON" && button.type === "button"));
+  assert(buttons.children.every((button) => button.children.length === 1
+    && button.children[0].tagName === "BDI" && button.children[0].attributes.get("dir") === "auto"));
+  assert.deepEqual(buttons.children.map((button) => button.children[0].textContent), [
+    f.facts[0].canonicalPath, f.facts[1].canonicalPath, f.facts[8].canonicalPath,
+  ]);
+  buttons.children[1].dispatch("click");
+  assert.deepEqual(f.searchEvents.at(-1), {
+    kind: "activation", generation: 7, identity: f.publication.searchIdentity, query: "paths/", index: 1,
+  });
+
+  input.value = "none";
+  f.publication.setSearchResults("none", []);
+  assert.equal(summary.textContent, "No matching modules.");
+  assert.deepEqual(buttons.children, []);
+  input.value = "x";
+  f.publication.setSearchResults("x", [0]);
+  assert.equal(summary.textContent, "1 matching module.");
+  f.publication.clearSearch();
+  assert.equal(input.value, "");
+  assert.equal(results.hidden, true);
+  assert.equal(summary.textContent, "");
+  assert.deepEqual(buttons.children, []);
+  assert.throws(() => f.publication.setSearchResults("stale", []), /snapshot differs/u);
+
+  f.publication.rollback();
+  input.value = "retained";
+  input.dispatch("input");
+  assert.equal(f.searchEvents.at(-1).kind, "activation");
 });
 
 test("every M boundary keeps exact selected facts while selection reuses cached projection for inspector exclusion", () => {
@@ -284,4 +357,6 @@ test("label and inspector CSS fixes exact inert style, dimensions, clipping, bid
   assert.match(css, /\[data-inspector\][^{]*\{[^}]*z-index:\s*2;/su);
   assert.match(css, /\[data-canonical-path\][^{]*\{[^}]*overflow-wrap:\s*anywhere;[^}]*unicode-bidi:\s*isolate;/su);
   assert.match(css, /\[data-palette-legend\][^{]*\{[^}]*pointer-events:\s*none;[^}]*position:\s*absolute;/su);
+  assert.match(css, /\[data-path-search-results\]\s*\{[^}]*max-block-size:\s*min\(13\.75rem, 40vh\);[^}]*overflow-y:\s*auto;/su);
+  assert.match(css, /\[data-path-search-buttons\] bdi\s*\{[^}]*unicode-bidi:\s*isolate;/su);
 });

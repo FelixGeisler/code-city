@@ -198,6 +198,60 @@ identifiable through its fixed transforms. There is no configurable lighting,
 normal or material input, texture, fog, shadow, blending, polygon offset,
 antialiasing promise, outline, or static edge pass.
 
+== Path search and reveal
+
+A committed city has one labelled native `input type="search"` in normal flow
+immediately above the city. Each exact input value is matched synchronously
+against every canonical module path with case-sensitive ECMAScript `includes`.
+There is no trimming, case folding, normalization, tokenization, ranking, glob,
+regular expression, source-text search, pagination, truncation, virtualization,
+or result cap below the existing 4,000-module envelope. Results retain
+canonical index order. Empty input shows no result region or no-match message;
+nonempty input shows `No matching modules.`, `1 matching module.`, or
+`<N> matching modules.` as applicable.
+
+The count and complete native `button type="button"` list share one region with
+`max-block-size: min(13.75rem, 40vh)` and native vertical overflow. It cannot
+overlay the canvas, labels, inspector, legend, or Reset control. Each button's
+only repository-derived content is an inner `<bdi dir="auto">` assigned via
+`textContent`. Paths and queries never enter attributes, IDs, classes, styles,
+URLs, object keys, logs, provider traffic, WebGL, telemetry, observers, or
+release evidence. Ordinary native text editing, scrolling, Enter/Space button
+activation, and Tab/Shift+Tab order apply; there are no input Enter, Escape,
+arrow-key, or roving-focus shortcuts and search is not autofocused.
+
+Semantic publication owns only the native search nodes and listeners. It sends
+exact query and numeric canonical-index callbacks through current generation,
+publication-identity, query-snapshot, and current-result gates. The controller
+owns inspection facts, literal matching, result validation, selection, and
+failure decisions. A stale mismatch is inert. A malformed current activation
+or current search DOM failure revokes the city as `M1-PRES-1`.
+
+Activating a current result always selects and reveals it, including an already
+selected result. Derive its real AABB directly from aligned geometry and set the
+camera target to the exact AABB centre. Retain azimuth, elevation, and basis,
+but set magnification to `1`. Re-evaluate the existing scene camera and, for all
+eight selected-AABB corners relative to immutable scene centre `C`, evaluate all
+four clip rows with the documented separate `Math.fround` products and
+left-associated sums. Every input, product, sum, clip value, quotient, and
+rounded NDC value must be finite; require `clipW>0` and strict
+`-1 < f(clipX/clipW), f(clipY/clipW), f(clipZ/clipW) < 1` independently. There
+is no epsilon, retry, fallback, second framing policy, animation, or buffer
+rewrite.
+
+A successful activation invalidates pending hover, clears hover, ends gesture
+and capture, commits camera and district projection, applies selection and the
+existing inspector, relayouts labels, clears search, and then focuses the
+canvas. Any failure clears the complete city with no camera-only or
+selection-only final state. An eligible current pointer may queue the usual
+single hover recomputation. Search edit or clear changes no selection, hover,
+camera, or inspector; canvas selection does not reveal; Escape and empty canvas
+activation do not move the camera; Reset preserves search and selection while
+restoring `T=C`, overview orientation, and magnification `1`.
+
+Search/query/result state is current-session only and is cleared with every new
+attempt, rollback, replacement, failure, context loss, `pagehide`, or disposal.
+
 == Camera and controls
 
 The perspective camera uses world `+Y` as up. For azimuth `a`, elevation `e`,
@@ -573,12 +627,13 @@ has no group identity, path, label, anchor, projection, callback, or observer
 field. The controller stages presentation and detached semantic content,
 rechecks the current generation, commits the presenter, and performs one
 publication-root commit.
-Geometry, facts, revision, canvas, district-label overlay, inspector container,
-persistent legend, direct committed projection snapshot, and empty hover and
-selection become current together. Semantic commit performs one ordered
-`replaceChildren(canvas, labels, inspector, legend)`, validates attached
-canvas/overlay rectangles, and lays out the labels before current ownership is
-assigned.
+Geometry, facts, revision, native search controls/listeners, canvas,
+district-label overlay, inspector container, persistent legend, direct
+committed projection snapshot, and empty query, results, hover, and selection
+become current together. Semantic commit publishes search immediately before
+the fixed city viewport, performs the ordered viewport publication, validates
+attached canvas/overlay rectangles, and lays out labels before current
+ownership is assigned.
 
 [cols="2,3,3,2",options="header"]
 |===
@@ -589,8 +644,18 @@ assigned.
 |Commit staged canvas at exact overview
 |One complete city
 
+|Search edit or clear
+|Replace only exact query and canonical ordered results
+|No camera or visual mutation
+|Current city or `M1-PRES-1`
+
+|Search result activation
+|Validate publication/query/result; select, inspect, relayout, then clear search
+|End gesture/capture, invalidate hover, reveal at magnification `1`, redraw/project, then focus canvas
+|Coherent current city or `M1-PRES-1`
+
 |Camera action
-|Preserve facts and selection; relayout labels; clear then eligible hover recompute
+|Preserve facts, query/results, and selection; relayout labels; clear then eligible hover recompute
 |Validate proposed state, redraw, project every district, atomically accept, then callback
 |Current city or `M1-PRES-1`
 
@@ -600,7 +665,7 @@ assigned.
 |Current city or `M1-PRES-1`
 
 |Reset
-|Preserve facts and selection; clear then eligible hover recompute
+|Preserve facts, query/results, and selection; clear then eligible hover recompute
 |Cancel gesture/frame, release capture, restore exact overview
 |Current city or `M1-PRES-1`
 
@@ -615,7 +680,7 @@ assigned.
 |Current city
 
 |New or invalid submission, cancellation, or attempt/city/provider failure
-|Clear facts, hover, selection, inspector, and legend first
+|Clear facts, query/results/listeners, hover, selection, inspector, and legend first
 |Roll back candidate and dispose current session
 |Existing user state/category
 
@@ -630,7 +695,7 @@ assigned.
 |Replacement only
 
 |Context loss
-|Clear facts, hover, selection, inspector, and legend first
+|Clear facts, query/results/listeners, hover, selection, inspector, and legend first
 |Dispose; do not restore
 |`M1-PRES-1`
 
@@ -685,8 +750,9 @@ Stale generations, sessions, tokens, callbacks, and frame epochs only clean up.
 There is no new category, raw diagnostic, retry, fallback, restoration, or
 partial city.
 
-Repository paths may reach only the controller's inert inspector text and the
-approved grouped directory identity may reach only district-label `bdi.textContent`.
+Repository paths may reach only the controller's inert inspector text and
+semantic-publication result-button `bdi.textContent`; the approved grouped
+directory identity may reach only district-label `bdi.textContent`.
 No complete path or filename is added by labels. Source bodies, provider
 locators and values, parser values, credentials, raw
 diagnostics, telemetry, and persisted product state do not reach interaction,
@@ -696,9 +762,9 @@ hash, serialise, log, packetise, wrap, or retain inspection facts.
 
 == Non-goals
 
-This baseline adds no source viewing or download, dependency view, search,
-filtering, history, authentication, private-repository support, metric
-configuration, export, finding, AI guidance, touch-specific gesture, preset,
+This baseline adds no source viewing or download, dependency view, filtering,
+history, authentication, private-repository support, metric configuration,
+export, AI guidance, touch-specific gesture, preset,
 first-person movement, minimap, road, parcel, persistent building label,
 tooltip, static building edge, animation, saved view,
 sharing, or telemetry.

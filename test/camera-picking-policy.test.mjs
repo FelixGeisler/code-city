@@ -24,6 +24,7 @@ const {
   calculateOracleProjection,
   canvasToBackingPoint,
   createPerspectiveRay,
+  createBuildingRevealCommand,
   evaluateStrictDepthOracle,
   intersectRayAabb,
   orbitCamera,
@@ -36,6 +37,7 @@ const {
   projectDistricts,
   resetCamera,
   resizeCamera,
+  revealBuildingCamera,
   zoomCamera,
 } = policy;
 
@@ -226,6 +228,50 @@ test("Reset produces the exact overview basis, 45-degree sphere fit, perspective
   near(view.far, expectedDistance + expectedE + (expectedDistance - expectedE) / 2, "far");
   assert.deepEqual([view.matrix[3], view.matrix[7], view.matrix[11]], state.D.map((component) => Math.fround(-component)));
   assert.equal(view.matrix[15], Math.fround(view.s0));
+});
+
+test("building reveal derives the exact AABB centre, retains orientation, forces overview scale, and strictly contains all corners", () => {
+  const sceneBounds = [-20, -1, -15, 40, 45, 35];
+  const dimensions = { width: 320, height: 900 };
+  const geometry = geometryFromBoxes([
+    [-10, 0, -5, -2, 10, 3],
+    [25, 2, 20, 37, 42, 32],
+  ]);
+  let current = success(resetCamera(sceneBounds, dimensions));
+  current = success(orbitCamera(current.state, sceneBounds, dimensions, Math.PI / 7, -Math.PI / 15));
+  current = success(panCameraByKeyboard(current.state, sceneBounds, dimensions, "D"));
+  current = success(zoomCamera(current.state, sceneBounds, dimensions, "in"));
+  const command = success(createBuildingRevealCommand(geometry, 1));
+  assert.deepEqual(command.bounds, [25, 2, 20, 37, 42, 32]);
+  assert.deepEqual(command.command, { index: 1, target: [31, 22, 26] });
+  const revealed = success(revealBuildingCamera(current.state, sceneBounds, dimensions, geometry, command.command));
+  assert.deepEqual(revealed.state.target, [31, 22, 26]);
+  assert.equal(revealed.state.azimuth, current.state.azimuth);
+  assert.equal(revealed.state.elevation, current.state.elevation);
+  assert.deepEqual(revealed.state.D, current.state.D);
+  assert.deepEqual(revealed.state.R, current.state.R);
+  assert.deepEqual(revealed.state.V, current.state.V);
+  assert.equal(revealed.state.magnification, 1);
+  for (const x of [25, 37]) for (const y of [2, 42]) for (const z of [20, 32]) {
+    const q = [x, y, z].map((component, axis) => Math.fround(component - revealed.view.centre[axis]));
+    const clip = Array.from({ length: 4 }, (_, row) => {
+      const p0 = Math.fround(revealed.view.matrix[row] * q[0]);
+      const p1 = Math.fround(revealed.view.matrix[row + 4] * q[1]);
+      const p2 = Math.fround(revealed.view.matrix[row + 8] * q[2]);
+      const p3 = Math.fround(revealed.view.matrix[row + 12] * Math.fround(1));
+      return Math.fround(Math.fround(Math.fround(p0 + p1) + p2) + p3);
+    });
+    assert(clip.every(Number.isFinite));
+    assert(clip[3] > 0);
+    for (const component of clip.slice(0, 3)) {
+      const ndc = Math.fround(component / clip[3]);
+      assert(Number.isFinite(ndc) && -1 < ndc && ndc < 1);
+    }
+  }
+  failure(createBuildingRevealCommand(geometry, -1));
+  failure(createBuildingRevealCommand(geometry, 2));
+  failure(revealBuildingCamera(current.state, sceneBounds, dimensions, geometry, { index: 1, target: [31, 22, 25] }));
+  failure(revealBuildingCamera(current.state, sceneBounds, dimensions, geometry, { index: Number.NaN, target: [31, 22, 26] }));
 });
 
 test("keyboard and pointer orbit use exact directions, normalization, clamps, and regenerated orthonormal basis", () => {
@@ -666,6 +712,15 @@ test("both full 4,000-city envelopes keep immutable origin-C endpoints and stric
       assert(camera.view.oracleClipW.every((clipW) => clipW > 0), `${id}: elevation-extreme positive W`);
       assert(camera.view.oracleDepths.every((depth) => -1 < depth && depth < 1), `${id}: elevation-extreme strict depth`);
     }
+    for (const [selectedIndex, revealDimensions] of [[0, { width: 4096, height: 2160 }], [3_999, { width: 2160, height: 4096 }]]) {
+      const command = success(createBuildingRevealCommand(city.geometry, selectedIndex), `${id}: reveal command ${selectedIndex}`);
+      const revealed = success(revealBuildingCamera(camera.state, sceneBounds, revealDimensions, city.geometry, command.command), `${id}: reveal ${selectedIndex}`);
+      assert.deepEqual(revealed.state.target, command.command.target);
+      assert.equal(revealed.state.magnification, 1);
+      assert.equal(revealed.state.azimuth, camera.state.azimuth);
+      assert.equal(revealed.state.elevation, camera.state.elevation);
+      camera = revealed;
+    }
     camera = success(resetCamera(sceneBounds, { width: 4096, height: 2160 }));
     assert.deepEqual(camera.view.centre, city.presentation.centre);
     assert.equal(camera.state.magnification, 1);
@@ -737,7 +792,7 @@ test("district projection fails complete W, depth, finite, dimension, and exact-
 test("accepted ADR history and current perspective requirements stay synchronized without ADR 0013", async () => {
   const adrFiles = [
     ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 4_954, "4e5440b950fe24299b91508fe32bbf5b032afff0fe7d7691fa8335ba35f63374"],
-    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 21_131, "47e62d6bda9cb1561de95f1eb6835013ff90974b5129074ea8866b7ac6d4fc06"],
+    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 22_278, "8c52ee9f457ca97d132f4db3ca7b44d0b561fefdf21c33288892c975b946b4b2"],
     ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 14_785, "c9ae8519714f2aef3a4efe3fbec99927d98bccf715d340e26af89b96af786fc3"],
   ];
   const adrs = [];

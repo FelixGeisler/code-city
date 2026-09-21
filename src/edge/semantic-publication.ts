@@ -1,4 +1,9 @@
-import type { ControllerCanvas, ControllerPublication } from "../application/main-controller";
+import type {
+  ControllerCanvas,
+  ControllerPublication,
+  ControllerSearchEventSink,
+  SemanticPublicationIdentity,
+} from "../application/main-controller";
 import type { DistrictDescriptor, InspectionFact } from "../application/city-payload";
 import type { DistrictProjectionSnapshot } from "../domain/camera-picking-policy";
 import {
@@ -247,8 +252,34 @@ export function stageSemanticPublication(
   revision: string,
   inspection: readonly InspectionFact[],
   districts: readonly DistrictDescriptor[],
+  generation: number,
+  searchSink: ControllerSearchEventSink,
+  viewportRoot: Pick<HTMLElement, "replaceChildren"> = publicationRoot,
 ): ControllerPublication {
+  const searchIdentity: SemanticPublicationIdentity = Object.freeze({});
   let semanticDistricts = districts.map((district) => Object.freeze({ root: district.root, identity: district.identity }));
+  const search = documentTarget.createElement("section");
+  search.dataset.pathSearch = "";
+  const searchLabel = documentTarget.createElement("label");
+  searchLabel.textContent = "Find module by path";
+  const searchInput = documentTarget.createElement("input");
+  searchInput.type = "search";
+  searchInput.autocomplete = "off";
+  searchInput.spellcheck = false;
+  searchInput.dataset.pathSearchInput = "";
+  searchLabel.append(searchInput);
+  const searchResults = documentTarget.createElement("div");
+  searchResults.dataset.pathSearchResults = "";
+  searchResults.hidden = true;
+  const searchSummary = documentTarget.createElement("p");
+  searchSummary.dataset.pathSearchSummary = "";
+  const searchButtons = documentTarget.createElement("div");
+  searchButtons.dataset.pathSearchButtons = "";
+  searchResults.append(searchSummary, searchButtons);
+  search.append(searchLabel, searchResults);
+  const inputListener = (): void => searchSink.queryChanged(generation, searchIdentity, searchInput.value);
+  searchInput.addEventListener("input", inputListener);
+  let resultListeners: Array<Readonly<{ button: HTMLButtonElement; listener: () => void }>> = [];
   const inspector = documentTarget.createElement("section");
   inspector.dataset.inspector = "";
   inspector.setAttribute("role", "status");
@@ -304,11 +335,50 @@ export function stageSemanticPublication(
     }
   };
 
+  const clearResultListeners = (): void => {
+    for (const entry of resultListeners) entry.button.removeEventListener("click", entry.listener);
+    resultListeners = [];
+  };
+
+  const publishSearchResults = (query: string, indices: readonly number[]): void => {
+    if (searchInput.value !== query) throw new Error("Search query snapshot differs");
+    clearResultListeners();
+    searchButtons.replaceChildren();
+    if (query === "") {
+      searchSummary.textContent = "";
+      searchResults.hidden = true;
+      return;
+    }
+    searchSummary.textContent = indices.length === 0
+      ? "No matching modules."
+      : `${indices.length} matching ${indices.length === 1 ? "module" : "modules"}.`;
+    for (const index of indices) {
+      if (!Number.isSafeInteger(index) || index < 0 || index >= inspection.length) throw new Error("Invalid search result");
+      const button = documentTarget.createElement("button");
+      button.type = "button";
+      const path = documentTarget.createElement("bdi");
+      path.setAttribute("dir", "auto");
+      path.textContent = inspection[index]!.canonicalPath;
+      button.append(path);
+      const listener = (): void => searchSink.resultActivated(generation, searchIdentity, searchInput.value, index);
+      button.addEventListener("click", listener);
+      resultListeners.push(Object.freeze({ button, listener }));
+      searchButtons.append(button);
+    }
+    searchResults.hidden = false;
+  };
+
   return Object.freeze({
+    searchIdentity,
     commit(nextCanvas: ControllerCanvas, snapshot: DistrictProjectionSnapshot) {
       cache = cacheProjection(snapshot);
       canvas = nextCanvas;
-      publicationRoot.replaceChildren(nextCanvas as unknown as Node, labelsOverlay, inspector, legend);
+      viewportRoot.replaceChildren(nextCanvas as unknown as Node, labelsOverlay, inspector, legend);
+      if (viewportRoot === publicationRoot) {
+        publicationRoot.replaceChildren(search, nextCanvas as unknown as Node, labelsOverlay, inspector, legend);
+      } else {
+        publicationRoot.replaceChildren(search, viewportRoot as unknown as Node);
+      }
       committedToRoot = true;
       publishLayout();
       revisionOutput.textContent = revision;
@@ -316,6 +386,13 @@ export function stageSemanticPublication(
     districtProjection(snapshot: DistrictProjectionSnapshot) {
       cache = cacheProjection(snapshot);
       publishLayout();
+    },
+    setSearchResults(query: string, indices: readonly number[]) {
+      publishSearchResults(query, indices);
+    },
+    clearSearch() {
+      searchInput.value = "";
+      publishSearchResults("", []);
     },
     setSelection(index: number | null) {
       if (index === null) {
@@ -331,6 +408,13 @@ export function stageSemanticPublication(
       if (committedToRoot) publishLayout();
     },
     rollback() {
+      try { searchInput.removeEventListener("input", inputListener); } catch {}
+      try { clearResultListeners(); } catch {}
+      try { searchInput.value = ""; } catch {}
+      try { searchSummary.textContent = ""; } catch {}
+      try { searchButtons.replaceChildren(); } catch {}
+      try { searchResults.hidden = true; } catch {}
+      try { search.remove(); } catch {}
       try { inspector.hidden = true; } catch {}
       try { inspector.replaceChildren(); } catch {}
       try { labelsOverlay.replaceChildren(); } catch {}

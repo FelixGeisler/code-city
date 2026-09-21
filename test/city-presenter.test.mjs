@@ -16,6 +16,7 @@ const literals = JSON.parse(await readFile(path.join(projectRoot, "test/fixtures
 const { buildCity } = await import("../src/domain/city-model.ts");
 const { validateCityPayload } = await import("../src/application/city-payload.ts");
 const {
+  createBuildingRevealCommand,
   orbitCameraByKeyboard,
   orbitCameraByPointer,
   panCameraByKeyboard,
@@ -23,6 +24,7 @@ const {
   pickAtCanvasPoint,
   resetCamera,
   resizeCamera,
+  revealBuildingCamera,
   zoomCamera,
 } = await import("../src/domain/camera-picking-policy.ts");
 const { createCityPresenter } = await import("../src/edge/city-presenter.ts");
@@ -815,6 +817,67 @@ test("canvas accessibility and exact camera and selection key mappings suppress 
   assert.equal(names(canvas.gl).filter((name) => name === "drawElementsInstanced").length, draws);
   assert.deepEqual(events, selectionKeys.map(([, action]) => ["selection", 1, action]));
   assert.deepEqual(failures, []);
+});
+
+test("numeric reveal is one current-only camera/selection transaction that ends gesture, invalidates hover, and focuses separately", () => {
+  const environment = fakeEnvironment({ width: 320, height: 180 });
+  const { presenter, failures } = failuresCollector(environment);
+  const city = validateCityPayload(buildCity([
+    { canonicalPath: "a/first.ts", S: 2, U: 2, M: 1 },
+    { canonicalPath: "z/second.ts", S: 20, U: 10, M: 4 },
+  ]));
+  assert(city);
+  assert.deepEqual(present(environment, presenter, 1, city.geometry), COMMITTED);
+  const canvas = environment.canvases[0];
+  canvas.dispatch("pointermove", inputEvent({ clientX: 100, clientY: 80 }));
+  const pending = environment.animationFrames.at(-1).handle;
+  canvas.dispatch("pointerdown", inputEvent({ pointerId: 9, button: 0, clientX: 100, clientY: 80 }));
+  assert(canvas.pointerCaptures.has(9));
+  const command = createBuildingRevealCommand(city.geometry, 1);
+  assert.equal(command.kind, "success");
+  const expected = revealBuildingCamera(
+    resetCamera(city.geometry.bounds, { width: 320, height: 180 }).state,
+    city.geometry.bounds,
+    { width: 320, height: 180 },
+    city.geometry,
+    command.command,
+  );
+  assert.equal(expected.kind, "success");
+  const result = presenter.revealSelection(1, command.command);
+  assert.equal(result.kind, "applied");
+  assert.equal(result.snapshot.cssWidth, 320);
+  assert.equal(result.snapshot.cssHeight, 180);
+  assert.deepEqual(matrices(canvas.gl).at(-1), expected.view.matrix);
+  assert(canvas.releaseCalls.includes(9));
+  assert(environment.cancelledFrames.includes(pending));
+  const selectedUniforms = canvas.gl.calls.filter(([name, uniform]) => name === "uniform1i" && uniform?.id === 7);
+  assert.equal(selectedUniforms.at(-1)[2], 1);
+  assert.deepEqual(presenter.focusCanvas(1), APPLIED);
+  assert.equal(canvas.focusCount, 2, "pointer and explicit post-search focus were both native canvas focus calls");
+  assert.deepEqual(failures, []);
+  assert.deepEqual(presenter.revealSelection(2, command.command), STALE);
+  presenter.dispose();
+  environment.runFrame(pending);
+  assert.deepEqual(failures, []);
+});
+
+test("invalid reveal index, dimensions, and draw revoke the complete presenter session without a retained camera or selection", () => {
+  for (const [label, environment, mutate, command] of [
+    ["index", fakeEnvironment(), () => {}, { index: 99, target: [0, 0, 0] }],
+    ["dimensions", fakeEnvironment(), (value) => { value.host.width = 0; }, null],
+    ["draw", fakeEnvironment({ gl: { callFault: { method: "drawElementsInstanced", occurrence: 3 } } }), () => {}, null],
+  ]) {
+    const { presenter, failures } = failuresCollector(environment);
+    const geometry = oneBuilding();
+    assert.deepEqual(present(environment, presenter, 1, geometry), COMMITTED, label);
+    const accepted = createBuildingRevealCommand(geometry, 0);
+    assert.equal(accepted.kind, "success");
+    mutate(environment);
+    assert.deepEqual(presenter.revealSelection(1, command ?? accepted.command), PRESENTATION_FAILURE, label);
+    assert.deepEqual(failures, [[1, "Presentation failed", "M1-PRES-1"]], label);
+    assert.deepEqual(presenter.setVisualState(1, null, null), STALE, label);
+    assert.deepEqual(presenter.focusCanvas(1), STALE, label);
+  }
 });
 
 test("primary orbit and secondary pan use exact pointer deltas, focus, capture, and no activation", () => {

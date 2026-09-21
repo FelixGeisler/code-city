@@ -8,14 +8,19 @@ image::building-blocks.svg[Main-context controller and presenter with the sole p
 
 |UI attempt controller |Main application |Validate submitted URL shape; own the
 current attempt, the sole city-payload validator, immutable inspection snapshot,
-semantic hover and selection, traversal, inspector and district-label
-identities, generation/token gating, and the single publication-root commit
+semantic hover and selection, exact path matching and result validation,
+traversal, inspector and district-label identities, generation/token/publication
+identity gating, and the single publication-root commit
 
 |Worker bridge |Main and worker edge |Own the sole concrete worker handle;
 validate closed, generation-tagged commands, outcomes, and lifecycle messages;
 reject stale messages
 
-|Interactive presenter |Main edge |Own stage tokens and sessions, canvas and DOM
+|Semantic publication |Main edge |Own the native current-city path-search input,
+result buttons, their DOM listeners, and inert result-path `bdi.textContent`;
+forward only exact query and numeric canonical-index semantic callbacks
+
+|Interactive presenter |Main edge |Own stage tokens and sessions, canvas and its DOM
 input, immutable scene-centre camera, pointer capture, request epoch, building-only
 CPU picking, exact numeric district projection snapshots,
 one-program/two-pass WebGL city resources, and uniform-driven hover/selection
@@ -53,8 +58,10 @@ receives no group identity or path. Its closed numeric projection callback
 contains no identity or token. Presenter input listeners map DOM events to the semantic event
 families in
 xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]. The
-controller receives no DOM event and rejects stale generations or invalid indices
-before changing semantics or sending visual state.
+controller receives no DOM event and rejects stale generations, semantic
+publication identities, query snapshots, or invalid indices before changing
+semantics or sending visual state. A validated search reveal reaches the
+presenter only as a numeric canonical index and exact numeric AABB-centre target.
 
 == Dependency rule
 
@@ -68,7 +75,13 @@ Reverse dependencies are forbidden. Driving adapters enter application ports;
 domain code imports no GitHub, browser, Worker, Tree-sitter, or WebGL API. Pure
 camera and picking policy may remain in core, while mutable browser and WebGL
 mechanisms remain at the edge. Transport moves data but does not classify
-product failures. Only the controller changes visible semantic state.
+product failures. Only the controller changes visible semantic state. This
+slice remains governed by xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
+the amended xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR
+0011], and
+xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[ADR
+0012].
 
 [[data-boundaries]]
 == Data boundaries
@@ -112,17 +125,24 @@ aligned `{root,identity}` district descriptors. The presenter receives geometry
 and numeric presentation, never inspection, identity, or label data; it returns
 only ordered numeric projection snapshots.
 
-|Semantic event |Presenter → controller |Generation plus hover or activation
-index, one traversal action, or an immutable closed district projection snapshot;
-never a DOM event, path, fact, or browser object
+|Semantic event |Presenter/semantic publication → controller |From the
+presenter: generation plus hover or activation index, one traversal action, or
+an immutable closed district projection snapshot. From semantic publication:
+generation, exact publication identity, exact query snapshot, and optionally a
+numeric canonical index. Never a DOM event, fact, or browser object; query text
+never enters the presenter.
 
-|Semantic publication |Controller → DOM |One atomically committed canvas,
-inert clipped district-label overlay, selection inspector, and persistent
-noninteractive numeric complexity legend
+|Semantic publication |Controller → DOM |One atomically committed native path
+search, canvas, inert clipped district-label overlay, selection inspector, and
+persistent noninteractive numeric complexity legend. Matching returns only
+canonical ordered numeric indices; semantic publication assigns captured paths
+to result `bdi.textContent`.
 
-|Visual state |Controller → presenter |Generation plus opaque hover and selection
-indices; the presenter validates them and assigns focus uniforms around the
-fixed plate-first/building-second redraw; never inspection facts or plate indices
+|Visual state |Controller → presenter |Generation plus opaque hover/selection
+indices, or one validated numeric reveal `{index,target}`. The presenter
+validates them and assigns focus/camera state around the fixed
+plate-first/building-second redraw; never query text, inspection facts, paths,
+search nodes, or plate indices
 
 |Attempt outcome |Worker → controller |One closed, generation-tagged success or
 failure payload. Every post-selection outcome carries the selected full revision;
@@ -131,7 +151,7 @@ pre-selection failures carry none.
 
 Concrete provider, parser, DOM, and WebGL objects remain at their edges.
 Repository paths may be published only as wrapping, bidirectionally isolated
-inspector `textContent`; approved grouped directory identities may additionally
+inspector or search-result `bdi.textContent`; approved grouped directory identities may additionally
 be district-label `bdi.textContent`. They are never markup, attributes, styles,
 object keys, shader text, URLs, resource locators, logs, or evidence. Evidence observers access geometry only
 and do not retain or disclose inspection.
