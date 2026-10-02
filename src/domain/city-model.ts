@@ -124,7 +124,12 @@ export function paletteBandForComplexity(complexity: number): typeof COMPLEXITY_
 
 export function displayedHeight(sourceLines: number): number {
   if (!nonnegativeSafeInteger(sourceLines)) invalid();
-  return 4 + Math.floor(36 * Math.log1p(Math.min(sourceLines, 1000)) / Math.log(1001) + 0.5);
+  const capped = Math.min(sourceLines, 1000);
+  const ratio = capped / 1000;
+  const root = Math.sqrt(ratio);
+  const scaled = 36 * root;
+  const rounded = Math.floor(scaled + 0.5);
+  return 4 + rounded;
 }
 
 export function displayedSide(executableUnits: number): number {

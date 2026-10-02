@@ -75,10 +75,10 @@ function selectedContent(
     "data-maximum-complexity",
   );
 
-  const dimensionTitle = heading(documentTarget, "h3", "Bounded, log-compressed displayed dimensions");
+  const dimensionTitle = heading(documentTarget, "h3", "Bounded displayed dimensions");
   const dimensionPolicy = documentTarget.createElement("p");
   dimensionPolicy.dataset.dimensionPolicy = "";
-  dimensionPolicy.textContent = "S cap 1000; displayed height range 4..40. U cap 100; displayed side range 3..18.";
+  dimensionPolicy.textContent = "Height: square-root scale; S cap 1000; displayed height range 4..40. Footprint: log-compressed scale; U cap 100; displayed side range 3..18.";
   const dimensions = documentTarget.createElement("dl");
   dimensions.dataset.metricDimensions = "";
   definition(documentTarget, dimensions, "Displayed height", String(value.height), "data-height");

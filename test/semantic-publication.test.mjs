@@ -76,7 +76,7 @@ const projection = Object.freeze({
   cssHeight: 400,
   districts: Object.freeze([{ screenX: 1, screenY: 2, area: 3, lateral: true }]),
 });
-const displayedHeight = (S) => 4 + Math.floor(36 * Math.log1p(Math.min(S, 1000)) / Math.log(1001) + 0.5);
+const displayedHeight = (S) => 4 + Math.floor(36 * Math.sqrt(Math.min(S, 1000) / 1000) + 0.5);
 const displayedSide = (U) => 3 + Math.floor(15 * (Math.log1p(Math.min(U, 100)) / Math.log(101)) ** 1.5 + 0.5);
 
 function fixture(options = {}) {
@@ -182,6 +182,8 @@ test("context publication is safe, selected context wins by supplied controller 
   assert.equal(byAttribute(inspector, "data-height").textContent, String(displayedHeight(selected.S)));
   assert.equal(byAttribute(inspector, "data-width").textContent, String(displayedSide(selected.U)));
   assert.equal(byAttribute(inspector, "data-depth").textContent, String(displayedSide(selected.U)));
+  assert.equal(descendants(inspector).find((element) => element.tagName === "H3" && element.textContent === "Bounded displayed dimensions")?.textContent, "Bounded displayed dimensions");
+  assert.equal(byDataset(inspector, "dimensionPolicy").textContent, "Height: square-root scale; S cap 1000; displayed height range 4..40. Footprint: log-compressed scale; U cap 100; displayed side range 3..18.");
 
   f.publication.setContext(3, "one/two");
   assert.equal(inspector.hidden, false);

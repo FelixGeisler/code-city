@@ -120,8 +120,8 @@ test("validateCityPayload creates immutable controller-owned non-aliasing city s
       { minimum: [-3, -0.5, -3], dimensions: [11, 0.5, 11] },
       { minimum: [-3, -0.5, 16], dimensions: [11, 0.5, 11] },
     ],
-    sceneBounds: [-3, -0.5, -3, 8, 12, 27],
-    centre: [2.5, 5.75, 12],
+    sceneBounds: [-3, -0.5, -3, 8, 6, 27],
+    centre: [2.5, 2.75, 12],
   });
   assert.deepEqual(Reflect.ownKeys(validated.presentation).sort(), ["centre", "plates", "sceneBounds"]);
   assert.equal(JSON.stringify(validated.presentation).includes("src/"), false);
@@ -144,6 +144,18 @@ test("validateCityPayload creates immutable controller-owned non-aliasing city s
   assert.deepEqual([...validated.geometry.bounds], [...before.geometry.bounds]);
   assert.deepEqual(validated.inspection, before.inspection);
   assert.deepEqual(validated.presentation, validateCityPayload(before).presentation);
+});
+
+test("controller independently accepts square-root geometry and rejects the superseded logarithmic height", () => {
+  const exact = cloneCity(buildCity([{ canonicalPath: "height-policy.ts", S: 200, U: 0, M: 0 }]));
+  assert.equal(validateCityPayload(exact).geometry.sizes[1], 20);
+
+  const formerHeight = 4 + Math.floor(36 * Math.log1p(200) / Math.log(1001) + 0.5);
+  assert.notEqual(formerHeight, 20);
+  const superseded = cloneCity(buildCity([{ canonicalPath: "height-policy.ts", S: 200, U: 0, M: 0 }]));
+  superseded.geometry.sizes[1] = formerHeight;
+  superseded.geometry.bounds[4] = formerHeight;
+  fails(superseded, "superseded logarithmic height");
 });
 
 test("city and inspection containers require exact own enumerable data without inherited, symbol, accessor, sparse, or extra input", () => {

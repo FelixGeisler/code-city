@@ -261,8 +261,8 @@ test("success is accepted once after the barrier, staged before one publication 
   assert.notEqual(f.presentation.calls[0].geometry.origins, CITY.geometry.origins);
   assert.deepEqual(f.presentation.calls[0].numericPresentation, {
     plates: [{ minimum: [-3, -0.5, -3], dimensions: [10, 0.5, 10] }],
-    sceneBounds: [-3, -0.5, -3, 7, 8, 7],
-    centre: [2, 3.75, 2],
+    sceneBounds: [-3, -0.5, -3, 7, 5, 7],
+    centre: [2, 2.25, 2],
   });
   assert.equal(Object.isFrozen(f.presentation.calls[0].numericPresentation), true);
   assert.deepEqual(f.events.slice(-6), ["stage", "semantic:stage", "presenter:commit", "visual", "publication:commit", `view:success:${SHA}`]);

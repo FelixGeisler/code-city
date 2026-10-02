@@ -14,7 +14,7 @@ registerHooks({
 
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const fixture = JSON.parse(await readFile(path.join(projectRoot, "test", "fixtures", "city-cases.json"), "utf8"));
-const { buildCity } = await import("../src/domain/city-model.ts");
+const { buildCity, displayedHeight } = await import("../src/domain/city-model.ts");
 const { validateCityPayload } = await import("../src/application/city-payload.ts");
 
 function exactKeys(value, keys) {
@@ -157,6 +157,48 @@ test("the literal city fixture is closed and covers mapping, layout, permutation
   }
 });
 
+test("square-root height uses the exact approved table, cap, exhaustive range, and rejection policy", () => {
+  const table = [
+    [0, 4], [25, 10], [50, 12], [100, 15], [200, 20], [600, 32],
+    [999, 40], [1000, 40], [1001, 40], [Number.MAX_SAFE_INTEGER, 40],
+  ];
+  for (const [sourceLines, height] of table) assert.equal(displayedHeight(sourceLines), height, `S=${sourceLines}`);
+
+  let prior = displayedHeight(0);
+  for (let sourceLines = 0; sourceLines <= 1000; sourceLines += 1) {
+    const height = displayedHeight(sourceLines);
+    assert.equal(Number.isInteger(height), true, `integer S=${sourceLines}`);
+    assert(height >= 4 && height <= 40, `range S=${sourceLines}`);
+    assert(height >= prior, `monotonic S=${sourceLines}`);
+    prior = height;
+  }
+  for (const invalid of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1, "1", null, undefined, 1n]) {
+    assertCityFailure(() => displayedHeight(invalid), `invalid S=${String(invalid)}`);
+  }
+});
+
+test("equal source-line facts have one global height independent of districts, neighbours, and input order", () => {
+  const facts = [
+    { canonicalPath: "repository-a/district-a/equal-600.ts", S: 600, U: 0, M: 0 },
+    { canonicalPath: "repository-b/district-b/equal-600.ts", S: 600, U: 100, M: 16 },
+    { canonicalPath: "repository-a/district-a/equal-1000.ts", S: 1000, U: 1, M: 1 },
+    { canonicalPath: "repository-b/district-c/equal-1000.ts", S: 1000, U: 50, M: 8 },
+    { canonicalPath: "repository-b/district-c/neighbour.ts", S: 25, U: 100, M: 3 },
+  ];
+  for (const input of [facts, [...facts].reverse()]) {
+    const city = buildCity(input);
+    const heights = new Map(city.inspection.map((fact, index) => [
+      fact.canonicalPath,
+      city.geometry.sizes[index * 3 + 1],
+    ]));
+    assert.equal(heights.get("repository-a/district-a/equal-600.ts"), 32);
+    assert.equal(heights.get("repository-b/district-b/equal-600.ts"), 32);
+    assert.equal(heights.get("repository-a/district-a/equal-1000.ts"), 40);
+    assert.equal(heights.get("repository-b/district-c/equal-1000.ts"), 40);
+  }
+});
+
 test("literal N=1,2,4,5 mapping, palette, layout, and bounds match exact owned typed output", () => {
   for (const entry of fixture.cityCases) {
     const immutableFacts = entry.facts.map((fact) => Object.freeze({ ...fact }));
@@ -177,26 +219,26 @@ test("literal N=1,2,4,5 mapping, palette, layout, and bounds match exact owned t
 
 test("the approved 18-building synthetic fixture has exact bytes, three groups, projected dimensions, canonical alignment, and actual-only bounds", async () => {
   const fixtureBytes = await readFile(path.join(projectRoot, "test", "fixtures", "interactive", "fixture.json"));
-  assert.equal(createHash("sha256").update(fixtureBytes).digest("hex"), "5085a17a80aa57fc7fd49b0e8ec0de0e6a82b3a894bcb7c30528bb084ed7488a");
+  assert.equal(createHash("sha256").update(fixtureBytes).digest("hex"), "12ca139180e3893d19a85271f469c3a6ee2badb3c5ed440bde2b34bcfb94375f");
   const records = JSON.parse(fixtureBytes);
   assert.equal(records.length, 21);
   assert.equal(new Set(records.map(({ path: sourcePath }) => sourcePath)).size, 21);
   const expected = [
-    ["apps/console/src/bootstrap.ts", 3, 2, 1, 11, 5], ["apps/console/src/commands/route.js", 4, 2, 2, 12, 5],
-    ["apps/console/src/commands/search.ts", 7, 3, 4, 15, 5], ["apps/console/src/state/session.ts", 3, 2, 8, 11, 5],
-    ["apps/console/src/view/help.ts", 1, 0, 0, 8, 3], ["apps/console/src/view/render.js", 10, 4, 1, 16, 6],
-    ["packages/engine/src/contracts/result.ts", 1, 0, 0, 8, 3], ["packages/engine/src/graph/walk.ts", 6, 3, 8, 14, 5],
-    ["packages/engine/src/parse.ts", 3, 2, 2, 11, 5], ["packages/engine/src/report/outlier.ts", 40, 17, 21, 23, 10],
-    ["packages/engine/src/score.ts", 10, 4, 4, 16, 6], ["packages/engine/src/validate.ts", 3, 2, 16, 11, 5],
-    ["packages/ui/src/components/card.ts", 3, 2, 2, 11, 5], ["packages/ui/src/components/grid.ts", 4, 2, 4, 12, 5],
-    ["packages/ui/src/interaction/hover.js", 3, 2, 8, 11, 5], ["packages/ui/src/interaction/select.js", 3, 2, 16, 11, 5],
-    ["packages/ui/src/palette.js", 3, 2, 1, 11, 5], ["packages/ui/src/theme.ts", 1, 0, 0, 8, 3],
+    ["apps/console/src/bootstrap.ts", 200, 1, 1, 20, 4], ["apps/console/src/commands/route.js", 4, 2, 2, 6, 5],
+    ["apps/console/src/commands/search.ts", 7, 3, 4, 7, 5], ["apps/console/src/state/session.ts", 3, 2, 8, 6, 5],
+    ["apps/console/src/view/help.ts", 0, 0, 0, 4, 3], ["apps/console/src/view/render.js", 10, 4, 1, 8, 6],
+    ["packages/engine/src/contracts/result.ts", 1, 0, 0, 5, 3], ["packages/engine/src/graph/walk.ts", 6, 3, 8, 7, 5],
+    ["packages/engine/src/parse.ts", 3, 2, 2, 6, 5], ["packages/engine/src/report/outlier.ts", 1000, 1, 1, 40, 4],
+    ["packages/engine/src/score.ts", 10, 4, 4, 8, 6], ["packages/engine/src/validate.ts", 3, 2, 16, 6, 5],
+    ["packages/ui/src/components/card.ts", 3, 2, 2, 6, 5], ["packages/ui/src/components/grid.ts", 4, 2, 4, 6, 5],
+    ["packages/ui/src/interaction/hover.js", 3, 2, 8, 6, 5], ["packages/ui/src/interaction/select.js", 3, 2, 16, 6, 5],
+    ["packages/ui/src/palette.js", 600, 1, 1, 32, 4], ["packages/ui/src/theme.ts", 1, 0, 0, 5, 3],
   ];
   const city = buildCity(expected.map(([canonicalPath, S, U, M]) => ({ canonicalPath, S, U, M })));
   assert.deepEqual(city.inspection.map(({ canonicalPath }) => canonicalPath), expected.map(([canonicalPath]) => canonicalPath));
   assert.deepEqual(Array.from({ length: 18 }, (_, index) => [city.geometry.sizes[index * 3 + 1], city.geometry.sizes[index * 3]]), expected.map((entry) => entry.slice(4)));
-  assert.deepEqual([...city.geometry.bounds], [0, 0, 0, 46, 23, 55]);
-  assert.deepEqual([...city.geometry.origins], [41,0,0,33,0,8,40,0,8,33,0,15,40,0,15,33,0,0,0,0,19,0,0,12,7,0,12,0,0,0,12,0,0,14,0,12,0,0,36,7,0,36,0,0,43,7,0,43,0,0,50,7,0,50]);
+  assert.deepEqual([...city.geometry.bounds], [0, 0, 0, 40, 40, 51]);
+  assert.deepEqual([...city.geometry.origins], [0,0,15,8,0,0,0,0,8,7,0,8,6,0,15,0,0,0,33,0,15,35,0,0,27,0,8,27,0,15,27,0,0,34,0,8,0,0,33,7,0,33,0,0,40,7,0,40,0,0,47,6,0,47]);
   assert.equal(validateCityPayload(city).geometry.count, 18);
 });
 

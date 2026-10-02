@@ -258,6 +258,17 @@ excluding labels from this baseline remains historical context; this later
 reversible semantic-publication refinement changes no grouped geometry, plate,
 renderer, camera, picking, metric, or privacy decision.
 
+== Subsequent refinement (issue 588)
+
+Issue https://github.com/FelixGeisler/code-city/issues/588[#588] replaces only
+the requirement-owned displayed-height projection with the fixed global
+square-root scale. Domain construction and the controller's independent
+reconstruction adopt that formula while retaining non-negative safe-integer
+admission, the `S=1000` cap, raw facts, footprint projection, grouping,
+packing, payload and evidence shapes, renderer, camera, picking, lifecycle,
+and privacy boundaries. This reversible policy refinement introduces no new
+architecture decision or dependency.
+
 == Consequences
 
 The current application gains one bounded, grouped, face-readable baseline
