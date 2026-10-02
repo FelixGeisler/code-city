@@ -229,15 +229,15 @@ button:focus-visible,
   outline-color: #ffffff;
 }
 
-[data-district-labels] {
-  inset: 0;
-  overflow: hidden;
+[data-district-context] {
+  align-items: start;
+  block-size: 20px;
+  display: flex;
+  justify-content: flex-start;
   pointer-events: none;
-  position: absolute;
-  z-index: 1;
 }
 
-[data-district-labels] > div {
+[data-district-context-label] {
   background: rgb(7 17 31 / 0.72);
   border: 0;
   border-radius: 3px;
@@ -249,15 +249,18 @@ button:focus-visible,
   outline: 0;
   overflow: hidden;
   padding-inline: 6px;
-  position: absolute;
-  text-align: center;
+  text-align: start;
   text-overflow: ellipsis;
   unicode-bidi: isolate;
   white-space: nowrap;
   width: 144px;
 }
 
-[data-district-labels] bdi {
+[data-district-context-label][hidden] {
+  display: none;
+}
+
+[data-district-context-label] bdi {
   display: block;
   isolation: isolate;
   overflow: hidden;
@@ -323,7 +326,8 @@ button:focus-visible,
   text-transform: uppercase;
 }
 
-[data-canonical-path] {
+[data-canonical-path],
+[data-selected-district] {
   display: block;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 0.9rem;
@@ -331,6 +335,10 @@ button:focus-visible,
   line-height: 1.45;
   overflow-wrap: anywhere;
   unicode-bidi: isolate;
+}
+
+[data-selected-district] {
+  margin-block-start: 0.65rem;
 }
 
 [data-dimension-policy] {

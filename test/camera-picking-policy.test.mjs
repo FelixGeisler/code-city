@@ -791,9 +791,9 @@ test("district projection fails complete W, depth, finite, dimension, and exact-
 
 test("accepted ADR history and current perspective requirements stay synchronized without ADR 0013", async () => {
   const adrFiles = [
-    ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 4_954, "4e5440b950fe24299b91508fe32bbf5b032afff0fe7d7691fa8335ba35f63374"],
-    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 22_278, "8c52ee9f457ca97d132f4db3ca7b44d0b561fefdf21c33288892c975b946b4b2"],
-    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 14_785, "c9ae8519714f2aef3a4efe3fbec99927d98bccf715d340e26af89b96af786fc3"],
+    ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 5_274, "b493f62f8a9a51d447b4b103a37a65f75687bcf0178465174d877234b278bb18"],
+    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 23_113, "9cc5774e0bc5b14575269904d304a83504a94173fc9bef3f61b257dc56eec912"],
+    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 15_484, "01b30c839e4f444d6b4d07317e0bf5643e9ef1a853c9a8dacbc8a1f574305a58"],
   ];
   const adrs = [];
   for (const [file, expectedLength, expectedHash] of adrFiles) {
@@ -810,7 +810,7 @@ test("accepted ADR history and current perspective requirements stay synchronize
   assert(adrs[2].includes("Subsequent refinement (issue 569)"));
   assert(adrs[1].includes("Subsequent refinement (issue 571)"));
   assert(adrs[2].includes("Subsequent refinement (issue 571)"));
-  assert(adrs.every((adr) => adr.includes("issues/573") && adr.includes("issues/575")));
+  assert(adrs.every((adr) => adr.includes("issues/573") && adr.includes("issues/575") && adr.includes("issues/586")));
   assert.equal(await readFile(path.join(root, "docs/modules/architecture/nav.adoc"), "utf8").then((text) => text.includes("0013")), false);
   const requirements = await readFile(path.join(root, "docs/modules/requirements/pages/city-and-failures.adoc"), "utf8");
   const normalized = requirements.replace(/\s+/g, " ");

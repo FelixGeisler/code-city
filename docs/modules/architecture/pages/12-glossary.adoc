@@ -42,14 +42,19 @@ It is rendered before buildings and is never a pick or focus candidate.
 ordered numeric `{screenX,screenY,area,lateral}` row per plate. It contains no
 identity, token, path, or DOM value.
 
-|District label
-|One inert clipped HTML `div` with an isolated `bdi.textContent` group name,
-aligned to a district plate by the controller's current numeric snapshot. It is
-not accessible, focusable, selectable, or a pick candidate.
+|Contextual district row
+|One reserved `20px` normal-flow row immediately after path search and before
+the city viewport. Its single inert, clipped label publishes the
+controller-resolved selected-over-hover district name through an isolated
+`bdi.textContent`, and hides and clears that text when neither context exists.
+Numeric projection does not control its visibility or layout. The row is hidden
+from accessibility APIs, unfocusable, pointer-transparent, and never a pick
+candidate.
 
 |Semantic state
-|The controller's current-generation inspection facts, aligned district
-identities, hover, selection, label overlay, and inspector publication.
+|The controller's current-generation inspection facts, resolved district
+context, hover, selection, one contextual-row publication, and inspector
+publication.
 
 |Visual replica
 |A presenter-owned opaque hover or selection index used only by the trusted
@@ -65,5 +70,6 @@ only after the controller commits the current city transaction.
 
 |Request epoch
 |A presenter-local counter that invalidates queued hover work after camera,
-gesture, lifecycle, or session changes.
+gesture, lifecycle, or session changes. Navigation forgets retained pointer
+coordinates; only fresh eligible movement can schedule replacement work.
 |===

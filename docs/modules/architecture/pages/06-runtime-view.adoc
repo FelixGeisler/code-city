@@ -20,14 +20,13 @@ image::runtime.svg[Successful aligned city validation, staging, commit, and inte
 . Stage an interactive presenter token with a direct numeric projection
   snapshot and detached semantic publication, recheck current-generation
   eligibility, commit the token and its latest snapshot, apply null visual
-  state, and atomically publish the native empty search controls immediately
-  before the city viewport with its ordered canvas, labels, inspector, and
-  legend.
-. While attached, validate the canvas/overlay rectangles and lay out labels
+  state, and atomically publish the native empty search controls, reserved
+  contextual district row, and city viewport with its ordered canvas,
+  inspector, and legend. Set contextual width from the actual canvas CSS width
   before assigning current ownership.
 
 Geometry, facts, revision, native search nodes/listeners, canvas,
-district-label overlay, inspector container, persistent numeric complexity
+contextual district row, inspector container, persistent numeric complexity
 legend, direct projection snapshot, and empty initial query, results, hover, and
 selection publish as one
 transaction. Each stage receives one complete
@@ -105,25 +104,29 @@ Listener, transport, semantic, and presentation cleanup is exactly once.
 
 The complete observable lifecycle matrix is owned by
 xref:requirements:city-and-failures.adoc#_atomic_lifecycle[City and Failures].
-Camera action, resize, and Reset preserve facts, current query/results, and selection, invalidate hover
-work, draw and project all districts from the same matrix/CSS dimensions, and
-atomically accept state before forwarding the numeric snapshot. Selection
-remeasures the inspector and relayouts the cached projection; hover does no
-label work. Empty activation and Escape clear
-selection and inspector. New or invalid submission, cancellation, current
+Camera action, resize, and Reset preserve facts, current query/results,
+selection, and selected district context; invalidate hover work and retained
+pointer coordinates; draw and project all districts from the same matrix/CSS
+dimensions; and atomically accept state before forwarding the numeric snapshot.
+The snapshot remains numeric-only and does not control contextual text or
+layout. Empty activation and Escape clear selection and inspector, exposing the
+current eligible hover context or the empty row. New or invalid submission, cancellation, current
 attempt/city/provider failure, candidate publication failure, context loss, and
 controller disposal clear facts and semantic/visual state before rollback or
 disposal. Replacement does not alter the current committed city.
 
 A current search activation synchronously invalidates hover, ends gesture and
 capture, validates and commits the reveal camera/projection and selection,
-publishes inspector/label layout, clears search, and focuses the canvas. Any
+publishes selected inspector and district context, clears search, and focuses
+the canvas. Any
 failure uses complete `M1-PRES-1` rollback; stale search callbacks are inert.
 
 The presenter uses one request epoch for frame-coalesced hover. Camera changes,
-resize, Reset, gesture start, pointer leave, replacement, and disposal invalidate
-pending work. Activation picks synchronously. No old frame, gesture, callback,
-or token can mutate or fail a newer generation.
+wheel, resize, Reset, search reveal, gesture start, pointer leave, replacement,
+and disposal invalidate pending work. Navigation and gesture end/cancel never
+queue retained-coordinate hover; only fresh eligible pointer movement can use
+the existing single animation frame. Activation picks synchronously. No old
+frame, gesture, callback, or token can mutate or fail a newer generation.
 
 Presenter disposal is exactly-once and idempotent: increment the request epoch,
 cancel frame work, release pointer capture, remove pointer, wheel, keyboard,

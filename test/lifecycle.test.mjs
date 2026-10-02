@@ -52,12 +52,12 @@ function fixture({
   const presentation = { clears: 0, calls: [], commits: [], disposes: 0, eventSinks: [], searchSinks: [], hooks: undefined, publications: [], rollbacks: [], visual: [], reveals: [], focuses: 0 };
   const view = {
     clear() { visibleState = "empty"; },
-    stagePublication(revision, inspection, districts, generation, searchSink) {
+    stagePublication(revision, inspection, generation, searchSink) {
       events.push("semantic:stage");
       presentation.searchSinks.push(searchSink);
       if (publicationStageThrows) throw new Error("semantic stage");
       if (publicationFactory) {
-        const publication = publicationFactory(revision, inspection, districts, generation, searchSink);
+        const publication = publicationFactory(revision, inspection, generation, searchSink);
         presentation.publications.push(publication);
         return publication;
       }
@@ -65,6 +65,7 @@ function fixture({
       const publication = {
         searchIdentity: Object.freeze({}),
         commits: 0,
+        semanticSelection: null,
         commit(canvas, snapshot) {
           events.push("publication:commit");
           if (publicationCommitThrows) throw new Error("publication commit");
@@ -73,7 +74,6 @@ function fixture({
           this.snapshot = snapshot;
           this.revision = revision;
           this.inspection = inspection;
-          this.districts = districts;
         },
         districtProjection(snapshot) {
           events.push("semantic:projection");
@@ -87,11 +87,16 @@ function fixture({
           events.push("semantic:search-clear");
           this.search = { query: "", indices: [] };
         },
-        setSelection(index) {
-          events.push("semantic:selection");
-          if (selectionThrows) throw new Error("semantic selection");
-          this.selections ??= [];
-          this.selections.push(index);
+        setContext(selection, district) {
+          events.push("semantic:context");
+          if (selectionThrows) throw new Error("semantic context");
+          this.contexts ??= [];
+          this.contexts.push({ selection, district });
+          if (this.semanticSelection !== selection) {
+            this.selections ??= [];
+            this.selections.push(selection);
+            this.semanticSelection = selection;
+          }
         },
         rollback() {
           if (!active) return;
@@ -436,6 +441,47 @@ test("committed event sink gates generation and token before authoritative visua
   assert.deepEqual(f.presentation.publications[0].selections, [0, null]);
 });
 
+test("controller derives root, real _root, one-, two-, and deeper-segment districts and owns selected-over-hover precedence", () => {
+  const city = buildCity([
+    { canonicalPath: "root.js", S: 0, U: 0, M: 0 },
+    { canonicalPath: "_root/file.js", S: 0, U: 0, M: 0 },
+    { canonicalPath: "one/file.js", S: 0, U: 0, M: 0 },
+    { canonicalPath: "one/two/file.js", S: 0, U: 0, M: 0 },
+    { canonicalPath: "one/two/deeper/file.js", S: 0, U: 0, M: 0 },
+  ]);
+  const indexOf = (path) => city.inspection.findIndex(({ canonicalPath }) => canonicalPath === path);
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city });
+  const sink = f.presentation.eventSinks[0];
+  const publication = f.presentation.publications[0];
+
+  for (const [path, district] of [
+    ["root.js", "/"],
+    ["_root/file.js", "_root"],
+    ["one/file.js", "one"],
+    ["one/two/file.js", "one/two"],
+    ["one/two/deeper/file.js", "one/two"],
+  ]) {
+    sink.hoverIndex(1, indexOf(path));
+    assert.deepEqual(publication.contexts.at(-1), { selection: null, district });
+  }
+
+  const selected = indexOf("one/two/file.js");
+  sink.activationIndex(1, selected);
+  assert.deepEqual(publication.contexts.at(-1), { selection: selected, district: "one/two" });
+  sink.hoverIndex(1, indexOf("root.js"));
+  assert.deepEqual(publication.contexts.at(-1), { selection: selected, district: "one/two" });
+  sink.selectionAction(1, "clear");
+  assert.deepEqual(publication.contexts.at(-1), { selection: null, district: "/" });
+  sink.hoverIndex(1, null);
+  assert.deepEqual(publication.contexts.at(-1), { selection: null, district: null });
+  assert.deepEqual(f.failures, []);
+});
+
 test("controller owns exact literal search, canonical all-result order, identity gates, and coherent reveal completion", () => {
   const city = buildCity([
     { canonicalPath: "src/A.ts", S: 0, U: 0, M: 0 },
@@ -479,9 +525,10 @@ test("controller owns exact literal search, canonical all-result order, identity
     city.geometry.origins[index * 3 + 2] + city.geometry.sizes[index * 3 + 2] / 2,
   ]);
   assert.deepEqual(publication.selections, [index]);
+  assert.deepEqual(publication.contexts.at(-1), { selection: index, district: "src" });
   assert.equal(f.presentation.focuses, 1);
   assert.deepEqual(publication.search, { query: "", indices: [] });
-  assert.deepEqual(f.events.slice(-5), ["reveal", "semantic:projection", "semantic:selection", "semantic:search-clear", "focus"]);
+  assert.deepEqual(f.events.slice(-5), ["reveal", "semantic:projection", "semantic:context", "semantic:search-clear", "focus"]);
 });
 
 test("current malformed search activation fails closed while stale generation/publication/query activations remain inert", () => {
@@ -539,7 +586,7 @@ test("controller rejects every out-of-bounds callback index before presenter, se
     sink.activationIndex(1, index);
   }
   assert.equal(f.presentation.visual.length, initialVisuals);
-  assert.equal(f.events.includes("semantic:selection"), false);
+  assert.equal(f.events.includes("semantic:context"), false);
   assert.deepEqual(f.failures, []);
   assert.equal(f.presentation.hooks.isEligible(1), true);
   sink.activationIndex(1, 0);
@@ -619,7 +666,7 @@ test("semantic selection failure after a valid city revokes the session exactly 
   assert.deepEqual(f.failures, [{ category: "Presentation failed", code: "M1-PRES-1", revision: SHA }]);
   assert.equal(f.presentation.clears, 1);
   assert.equal(f.presentation.hooks.isEligible(1), false);
-  assert.equal(f.events.filter((event) => event === "semantic:selection").length, 1);
+  assert.equal(f.events.filter((event) => event === "semantic:context").length, 1);
 });
 
 test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an attached inspector", () => {
@@ -694,13 +741,12 @@ test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an
     },
   };
   const f = fixture({
-    publicationFactory: (selectedRevision, inspection, districts, generation, searchSink) => stageSemanticPublication(
+    publicationFactory: (selectedRevision, inspection, generation, searchSink) => stageSemanticPublication(
       documentTarget,
       root,
       revision,
       selectedRevision,
       inspection,
-      districts,
       generation,
       searchSink,
     ),
@@ -731,16 +777,20 @@ test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an
   assert.equal(path.textContent, CITY.inspection[0].canonicalPath);
   assert.equal(revision.textContent, "");
   assert.deepEqual(operations, [
+    "BDI:text:",
+    "DIV:hidden:true",
     "SECTION:hidden:true",
     "SECTION:replace",
     "P:text:",
     "DIV:replace",
     "DIV:hidden:true",
     "SECTION:remove",
-    "SECTION:hidden:true",
-    "SECTION:replace",
+    "BDI:text:",
+    "DIV:hidden:true",
     "DIV:replace",
     "DIV:remove",
+    "SECTION:hidden:true",
+    "SECTION:replace",
     "SECTION:remove",
     "OUTPUT:text:",
   ]);

@@ -9,7 +9,8 @@ image::building-blocks.svg[Main-context controller and presenter with the sole p
 |UI attempt controller |Main application |Validate submitted URL shape; own the
 current attempt, the sole city-payload validator, immutable inspection snapshot,
 semantic hover and selection, exact path matching and result validation,
-traversal, inspector and district-label identities, generation/token/publication
+traversal, contextual district derivation/precedence and inspector identity,
+generation/token/publication
 identity gating, and the single publication-root commit
 
 |Worker bridge |Main and worker edge |Own the sole concrete worker handle;
@@ -133,10 +134,12 @@ numeric canonical index. Never a DOM event, fact, or browser object; query text
 never enters the presenter.
 
 |Semantic publication |Controller → DOM |One atomically committed native path
-search, canvas, inert clipped district-label overlay, selection inspector, and
-persistent noninteractive numeric complexity legend. Matching returns only
-canonical ordered numeric indices; semantic publication assigns captured paths
-to result `bdi.textContent`.
+search, reserved normal-flow contextual district row, canvas, selection
+inspector, and persistent noninteractive numeric complexity legend. Matching
+returns only canonical ordered numeric indices; semantic publication assigns
+controller-resolved district text and captured paths only to safe
+`bdi.textContent` nodes. Numeric projection does not control the contextual
+row.
 
 |Visual state |Controller → presenter |Generation plus opaque hover/selection
 indices, or one validated numeric reveal `{index,target}`. The presenter
@@ -151,7 +154,8 @@ pre-selection failures carry none.
 
 Concrete provider, parser, DOM, and WebGL objects remain at their edges.
 Repository paths may be published only as wrapping, bidirectionally isolated
-inspector or search-result `bdi.textContent`; approved grouped directory identities may additionally
-be district-label `bdi.textContent`. They are never markup, attributes, styles,
+inspector or search-result `bdi.textContent`; approved grouped directory
+identities may additionally be contextual-row and selected-inspector
+`bdi.textContent`. They are never markup, attributes, styles,
 object keys, shader text, URLs, resource locators, logs, or evidence. Evidence observers access geometry only
 and do not retain or disclose inspection.

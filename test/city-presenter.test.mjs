@@ -589,7 +589,7 @@ test("surface focus remains building-only across each immutable two-pass redraw"
   assert.deepEqual(failures, []);
 });
 
-test("hover coalesces latest movement, invalidates stale frames, and renews after camera, gesture, resize, Reset, and replacement", () => {
+test("hover coalesces fresh movement and navigation, gesture completion, resize, Reset, and replacement never rehydrate retained coordinates", () => {
   const environment = fakeEnvironment();
   const events = [];
   let presenter;
@@ -609,12 +609,11 @@ test("hover coalesces latest movement, invalidates stale frames, and renews afte
   first.dispatch("pointermove", inputEvent({ clientX: 20, clientY: 30 }));
   first.dispatch("pointermove", inputEvent({ clientX: 30, clientY: 40 }));
   first.dispatch("pointermove", inputEvent({ clientX: 110, clientY: 70 }));
-  assert.equal(environment.animationFrames.length, 1);
+  assert.equal(environment.animationFrames.length, 1, "more than one hover RAF was queued");
   environment.runFrame(1);
   assert.deepEqual(events, [["hover", 1, 0]]);
 
   first.dispatch("pointermove", inputEvent({ clientX: 111, clientY: 70 }));
-  assert.equal(environment.animationFrames.length, 2);
   first.dispatch("pointerleave", inputEvent({ clientX: 211, clientY: 70 }));
   assert.deepEqual(events.at(-1), ["hover", 1, null]);
   assert.deepEqual(environment.cancelledFrames, [2]);
@@ -626,25 +625,31 @@ test("hover coalesces latest movement, invalidates stale frames, and renews afte
   assert.deepEqual(events.at(-1), ["hover", 1, 0]);
   first.dispatch("keydown", inputEvent({ key: "d" }));
   assert.deepEqual(events.at(-1), ["hover", 1, null]);
-  assert.equal(environment.animationFrames.length, 4, "camera action did not queue no-motion recomputation");
+  assert.equal(environment.animationFrames.length, 3, "camera key rehydrated retained coordinates");
+
+  first.dispatch("pointermove", inputEvent({ clientX: 110, clientY: 70 }));
   environment.runFrame(4);
-  assert.equal(events.at(-1)[0], "hover");
+  assert.deepEqual(events.at(-1), ["hover", 1, 0]);
+  first.dispatch("wheel", inputEvent({ deltaY: -1 }));
+  assert.deepEqual(events.at(-1), ["hover", 1, null]);
+  assert.equal(environment.animationFrames.length, 4, "wheel rehydrated retained coordinates");
 
   first.dispatch("pointerdown", inputEvent({ pointerId: 7, button: 2, clientX: 110, clientY: 70 }));
-  assert.deepEqual(events.at(-1), ["hover", 1, null]);
   first.dispatch("pointermove", inputEvent({ pointerId: 7, button: -1, clientX: 111, clientY: 70 }));
-  assert.equal(environment.animationFrames.length, 4, "gesture movement queued hover");
   first.dispatch("pointerup", inputEvent({ pointerId: 7, button: 2, clientX: 111, clientY: 70 }));
-  assert.equal(environment.animationFrames.length, 5);
-  environment.runFrame(5);
+  assert.equal(environment.animationFrames.length, 4, "gesture movement or end queued hover");
 
   environment.resetControl.dispatch();
-  assert.equal(environment.animationFrames.length, 6);
-  environment.runFrame(6);
+  assert.equal(environment.animationFrames.length, 4, "Reset rehydrated retained coordinates");
+  first.dispatch("pointermove", inputEvent({ clientX: 120, clientY: 70 }));
+  const resizeFrame = environment.animationFrames.at(-1).handle;
   environment.host.width = 240;
   environment.observers[0].callback();
-  assert.equal(environment.animationFrames.length, 7);
-  environment.runFrame(7);
+  assert(environment.cancelledFrames.includes(resizeFrame));
+  assert.equal(environment.animationFrames.length, 5, "resize queued replacement hover");
+  const beforeResizeStale = events.length;
+  environment.runFrame(resizeFrame);
+  assert.equal(events.length, beforeResizeStale, "resize-invalidated frame published");
 
   first.dispatch("pointermove", inputEvent({ clientX: 120, clientY: 70 }));
   const oldFrame = environment.animationFrames.at(-1).handle;
@@ -1367,7 +1372,7 @@ test("source-free presentation data has only the geometry contract and is struct
   assert.deepEqual([...cloned.bounds], [...geometry.bounds]);
 });
 
-test("camera and resize accept immutable projection snapshots before current-only callbacks while hover and selection do no label work", () => {
+test("camera and resize accept immutable numeric projection snapshots before current-only callbacks while hover and selection do not project", () => {
   const environment = fakeEnvironment({ width: 640, height: 480 });
   const projections = [];
   const { presenter, failures } = failuresCollector(environment);
@@ -1380,7 +1385,7 @@ test("camera and resize accept immutable projection snapshots before current-onl
   canvas.dispatch("pointermove", inputEvent({ clientX: 110, clientY: 70 }));
   environment.runFrame();
   canvas.dispatch("keydown", inputEvent({ key: "ArrowRight" }));
-  assert.equal(projections.length, 0, "hover or selection projected labels");
+  assert.equal(projections.length, 0, "hover or selection projected districts");
   canvas.dispatch("keydown", inputEvent({ key: "d" }));
   assert.equal(projections.length, 1);
   assert.equal(projections[0].generation, 17);
