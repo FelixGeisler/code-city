@@ -403,6 +403,20 @@ labels never enter picking. Selection relayout uses cached projection, hover
 does no label work, and the existing failure and cleanup boundary owns all new
 numeric/semantic state.
 
+== Subsequent refinement (issue 586)
+
+Issue https://github.com/FelixGeisler/code-city/issues/586[#586] replaces the
+issue 575 projected label overlay with one reserved normal-flow contextual row.
+The controller derives and resolves selected-over-hover district context from
+validated inspection; semantic publication receives only that resolved text.
+The selected district is also safe full text in the existing inspector.
+Numeric projection and presenter ownership remain, but projection no longer
+controls label visibility or layout. Navigation and gesture completion never
+rehydrate hover from retained pointer coordinates; only fresh eligible movement
+uses the existing single animation frame. This reversible UI refinement leaves
+camera mappings, rendering, picking, payload, evidence, failure, and privacy
+boundaries unchanged.
+
 == Consequences
 
 A current success has one aligned geometry-and-inspection identity, one

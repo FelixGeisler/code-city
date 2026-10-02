@@ -823,11 +823,10 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     session.eventSink!.districtProjection(session.generation!, projected.snapshot);
   };
 
-  const applyCameraAndRenewHover = (session: Session<G>, transition: CameraTransitionResult, size: Dimensions): void => {
-    clearHover(session);
+  const applyCameraAfterNavigation = (session: Session<G>, transition: CameraTransitionResult, size: Dimensions): void => {
+    clearHover(session, true);
     if (!session.active) return;
     applyCamera(session, transition, size);
-    if (session.active) queueHover(session);
   };
 
   const installCallbacks = (session: Session<G>): void => {
@@ -874,7 +873,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         }
         if (!transition) return;
         event.preventDefault();
-        applyCameraAndRenewHover(session, transition, size);
+        applyCameraAfterNavigation(session, transition, size);
       } catch {
         failSession(session);
       }
@@ -886,7 +885,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!direction) return;
         event.preventDefault();
         const size = dimensions(host);
-        applyCameraAndRenewHover(session, zoomCamera(session.cameraState!, session.presentation!.sceneBounds, size, direction), size);
+        applyCameraAfterNavigation(session, zoomCamera(session.cameraState!, session.presentation!.sceneBounds, size, direction), size);
       } catch {
         failSession(session);
       }
@@ -895,8 +894,8 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
       try {
         if (!callbackEligible(session) || session.gesture || (event.button !== 0 && event.button !== 2)) return;
         if (!Number.isInteger(event.pointerId)) throw new Error("Invalid pointer press");
-        session.pointer = hoverPosition(canvas, event.clientX, event.clientY);
-        clearHover(session);
+        hoverPosition(canvas, event.clientX, event.clientY);
+        clearHover(session, true);
         if (!session.active) return;
         event.preventDefault();
         canvas.focus();
@@ -922,11 +921,12 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!callbackEligible(session)) return;
         const gesture = session.gesture;
         if (gesture && event.pointerId !== gesture.pointerId) return;
-        session.pointer = hoverPosition(canvas, event.clientX, event.clientY);
         if (!gesture) {
+          session.pointer = hoverPosition(canvas, event.clientX, event.clientY);
           queueHover(session);
           return;
         }
+        hoverPosition(canvas, event.clientX, event.clientY);
         if (event.clientX !== gesture.pressX || event.clientY !== gesture.pressY) gesture.dragged = true;
         const dx = event.clientX - gesture.lastX;
         const dy = event.clientY - gesture.lastY;
@@ -937,7 +937,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         const transition = gesture.button === 0
           ? orbitCameraByPointer(session.cameraState!, session.presentation!.sceneBounds, size, dx, dy, rectangle.width, rectangle.height)
           : panCameraByPointer(session.cameraState!, session.presentation!.sceneBounds, size, dx, dy, rectangle.width, rectangle.height);
-        applyCameraAndRenewHover(session, transition, size);
+        applyCameraAfterNavigation(session, transition, size);
         if (!session.active) return;
         gesture.lastX = event.clientX;
         gesture.lastY = event.clientY;
@@ -950,7 +950,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!callbackEligible(session)) return;
         const gesture = session.gesture;
         if (!gesture || event.pointerId !== gesture.pointerId || event.button !== gesture.button) return;
-        session.pointer = hoverPosition(canvas, event.clientX, event.clientY);
+        hoverPosition(canvas, event.clientX, event.clientY);
         if (event.clientX !== gesture.pressX || event.clientY !== gesture.pressY) gesture.dragged = true;
         const activates = gesture.button === 0 && !gesture.dragged
           && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
@@ -970,7 +970,6 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           }
           if (callbackEligible(session)) session.eventSink!.activationIndex(session.generation!, picked.index);
         }
-        if (session.active) queueHover(session);
       } catch {
         failSession(session);
       }
@@ -980,7 +979,6 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!callbackEligible(session)) return;
         if (session.gesture?.pointerId !== event.pointerId) return;
         releaseGesture(session);
-        if (session.active) queueHover(session);
       } catch {
         failSession(session);
       }
@@ -992,7 +990,6 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!gesture || gesture.pointerId !== event.pointerId || !gesture.captureOwned) return;
         gesture.captureOwned = false;
         session.gesture = undefined;
-        queueHover(session);
       } catch {
         failSession(session);
       }
@@ -1017,7 +1014,6 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!session.active) return;
         if (!eligible(session)) { if (session.active) removeSession(session); return; }
         releaseGesture(session);
-        if (session.active) queueHover(session);
       } catch {
         failSession(session);
       }
@@ -1036,7 +1032,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!callbackEligible(session)) return;
         releaseGesture(session);
         const size = dimensions(host);
-        applyCameraAndRenewHover(session, resetCamera(session.presentation!.sceneBounds, size), size);
+        applyCameraAfterNavigation(session, resetCamera(session.presentation!.sceneBounds, size), size);
       } catch {
         failSession(session);
       }
@@ -1086,10 +1082,9 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (transition.kind === "failure") { failSession(session); return; }
         canvas.width = next.width;
         canvas.height = next.height;
-        clearHover(session);
+        clearHover(session, true);
         if (!session.active) return;
         applyCamera(session, transition, next);
-        if (session.active) queueHover(session);
       } catch {
         failSession(session);
       }
@@ -1249,6 +1244,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           return PRESENTATION_FAILURE;
         }
         invalidateHover(session);
+        session.pointer = undefined;
         releaseGesture(session);
         session.hover = null;
         session.selection = command.index;
@@ -1256,7 +1252,6 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         session.cameraState = transition.state;
         session.cameraView = transition.view;
         session.projection = projected.snapshot;
-        queueHover(session);
         return Object.freeze({ kind: "applied", snapshot: projected.snapshot });
       } catch {
         failSession(session);

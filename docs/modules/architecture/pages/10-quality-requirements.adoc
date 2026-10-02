@@ -26,8 +26,9 @@ maxima with dense and deep valid syntax and no private lower limit
 
 |Atomicity
 |Geometry, inspection, empty native search and its listeners, numeric district
-presentation/projection, aligned semantic labels, canvas, inspector, persistent
-complexity legend, and revision publish as one transaction; search reveal is a
+presentation/projection, one empty reserved contextual row, canvas, inspector,
+persistent complexity legend, and revision publish as one transaction; search
+reveal is a
 complete camera/selection/inspector/search/focus transaction; replacement,
 cancellation, failure, resize, context loss, or stale interaction cannot publish
 partial or stale output
@@ -37,10 +38,10 @@ partial or stale output
 lifetime and exactly-once cleanup rules
 
 |Numeric correctness
-|Concentrated and `N=G=4000` scenes renew plate-inclusive camera, exact
-four-row label projection and selected-AABB strict X/Y/W/depth reveal,
-deterministic accepted-only collision layout,
-building-only picking, shared-centre exact `float32` representation, and the
+|Concentrated and `N=G=4000` scenes renew plate-inclusive camera and retained
+byte-compatible numeric projection, selected-AABB strict X/Y/W/depth reveal,
+one stable contextual row with controller-owned precedence, building-only
+picking, shared-centre exact `float32` representation, and the
 `420+28N+24G <= 208420` upload envelope
 
 |Accessibility

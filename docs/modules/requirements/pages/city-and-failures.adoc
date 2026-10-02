@@ -110,19 +110,31 @@ Payload arrays remain in increasing canonical-path index order. Packing writes
 one computed position back to that index; it does not reorder identity,
 keyboard traversal, selection, inspection, or exact-tie ownership.
 
-== District labels
+== Contextual district row and retained numeric projection
 
-Every visible district plate has one inert HTML label in a single
-`div[data-district-labels]` overlay. The label text is `/` for the root and the
-exact existing group identity otherwise. The repository-derived value is
-assigned only to an inner `<bdi dir="auto">` with `textContent`; it is never an
-attribute, style, URL, object key, log, shader/GPU value, observer value, or
-evidence field. The overlay is `aria-hidden`, clipped to the canvas, layered
-below the inspector, and has `pointer-events:none`. Labels therefore remain
-outside picking: a ray through a label retains the underlying building hit or
-empty canvas hit.
+Every committed city reserves one `20px` normal-flow contextual row immediately
+after path search and before the city viewport. Its single label is initially
+hidden with empty text. Selected-building district wins over hovered-building
+district; without either context the label is hidden and its text is cleared.
+The controller derives the display name from the validated inspection fact by
+removing the filename and taking the first two directory segments, one segment
+when only one exists, or `/` at repository root. A real `_root` directory is
+therefore distinct from root.
 
-For each plate, derive the top-centre anchor and all four top corners directly
+The row is `aria-hidden`, unfocusable, inline-start aligned, and
+`pointer-events:none`. The label is `144px × 20px` when the actual canvas CSS
+width is at least `480px`, otherwise `104px × 20px`. It retains `6px` inline
+padding, `11px ui-monospace, SFMono-Regular, Consolas, monospace`, weight `650`,
+colour `#CBD5E1`, background `rgb(7 17 31 / 0.72)`, radius `3px`, single-line
+bidi isolation and ellipsis, and no border, outline, or shadow. The resolved
+repository-derived value is assigned only to its one `<bdi dir="auto">` with
+`textContent`; it is never an attribute, style, URL, object key, log,
+shader/GPU value, observer value, or evidence field. There are no per-district
+label nodes, projected label visibility, collision layout, inspector exclusion,
+or label listener, observer, frame, retry, renderer, or GPU text.
+
+The existing numeric district-projection contract remains independent of this
+row. For each plate, derive the top-centre anchor and all four top corners directly
 from its numeric cell at `y=0`. Subtract the immutable `sceneBounds` centre and
 project each point with the exact float32 matrix used by the corresponding
 draw. For every row `k=0..3`, with `f=Math.fround`, evaluate:
@@ -155,22 +167,9 @@ Current camera and resize transitions replace camera, view, and snapshot
 atomically before the generation- and captured-token-gated
 `districtProjection(generation,snapshot)` callback.
 
-Labels are fixed `144px × 20px` when `cssWidth>=480`, otherwise `104px ×
-20px`, centred at `(screenX,screenY)`. They use `6px` inline padding,
-`11px ui-monospace, SFMono-Regular, Consolas, monospace`, weight `650`, colour
-`#CBD5E1`, background `rgb(7 17 31 / 0.72)`, radius `3px`, single-line bidi
-isolation and ellipsis, and no border, outline, or shadow.
-
-Exclude only a non-lateral anchor, a box with no positive-area canvas
-intersection, or a box intersecting the visible inspector rectangle expanded
-by `4px`. Sort remaining boxes by descending unrounded area then district
-index. Inflate boxes by `2px` per side and greedily reject strict overlap;
-exact `4px` separation is accepted. Use accepted-only half-open grid buckets
-of `(labelWidth+4) × 24`, insert only after acceptance, and evaluate every
-district without a first-K cap. Selection show/clear remeasures the inspector
-and reruns exclusion/collision from cached projected boxes; hover does no label
-work. Camera actions, accepted resize, and Reset reproject and relayout. There
-is no label listener, observer, frame, retry, renderer, or GPU text.
+Projection continues to update its byte- and key-compatible snapshot on the
+existing camera and resize paths, but no snapshot value controls contextual
+text, visibility, position, or dimensions.
 
 == Scene and fixed face display
 
@@ -212,7 +211,8 @@ nonempty input shows `No matching modules.`, `1 matching module.`, or
 
 The count and complete native `button type="button"` list share one region with
 `max-block-size: min(13.75rem, 40vh)` and native vertical overflow. It cannot
-overlay the canvas, labels, inspector, legend, or Reset control. Each button's
+overlay the contextual district row, canvas, inspector, legend, or Reset
+control. Each button's
 only repository-derived content is an inner `<bdi dir="auto">` assigned via
 `textContent`. Paths and queries never enter attributes, IDs, classes, styles,
 URLs, object keys, logs, provider traffic, WebGL, telemetry, observers, or
@@ -240,11 +240,10 @@ is no epsilon, retry, fallback, second framing policy, animation, or buffer
 rewrite.
 
 A successful activation invalidates pending hover, clears hover, ends gesture
-and capture, commits camera and district projection, applies selection and the
-existing inspector, relayouts labels, clears search, and then focuses the
-canvas. Any failure clears the complete city with no camera-only or
-selection-only final state. An eligible current pointer may queue the usual
-single hover recomputation. Search edit or clear changes no selection, hover,
+and capture, commits camera and district projection, applies selection, the selected district context, and the
+existing inspector, clears search, and then focuses the canvas. Any failure
+clears the complete city with no camera-only or selection-only final state.
+Search reveal does not queue hover from retained pointer coordinates. Search edit or clear changes no selection, hover,
 camera, or inspector; canvas selection does not reveal; Escape and empty canvas
 activation do not move the camera; Reset preserves search and selection while
 restoring `T=C`, overview orientation, and magnification `1`.
@@ -548,10 +547,12 @@ readback, BVH, worker hop, or hidden capacity below 4,000 buildings.
 Activation picks synchronously at release. Empty activation clears selection.
 Hover never selects: movement inside retains only the latest position and runs
 at most one pick in the next animation frame. Gesture start clears hover.
-Camera change, resize, and Reset invalidate queued work, clear hover, and queue
-one recomputation only when the pointer is inside and no gesture is active.
-Pointer leave clears and invalidates hover; gesture end queues recomputation
-only for a current inside position. Replacement rejects work from old sessions.
+Gesture start and every accepted camera action, wheel, resize, Reset, and search
+reveal invalidate queued work, forget retained pointer coordinates, and clear
+hover. Gesture end or cancel never queues hover. Only a fresh eligible pointer
+movement can queue a pick, with at most the existing one animation frame.
+Pointer leave clears and invalidates hover. Replacement rejects work from old
+sessions.
 
 == Surface focus
 
@@ -585,8 +586,10 @@ picking.
 
 == Inspector and visual quality
 
-The inspector shows exact raw `S` as “source lines”, raw `U` as “executable
-units”, and raw `M` as “maximum executable-unit complexity”. It labels the
+The inspector shows the full selected district as `District: <display name>` in
+one safe `<bdi dir="auto">`, without adding a live region or focus target. It
+also shows exact raw `S` as “source lines”, raw `U` as “executable units”, and
+raw `M` as “maximum executable-unit complexity”. It labels the
 result as “bounded, log-compressed displayed dimensions” and shows the
 resulting displayed height and equal displayed width/depth. It states `S cap
 1000; displayed height range 4..40` and `U cap 100; displayed side range
@@ -628,12 +631,11 @@ field. The controller stages presentation and detached semantic content,
 rechecks the current generation, commits the presenter, and performs one
 publication-root commit.
 Geometry, facts, revision, native search controls/listeners, canvas,
-district-label overlay, inspector container, persistent legend, direct
-committed projection snapshot, and empty query, results, hover, and selection
-become current together. Semantic commit publishes search immediately before
-the fixed city viewport, performs the ordered viewport publication, validates
-attached canvas/overlay rectangles, and lays out labels before current
-ownership is assigned.
+reserved contextual district row, inspector container, persistent legend,
+direct committed projection snapshot, and empty query, results, hover,
+selection, and contextual text become current together. Semantic commit
+publishes search, then the contextual row, then the fixed city viewport before
+current ownership is assigned.
 
 [cols="2,3,3,2",options="header"]
 |===
@@ -650,22 +652,22 @@ ownership is assigned.
 |Current city or `M1-PRES-1`
 
 |Search result activation
-|Validate publication/query/result; select, inspect, relayout, then clear search
+|Validate publication/query/result; select, publish district context and inspect, then clear search
 |End gesture/capture, invalidate hover, reveal at magnification `1`, redraw/project, then focus canvas
 |Coherent current city or `M1-PRES-1`
 
 |Camera action
-|Preserve facts, query/results, and selection; relayout labels; clear then eligible hover recompute
+|Preserve facts, query/results, selection, and selected context; clear transient hover without retained-coordinate recompute
 |Validate proposed state, redraw, project every district, atomically accept, then callback
 |Current city or `M1-PRES-1`
 
 |Resize
-|Preserve facts and selection; clear then eligible hover recompute
+|Preserve facts, selection, and selected context; clear transient hover without retained-coordinate recompute
 |Cancel gesture/frame, release capture, recompute fit and redraw
 |Current city or `M1-PRES-1`
 
 |Reset
-|Preserve facts, query/results, and selection; clear then eligible hover recompute
+|Preserve facts, query/results, selection, and selected context; clear transient hover without retained-coordinate recompute
 |Cancel gesture/frame, release capture, restore exact overview
 |Current city or `M1-PRES-1`
 
@@ -675,7 +677,7 @@ ownership is assigned.
 |Current city
 
 |Empty activation or Escape
-|Preserve facts and hover; clear selection and inspector
+|Preserve facts and hover; clear selection and inspector, then expose eligible hover context or empty context
 |Clear visual selection
 |Current city
 
@@ -714,7 +716,7 @@ Presenter disposal is exactly-once and idempotent: invalidate frame work,
 release pointer capture, remove input, Reset, context-loss, lifecycle, and
 resize listeners, delete the one fill program, two VAOs, and four buffers,
 clear both instance staging arrays, numeric projection snapshots/callbacks,
-semantic label/inspector caches and nodes, camera, and visual state, and remove
+contextual-row and inspector nodes, camera, and visual state, and remove
 the canvas. After actual context loss, cleanup makes no WebGL
 deletion or restoration call but still releases every JavaScript owner and
 reference.
@@ -752,8 +754,8 @@ partial city.
 
 Repository paths may reach only the controller's inert inspector text and
 semantic-publication result-button `bdi.textContent`; the approved grouped
-directory identity may reach only district-label `bdi.textContent`.
-No complete path or filename is added by labels. Source bodies, provider
+directory identity may reach only the contextual-row and selected-inspector
+`bdi.textContent`. No complete path or filename is added by district context. Source bodies, provider
 locators and values, parser values, credentials, raw
 diagnostics, telemetry, and persisted product state do not reach interaction,
 inspection, WebGL, or release evidence. The existing browser and production

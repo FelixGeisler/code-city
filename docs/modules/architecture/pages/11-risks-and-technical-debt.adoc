@@ -41,13 +41,13 @@ through a presenter or evidence observer
 snapshots, aligned controller-only district descriptors, numeric-only presenter
 projection, geometry-only observers, and sentinel privacy tests
 
-|District label density or stale projection
-|Labels could overlap, obscure inspection, drift from plates, disclose identity
-outside text, or survive replacement
-|Use exact same-draw projection, accepted-only deterministic grid collision,
-inspector exclusion from cached boxes, captured-token callbacks, inert
-`bdi.textContent`, and full partial/current cleanup; stop on any stale mutation
-or non-text disclosure
+|Contextual district identity or stale hover
+|Context could churn during navigation, let hover override selection, disclose
+identity outside text, or survive replacement
+|Use one reserved normal-flow row, controller-owned selected-over-hover
+precedence, fresh-movement-only hover scheduling, captured-token callbacks,
+inert `bdi.textContent`, and full partial/current cleanup; retained numeric
+projection never controls label visibility or layout
 
 |Interaction usability and visual imbalance
 |Controls, surface focus, inspector, or persistent legend layout could obscure

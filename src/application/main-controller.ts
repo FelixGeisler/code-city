@@ -35,7 +35,7 @@ export type ControllerPublication = Readonly<{
   searchIdentity: SemanticPublicationIdentity;
   commit(canvas: ControllerCanvas, snapshot: DistrictProjectionSnapshot): void;
   districtProjection(snapshot: DistrictProjectionSnapshot): void;
-  setSelection(index: number | null): void;
+  setContext(selection: number | null, district: string | null): void;
   setSearchResults(query: string, indices: readonly number[]): void;
   clearSearch(): void;
   rollback(): void;
@@ -51,7 +51,6 @@ export type AttemptView = Readonly<{
   stagePublication(
     revision: string,
     inspection: readonly InspectionFact[],
-    districts: ValidatedCity["districts"],
     generation: number,
     searchSink: ControllerSearchEventSink,
   ): ControllerPublication;
@@ -323,6 +322,22 @@ export function createMainController(
     return index === null || (Number.isSafeInteger(index) && index >= 0 && index < publication.city.geometry.count);
   }
 
+  function districtName(publication: CurrentPresentation, index: number | null): string | null {
+    if (index === null) return null;
+    const fact = publication.city.inspection[index];
+    if (!fact) throw new Error("Invalid semantic district index");
+    const directories = fact.canonicalPath.split("/").slice(0, -1);
+    return directories.length === 0 ? "/" : directories.slice(0, 2).join("/");
+  }
+
+  function resolvedDistrict(
+    publication: CurrentPresentation,
+    hover: number | null,
+    selection: number | null,
+  ): string | null {
+    return districtName(publication, selection ?? hover);
+  }
+
   function applyVisual(publication: CurrentPresentation, hover: number | null, selection: number | null): void {
     if (current !== publication || !validIndex(publication, hover) || !validIndex(publication, selection)) return;
     try {
@@ -332,7 +347,7 @@ export function createMainController(
         return;
       }
       if (result.kind !== "applied" || current !== publication) return;
-      if (selection !== publication.selection) publication.publication.setSelection(selection);
+      publication.publication.setContext(selection, resolvedDistrict(publication, hover, selection));
       if (current !== publication) return;
       publication.hover = hover;
       publication.selection = selection;
@@ -384,7 +399,7 @@ export function createMainController(
         if (revealed.kind !== "applied" || current !== publication) return;
         publication.publication.districtProjection(revealed.snapshot);
         if (current !== publication) return;
-        publication.publication.setSelection(index);
+        publication.publication.setContext(index, districtName(publication, index));
         if (current !== publication) return;
         publication.publication.clearSearch();
         if (current !== publication) return;
@@ -480,7 +495,6 @@ export function createMainController(
       candidate.publication = view.stagePublication(
         message.revision,
         message.city.inspection,
-        message.city.districts,
         bridge.generation,
         searchSink,
       );

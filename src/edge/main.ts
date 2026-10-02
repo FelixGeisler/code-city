@@ -59,14 +59,13 @@ const view: AttemptView = {
     commit.textContent = "";
     replaceStatus("Cancelled");
   },
-  stagePublication(revision, inspection, districts, generation, searchSink) {
+  stagePublication(revision, inspection, generation, searchSink) {
     return stageSemanticPublication(
       document,
       cityPublication,
       commit,
       revision,
       inspection,
-      districts,
       generation,
       searchSink,
       city,

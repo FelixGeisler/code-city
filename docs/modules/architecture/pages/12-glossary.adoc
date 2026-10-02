@@ -48,8 +48,9 @@ aligned to a district plate by the controller's current numeric snapshot. It is
 not accessible, focusable, selectable, or a pick candidate.
 
 |Semantic state
-|The controller's current-generation inspection facts, aligned district
-identities, hover, selection, label overlay, and inspector publication.
+|The controller's current-generation inspection facts, resolved district
+context, hover, selection, one contextual-row publication, and inspector
+publication.
 
 |Visual replica
 |A presenter-owned opaque hover or selection index used only by the trusted
@@ -65,5 +66,6 @@ only after the controller commits the current city transaction.
 
 |Request epoch
 |A presenter-local counter that invalidates queued hover work after camera,
-gesture, lifecycle, or session changes.
+gesture, lifecycle, or session changes. Navigation forgets retained pointer
+coordinates; only fresh eligible movement can schedule replacement work.
 |===

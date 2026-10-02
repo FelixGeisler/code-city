@@ -104,7 +104,11 @@ draws; actual context loss still performs no restoration and now skips all
 WebGL deletion while releasing JavaScript ownership.
 
 Issue https://github.com/FelixGeisler/code-city/issues/575[#575] subsequently
-adds controller-owned aligned district identities, exact numeric projection in
-the existing presenter camera transaction, and one inert HTML label overlay.
-Identity remains outside WebGL, worker, hash, and evidence boundaries; the
-program, VAOs, buffers, uploads, and two draws remain unchanged.
+added controller-owned aligned district identities, exact numeric projection in
+the existing presenter camera transaction, and an inert HTML label overlay.
+Issue https://github.com/FelixGeisler/code-city/issues/586[#586] later replaces
+that projected overlay with one reserved normal-flow contextual row whose
+resolved text and selected-over-hover precedence remain controller-owned. The
+numeric projection contract remains, but no longer controls label visibility or
+layout. Identity remains outside WebGL, worker, hash, and evidence boundaries;
+the program, VAOs, buffers, uploads, and two draws remain unchanged.

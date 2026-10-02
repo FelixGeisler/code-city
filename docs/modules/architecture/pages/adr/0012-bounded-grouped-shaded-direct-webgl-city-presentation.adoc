@@ -246,6 +246,18 @@ presenter returns only exact numeric plate projection. One inert clipped HTML
 overlay performs deterministic accepted-only collision layout and inspector
 exclusion.
 
+== Subsequent refinement (issue 586)
+
+Issue https://github.com/FelixGeisler/code-city/issues/586[#586] replaces the
+issue 575 projected, collision-managed overlay with one stable normal-flow
+contextual district row. The controller owns display-name derivation and
+selected-over-hover precedence; the presenter remains numeric-only. The
+existing numeric district projection stays byte- and key-compatible but no
+longer controls label visibility or layout. The original rationale above for
+excluding labels from this baseline remains historical context; this later
+reversible semantic-publication refinement changes no grouped geometry, plate,
+renderer, camera, picking, metric, or privacy decision.
+
 == Consequences
 
 The current application gains one bounded, grouped, face-readable baseline
