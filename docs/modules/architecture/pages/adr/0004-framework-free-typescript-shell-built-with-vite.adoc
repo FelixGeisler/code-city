@@ -13,7 +13,7 @@ and a production package below `/code-city/`.
 |===
 |Choice |Value
 
-|Build tool |`vite@8.3.0`
+|Build tool |`vite@8.3.1`
 |Language tool |`typescript@7.0.2`
 |UI |HTML, CSS, and browser ESM; no UI framework
 |Type checking |Strict TypeScript check separate from bundling
@@ -23,6 +23,9 @@ and a production package below `/code-city/`.
 
 The package exposes explicit development, type-check, test, build, and verify
 commands. Production output contains only runtime assets.
+
+The Vite pin was renewed from 8.3.0 to 8.3.1 as routine maintenance of the
+accepted build mechanism and contracts.
 
 == Consequences
 
