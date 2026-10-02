@@ -1816,8 +1816,9 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(focus.faceShading, true);
   assert.equal(focus.polygonOffsetEnables, 0);
   assert.deepEqual(focus.cleanup, { deleteShader: 6, deleteProgram: 3, deleteBuffer: 12, deleteVertexArray: 6 });
-  exactKeys(result.presentation.maximum, ["result", "groups", "uploads", "draws", "passKinds", "matrices", "sourceBounds", "sceneBounds", "centre", "matrixOracles", "contexts", "selectedContext", "clearedContext", "picking", "semanticContextNoProjection", "exactPlateUpload"], "Maximum district presentation");
+  exactKeys(result.presentation.maximum, ["result", "groups", "uploads", "draws", "passKinds", "matrices", "sourceBounds", "sceneBounds", "centre", "matrixOracles", "contexts", "selectedContext", "selectedContextTextVerified", "clearedContext", "picking", "semanticContextNoProjection", "exactPlateUpload"], "Maximum district presentation");
   const maximum = result.presentation.maximum;
+  assert.equal(JSON.stringify(maximum).includes("district-0000"), false, "Maximum evidence serialized sentinel district identity");
   assert.deepEqual(maximum.result, { kind: "committed" });
   assert.equal(maximum.groups, 4000);
   assert.deepEqual(maximum.uploads, [384, 36, 112000, 96000]);
@@ -1830,7 +1831,7 @@ function validateBrowserResult(result, expectedAssets) {
   assert.deepEqual(maximum.matrixOracles, Array.from({ length: 7 }, (_, index) => ({ corners: 8, positiveW: true, strictDepth: true, lateralFit: index === 0 || index === 6 })));
   assert.equal(maximum.contexts.length, 7);
   for (const [index, context] of maximum.contexts.entries()) {
-    exactKeys(context, ["dom", "width", "rowHeight", "pointerEvents", "ariaHidden", "hidden", "text", "safe", "precedesCanvas"], `Maximum context ${index}`);
+    exactKeys(context, ["dom", "width", "rowHeight", "pointerEvents", "ariaHidden", "hidden", "textEmpty", "safe", "precedesCanvas"], `Maximum context ${index}`);
     assert.deepEqual(context, {
       dom: 1,
       width: index === 4 ? "144px" : "104px",
@@ -1838,15 +1839,16 @@ function validateBrowserResult(result, expectedAssets) {
       pointerEvents: "none",
       ariaHidden: "true",
       hidden: true,
-      text: "",
+      textEmpty: true,
       safe: true,
       precedesCanvas: true,
     });
   }
-  exactKeys(maximum.selectedContext, ["dom", "width", "rowHeight", "pointerEvents", "ariaHidden", "hidden", "text", "safe", "precedesCanvas"], "Maximum selected context");
-  assert.deepEqual(maximum.selectedContext, { dom: 1, width: "104px", rowHeight: 20, pointerEvents: "none", ariaHidden: "true", hidden: false, text: "district-0000", safe: true, precedesCanvas: true });
-  exactKeys(maximum.clearedContext, ["dom", "width", "rowHeight", "pointerEvents", "ariaHidden", "hidden", "text", "safe", "precedesCanvas"], "Maximum cleared context");
-  assert.deepEqual(maximum.clearedContext, { dom: 1, width: "104px", rowHeight: 20, pointerEvents: "none", ariaHidden: "true", hidden: true, text: "", safe: true, precedesCanvas: true });
+  exactKeys(maximum.selectedContext, ["dom", "width", "rowHeight", "pointerEvents", "ariaHidden", "hidden", "textEmpty", "safe", "precedesCanvas"], "Maximum selected context");
+  assert.deepEqual(maximum.selectedContext, { dom: 1, width: "104px", rowHeight: 20, pointerEvents: "none", ariaHidden: "true", hidden: false, textEmpty: false, safe: true, precedesCanvas: true });
+  assert.equal(maximum.selectedContextTextVerified, true);
+  exactKeys(maximum.clearedContext, ["dom", "width", "rowHeight", "pointerEvents", "ariaHidden", "hidden", "textEmpty", "safe", "precedesCanvas"], "Maximum cleared context");
+  assert.deepEqual(maximum.clearedContext, { dom: 1, width: "104px", rowHeight: 20, pointerEvents: "none", ariaHidden: "true", hidden: true, textEmpty: true, safe: true, precedesCanvas: true });
   exactKeys(maximum.picking, ["buildingExpected", "buildingObserved", "buildingInspectorVisible", "noHitObserved", "noHitInspectorCleared", "targetsCanvas"], "Maximum canvas picking");
   assert.deepEqual(maximum.picking, {
     buildingExpected: 0,
