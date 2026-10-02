@@ -615,7 +615,7 @@ test("native picking misses both intra-group and inter-group whitespace in group
     { canonicalPath: "b/x/one.ts", S: 1, U: 0, M: 0 },
   ]));
   assert.deepEqual([...city.geometry.origins], [0, 0, 0, 5, 0, 0, 0, 0, 17]);
-  assert.deepEqual(city.presentation.sceneBounds, [-3, -0.5, -3, 11, 8, 23]);
+  assert.deepEqual(city.presentation.sceneBounds, [-3, -0.5, -3, 11, 5, 23]);
   const dimensions = { width: 1000, height: 800 };
   const view = success(resetCamera(city.presentation.sceneBounds, dimensions)).view;
   const projectGround = (x, z) => {
@@ -793,7 +793,7 @@ test("accepted ADR history and current perspective requirements stay synchronize
   const adrFiles = [
     ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 5_274, "b493f62f8a9a51d447b4b103a37a65f75687bcf0178465174d877234b278bb18"],
     ["0011-interactive-webgl2-navigation-and-inspection.adoc", 23_113, "9cc5774e0bc5b14575269904d304a83504a94173fc9bef3f61b257dc56eec912"],
-    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 15_484, "01b30c839e4f444d6b4d07317e0bf5643e9ef1a853c9a8dacbc8a1f574305a58"],
+    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 16_083, "8e860012ac58e010ca7f0515a966cd97224138dd8ff709d562f70c78130898e4"],
   ];
   const adrs = [];
   for (const [file, expectedLength, expectedHash] of adrFiles) {
@@ -811,6 +811,7 @@ test("accepted ADR history and current perspective requirements stay synchronize
   assert(adrs[1].includes("Subsequent refinement (issue 571)"));
   assert(adrs[2].includes("Subsequent refinement (issue 571)"));
   assert(adrs.every((adr) => adr.includes("issues/573") && adr.includes("issues/575") && adr.includes("issues/586")));
+  assert(adrs[2].includes("Subsequent refinement (issue 588)"));
   assert.equal(await readFile(path.join(root, "docs/modules/architecture/nav.adoc"), "utf8").then((text) => text.includes("0013")), false);
   const requirements = await readFile(path.join(root, "docs/modules/requirements/pages/city-and-failures.adoc"), "utf8");
   const normalized = requirements.replace(/\s+/g, " ");
@@ -823,6 +824,9 @@ test("accepted ADR history and current perspective requirements stay synchronize
     "#22C55EFF", "#84CC16FF", "#FACC15FF", "#F59E0BFF", "#F97316FF", "#EF4444FF",
     "D = 0.70", "H = 0.15", "u_passKind", "u_hoverIndex", "u_selectionIndex", "208420",
     "Complexity: low → high", "M = 16+", "one program, two VAOs, and four immutable buffers", "#182A43FF",
+    "sqrt(min(S, 1000) / 1000)", "S=25,50,100,200,600,1000", "Bounded displayed dimensions",
+    "Height: square-root scale; S cap 1000; displayed height range 4..40.",
+    "Footprint: log-compressed scale; U cap 100; displayed side range 3..18.",
   ]) assert(normalized.includes(statement), statement);
   for (const superseded of ["#F8FAFCFF", "#94A3B8FF", "-1/64", "65/64", "Selection draws first and hover second", "visible group plate"]) {
     assert.equal(normalized.includes(superseded), false, superseded);

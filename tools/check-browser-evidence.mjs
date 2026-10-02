@@ -30,12 +30,12 @@ const SUCCESS_FIXTURE = Object.freeze({
   source: "const answer = 42;\n",
   blob: "5c947feee9cbb434b57ed2e576b643e99e35e782",
   expectedNormalizedSourceSha256: "8691f74ea796569734dafffbbcb79088362b52c3cef154aa0d8f32696d2d4737",
-  modelBytesSha256: "b7bae3dc4ba98bf412ed2598bf2a647f46eb2e99f551096f315af41e564dbeb1",
+  modelBytesSha256: "30f7ced3a0f3220901639166c4e7e9cee4f62a0b7072a151bacdaafa54132672",
 });
 const CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'";
 const INTERACTIVE_FIXTURE_PATH = path.join(projectRoot, "test", "fixtures", "interactive", "fixture.json");
-const INTERACTIVE_FIXTURE_SHA256 = "5085a17a80aa57fc7fd49b0e8ec0de0e6a82b3a894bcb7c30528bb084ed7488a";
-const INTERACTIVE_MODEL_SHA256 = "01dbbb2bb381af333ac102e03c881e65f685cc0d825e1a09923f1ab32952ae1d";
+const INTERACTIVE_FIXTURE_SHA256 = "12ca139180e3893d19a85271f469c3a6ee2badb3c5ed440bde2b34bcfb94375f";
+const INTERACTIVE_MODEL_SHA256 = "61ee18273ead17b704453074a5c523a20ff4d965dc19fe6842f0874b69b1bdbf";
 
 function invariant(condition, message) {
   if (!condition) throw new Error(message);
@@ -1089,7 +1089,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       sourceLines: "1",
       executableUnits: "1",
       maximumComplexity: "1",
-      height: "8",
+      height: "5",
       width: "4",
       depth: "4",
       range: "M = 1",
@@ -1429,15 +1429,16 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     const targetPath = "packages/engine/src/report/outlier.ts";
     const expectedInspector = {
       path: targetPath,
-      sourceLines: "40",
-      units: "17",
-      complexity: "21",
-      height: "23",
-      width: "10",
-      depth: "10",
-      range: "M = 16+",
-      rgba: "#EF4444FF",
-      policy: "S cap 1000; displayed height range 4..40. U cap 100; displayed side range 3..18.",
+      sourceLines: "1000",
+      units: "1",
+      complexity: "1",
+      height: "40",
+      width: "4",
+      depth: "4",
+      range: "M = 1",
+      rgba: "#84CC16FF",
+      dimensionHeading: "Bounded displayed dimensions",
+      policy: "Height: square-root scale; S cap 1000; displayed height range 4..40. Footprint: log-compressed scale; U cap 100; displayed side range 3..18.",
       legend: [],
       district: "District: packages/engine",
     };
@@ -1461,13 +1462,13 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     const countBytes = new Uint8Array(4);
     new DataView(countBytes.buffer).setUint32(0, initial.message.count, true);
     assert.equal(digestBytes([countBytes, ...initial.message.buffers]), INTERACTIVE_MODEL_SHA256);
-    assert.deepEqual(float32Values(initial.message.buffers[0]), [41,0,0,33,0,8,40,0,8,33,0,15,40,0,15,33,0,0,0,0,19,0,0,12,7,0,12,0,0,0,12,0,0,14,0,12,0,0,36,7,0,36,0,0,43,7,0,43,0,0,50,7,0,50]);
-    assert.deepEqual(float32Values(initial.message.buffers[1]), [5,11,5,5,12,5,5,15,5,5,11,5,3,8,3,6,16,6,3,8,3,5,14,5,5,11,5,10,23,10,6,16,6,5,11,5,5,11,5,5,12,5,5,11,5,5,11,5,5,11,5,3,8,3]);
-    assert.deepEqual(float32Values(initial.message.buffers[3]), [0,0,0,46,23,55]);
+    assert.deepEqual(float32Values(initial.message.buffers[0]), [0,0,15,8,0,0,0,0,8,7,0,8,6,0,15,0,0,0,33,0,15,35,0,0,27,0,8,27,0,15,27,0,0,34,0,8,0,0,33,7,0,33,0,0,40,7,0,40,0,0,47,6,0,47]);
+    assert.deepEqual(float32Values(initial.message.buffers[1]), [4,20,4,5,6,5,5,7,5,5,6,5,3,4,3,6,8,6,3,5,3,5,7,5,5,6,5,4,40,4,6,8,6,5,6,5,5,6,5,5,6,5,5,6,5,5,6,5,4,32,4,3,5,3]);
+    assert.deepEqual(float32Values(initial.message.buffers[3]), [0,0,0,40,40,51]);
     const initialDistrict = deriveDistrictGeometry({ message: initial.message, buildingUpload: initial.buildingUpload,
       plateUpload: initial.plateUpload, orderedPaths });
-    assert.deepEqual(initialDistrict.sceneBounds, [-3,-0.5,-3,49,23,58]);
-    assert.deepEqual(initialDistrict.centre, [23,11.25,27.5]);
+    assert.deepEqual(initialDistrict.sceneBounds, [-3,-0.5,-3,43,40,54]);
+    assert.deepEqual(initialDistrict.centre, [20,19.75,25.5]);
 
     const typeNativeText = async (value) => {
       for (const character of value) {
@@ -1515,17 +1516,39 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     const firstActivation = await evaluate("({focused:document.activeElement===document.querySelector('[data-city] canvas'),activeTag:document.activeElement?.tagName,queryCleared:document.querySelector('[data-path-search-input]').value==='',resultsHidden:document.querySelector('[data-path-search-results]').hidden,status:document.querySelector('[data-status]').textContent,buttons:document.querySelectorAll('[data-path-search-buttons] button').length})");
     assert.deepEqual(firstActivation, { focused: true, activeTag: "CANVAS", queryCleared: true, resultsHidden: true, status: "", buttons: 0 });
 
-    const activateTargetBy = async (key) => {
+    const activateTargetBy = async (key, query) => {
       const point = await evaluate(`(() => { const input=document.querySelector('[data-path-search-input]'); input.scrollIntoView({block:'center'}); input.focus(); const rectangle=input.getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
       await nativeClick(point);
-      await typeNativeText("outlier");
-      assert.equal(await evaluate("document.querySelectorAll('[data-path-search-buttons] button').length===1"), true);
+      await typeNativeText(query);
+      const resultCount = await evaluate("document.querySelectorAll('[data-path-search-buttons] button').length");
+      assert.equal(resultCount, 1, `native query ${query} result count`);
       await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
       await dispatchKey({ key, code: key === " " ? "Space" : "Enter", virtualKey: key === " " ? 32 : 13, text: key === " " ? " " : "\r" });
       assert.equal(await evaluate("document.activeElement===document.querySelector('[data-city] canvas')&&document.querySelector('[data-path-search-input]').value===''&&document.querySelector('[data-path-search-results]').hidden"), true);
     };
-    await activateTargetBy("Enter");
-    await activateTargetBy(" ");
+    const syntheticHeightCases = [
+      { path: "apps/console/src/view/help.ts", query: "help", sourceLines: "0", height: "4" },
+      { path: "packages/ui/src/theme.ts", query: "theme", sourceLines: "1", height: "5" },
+      { path: "apps/console/src/bootstrap.ts", query: "bootstrap", sourceLines: "200", height: "20" },
+      { path: "packages/ui/src/palette.js", query: "palette", sourceLines: "600", height: "32" },
+      { path: targetPath, query: "outlier", sourceLines: "1000", height: "40" },
+    ];
+    const interactiveSizes = float32Values(initial.message.buffers[1]);
+    for (const expected of syntheticHeightCases) {
+      const index = orderedPaths.indexOf(expected.path);
+      assert.notEqual(index, -1, `missing synthetic height path ${expected.path}`);
+      assert.equal(String(interactiveSizes[index * 3 + 1]), expected.height, `${expected.path} worker geometry height`);
+      await activateTargetBy("Enter", expected.query);
+      const actual = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); const policy=inspector.querySelector('[data-dimension-policy]'); return {path:inspector.querySelector('[data-canonical-path]').textContent,sourceLines:inspector.querySelector('[data-source-lines]').textContent,height:inspector.querySelector('[data-height]').textContent,heading:policy.previousElementSibling.textContent,policy:policy.textContent}; })()`);
+      assert.deepEqual(actual, {
+        path: expected.path,
+        sourceLines: expected.sourceLines,
+        height: expected.height,
+        heading: "Bounded displayed dimensions",
+        policy: "Height: square-root scale; S cap 1000; displayed height range 4..40. Footprint: log-compressed scale; U cap 100; displayed side range 3..18.",
+      }, `${expected.path} production parser/worker/inspector height`);
+    }
+    await activateTargetBy(" ", "outlier");
     const targetIndex = orderedPaths.indexOf(targetPath);
     const targetBox = initialDistrict.boxes[targetIndex];
     const revealMatrix = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].matrices.at(-1)");
@@ -1594,7 +1617,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       await waitFor("globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0", label);
     };
     const assertInspector = async (label) => {
-      const inspector = await evaluate(`(() => { const element=document.querySelector('[data-inspector]'); return {hidden:element.hidden,path:element.querySelector('[data-canonical-path]')?.textContent,sourceLines:element.querySelector('[data-source-lines]')?.textContent,units:element.querySelector('[data-executable-units]')?.textContent,complexity:element.querySelector('[data-maximum-complexity]')?.textContent,height:element.querySelector('[data-height]')?.textContent,width:element.querySelector('[data-width]')?.textContent,depth:element.querySelector('[data-depth]')?.textContent,range:element.querySelector('[data-selected-range]')?.textContent,rgba:element.querySelector('[data-selected-rgba]')?.textContent,policy:element.querySelector('[data-dimension-policy]')?.textContent,legend:[...element.querySelectorAll('[data-palette-legend] li')].map(item=>item.textContent),district:element.querySelector('[data-selected-district]')?.textContent,links:element.querySelectorAll('a').length}; })()`);
+      const inspector = await evaluate(`(() => { const element=document.querySelector('[data-inspector]'); const policy=element.querySelector('[data-dimension-policy]'); return {hidden:element.hidden,path:element.querySelector('[data-canonical-path]')?.textContent,sourceLines:element.querySelector('[data-source-lines]')?.textContent,units:element.querySelector('[data-executable-units]')?.textContent,complexity:element.querySelector('[data-maximum-complexity]')?.textContent,height:element.querySelector('[data-height]')?.textContent,width:element.querySelector('[data-width]')?.textContent,depth:element.querySelector('[data-depth]')?.textContent,range:element.querySelector('[data-selected-range]')?.textContent,rgba:element.querySelector('[data-selected-rgba]')?.textContent,dimensionHeading:policy?.previousElementSibling?.textContent,policy:policy?.textContent,legend:[...element.querySelectorAll('[data-palette-legend] li')].map(item=>item.textContent),district:element.querySelector('[data-selected-district]')?.textContent,links:element.querySelectorAll('a').length}; })()`);
       assert.deepEqual(inspector, { hidden: false, ...expectedInspector, links: 0 }, label);
     };
     const assertCleared = async (label) => {

@@ -11,14 +11,19 @@ For every admitted non-negative safe-integer fact:
 
 [source,text]
 ----
-height(S) = 4 + floor(36 * ln(1 + min(S, 1000)) / ln(1001) + 0.5)
+height(S) = 4 + floor(36 * sqrt(min(S, 1000) / 1000) + 0.5)
 side(U)   = 3 + floor(15 * (ln(1 + min(U, 100)) / ln(101))^1.5 + 0.5)
 width = depth = side(U)
 ----
 
 Thus displayed height is an integer in `4..40` and displayed width and depth
-are the same integer in `3..18`. Values above `S=1000` or `U=100` retain their
-raw metric value but share the corresponding capped displayed dimension.
+are the same integer in `3..18`. The height operations are evaluated in the
+written order with ECMAScript `Number` arithmetic and no intermediate rounding.
+For example, `S=25,50,100,200,600,1000` gives height
+`10,12,15,20,32,40`. This is one absolute global scale: equal `S` gives equal
+height regardless of repository, district, neighbouring files, or input order.
+Values above `S=1000` or `U=100` retain their raw metric value but share the
+corresponding capped displayed dimension.
 
 [cols="1,2",options="header"]
 |===
@@ -589,12 +594,13 @@ picking.
 The inspector shows the full selected district as `District: <display name>` in
 one safe `<bdi dir="auto">`, without adding a live region or focus target. It
 also shows exact raw `S` as “source lines”, raw `U` as “executable units”, and
-raw `M` as “maximum executable-unit complexity”. It labels the
-result as “bounded, log-compressed displayed dimensions” and shows the
-resulting displayed height and equal displayed width/depth. It states `S cap
-1000; displayed height range 4..40` and `U cap 100; displayed side range
-3..18`. A raw value above a cap remains shown even though its displayed
-dimension is capped. The inspector also shows the selected `M` palette range,
+raw `M` as “maximum executable-unit complexity”. It labels the result exactly as “Bounded displayed dimensions” and shows the
+resulting displayed height and equal displayed width/depth. It states exactly:
+“Height: square-root scale; S cap 1000; displayed height range 4..40.
+Footprint: log-compressed scale; U cap 100; displayed side range 3..18.” This
+wording distinguishes the globally bounded square-root height from the
+unchanged log-compressed footprint. A raw value above a cap remains shown even
+though its displayed dimension is capped. The inspector also shows the selected `M` palette range,
 exact base RGBA. The complete legend is not duplicated inside selected content.
 
 Every committed city has one persistent, noninteractive legend labelled exactly

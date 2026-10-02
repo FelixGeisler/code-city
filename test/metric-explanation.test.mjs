@@ -22,7 +22,7 @@ const boundaries = [
   { M: 16, range: "16+", rgba: "#EF4444FF" },
 ];
 
-const expectedHeight = (S) => 4 + Math.floor(36 * Math.log1p(Math.min(S, 1000)) / Math.log(1001) + 0.5);
+const expectedHeight = (S) => 4 + Math.floor(36 * Math.sqrt(Math.min(S, 1000) / 1000) + 0.5);
 const expectedSide = (U) => 3 + Math.floor(15 * (Math.log1p(Math.min(U, 100)) / Math.log(101)) ** 1.5 + 0.5);
 
 test("metric explanation maps every required palette boundary and exact derived dimension", () => {
