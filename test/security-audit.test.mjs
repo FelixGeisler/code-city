@@ -108,6 +108,36 @@ test("controlled audit closure and internally consistent below-high changes pass
   assert.doesNotThrow(() => validateAuditReport(changed, lock));
 });
 
+test("converging below-high DAG is summarized once per node and edge", () => {
+  const report = reportWithLow();
+  let severityReads = 0;
+  const leaf = advisory({ source: 2, name: "dag-leaf", dependency: "dag-leaf", url: "https://example.invalid/dag-leaf", severity: "low", range: "<1.0.0" });
+  Object.defineProperty(leaf, "severity", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      severityReads += 1;
+      assert.ok(severityReads <= 2, "converging paths processed the same advisory leaf repeatedly");
+      return "low";
+    },
+  });
+  report.vulnerabilities["dag-leaf"] = vulnerability("dag-leaf", "low", { via: [leaf], effects: [], nodes: ["node_modules/braces"] });
+
+  let children = ["dag-leaf"];
+  for (let level = 0; level < 64; level += 1) {
+    const parents = [`dag-${level}-left`, `dag-${level}-right`];
+    for (const parent of parents) {
+      report.vulnerabilities[parent] = vulnerability(parent, "low", { via: [...children], effects: [], nodes: ["node_modules/braces"] });
+      for (const child of children) report.vulnerabilities[child].effects.push(parent);
+    }
+    children = parents;
+  }
+  recount(report);
+
+  assert.doesNotThrow(() => validateAuditReport(report, lock));
+  assert.equal(severityReads, 2);
+});
+
 test("every approved-set and advisory identity mutation fails closed", async (t) => {
   await t.test("missing high", () => expectAuditMutation((report) => { delete report.vulnerabilities.micromatch; recount(report); }));
   await t.test("additional high", () => expectAuditMutation((report) => { report.vulnerabilities.extra = vulnerability("extra", "high", { nodes: ["node_modules/braces"] }); recount(report); }));
@@ -240,6 +270,8 @@ test("audit spawn, exit, signal, timeout, stdout, and stderr failures terminate 
   });
 });
 
+const TEST_SHA512_INTEGRITY = `sha512-${Buffer.alloc(64, 0x61).toString("base64")}`;
+
 function packument(versions = {}) {
   return {
     name: "braces",
@@ -256,17 +288,18 @@ function release(version, overrides = {}) {
   return {
     name: "braces",
     version,
-    dist: { tarball: `https://registry.npmjs.org/braces/-/braces-${version}.tgz`, integrity: "sha512-YQ==" },
+    dist: { tarball: `https://registry.npmjs.org/braces/-/braces-${version}.tgz`, integrity: TEST_SHA512_INTEGRITY },
     ...overrides,
   };
 }
 
-test("packument removal trigger distinguishes fixed, deprecated, prerelease, and incompatible releases", () => {
+test("packument removal trigger distinguishes stable patch SemVer from prerelease and incompatible releases", () => {
   assert.doesNotThrow(() => validatePackument(packument()));
   assert.throws(() => validatePackument(packument({ "3.0.4": release("3.0.4") })), /expired/u);
+  assert.throws(() => validatePackument(packument({ "3.0.4+build.1": release("3.0.4+build.1") })), /expired/u);
   assert.doesNotThrow(() => validatePackument(packument({ "3.0.4": release("3.0.4", { deprecated: "withdrawn" }) })));
-  assert.doesNotThrow(() => validatePackument(packument({ "3.0.4-beta.1": release("3.0.4-beta.1"), "3.1.0": release("3.1.0"), "4.0.0": release("4.0.0") })));
-  assert.throws(() => validatePackument(packument({ "3.0.4": release("3.0.4", { dist: { tarball: "https://example.invalid/braces.tgz", integrity: "sha512-YQ==" } }) })), /tarball/u);
+  assert.doesNotThrow(() => validatePackument(packument({ "3.0.4-beta.1+build.1": release("3.0.4-beta.1+build.1"), "3.1.0": release("3.1.0"), "4.0.0": release("4.0.0") })));
+  assert.throws(() => validatePackument(packument({ "3.0.4": release("3.0.4", { dist: { tarball: "https://example.invalid/braces.tgz", integrity: TEST_SHA512_INTEGRITY } }) })), /tarball/u);
   assert.throws(() => validatePackument(packument({ "3.0.4": release("3.0.4", { dist: { tarball: "https://registry.npmjs.org/braces/-/braces-3.0.4.tgz", integrity: "sha256-YQ==" } }) })), /integrity/u);
 });
 
@@ -277,14 +310,19 @@ test("packument validation rejects incomplete and malformed noncandidate metadat
   await t.test("missing approved version", () => assert.throws(() => validatePackument({ ...packument(), versions: { "2.3.2": release("2.3.2") }, "dist-tags": { latest: "2.3.2" } }), /3\.0\.3/u));
   await t.test("changed approved integrity", () => {
     const changed = packument();
-    changed.versions["3.0.3"].dist.integrity = "sha512-YQ==";
+    changed.versions["3.0.3"].dist.integrity = TEST_SHA512_INTEGRITY;
     assert.throws(() => validatePackument(changed), /approved registry record/u);
   });
+  const noncanonicalPadBits = `${TEST_SHA512_INTEGRITY.slice(0, -3)}R==`;
   for (const [name, malformed] of [
     ["null record", null],
     ["mismatched record version", release("1.0.1")],
     ["missing distribution", { name: "braces", version: "1.0.0" }],
-    ["invalid historical integrity", release("1.0.0", { dist: { tarball: "https://registry.npmjs.org/braces/-/braces-1.0.0.tgz", integrity: "sha256-YQ==" } })],
+    ["candidate short SHA-512 digest", release("3.0.4", { dist: { tarball: "https://registry.npmjs.org/braces/-/braces-3.0.4.tgz", integrity: "sha512-YQ==" } })],
+    ["noncandidate short SHA-512 digest", release("1.0.0", { dist: { tarball: "https://registry.npmjs.org/braces/-/braces-1.0.0.tgz", integrity: "sha512-YQ==" } })],
+    ["noncandidate noncanonical padding", release("1.0.0", { dist: { tarball: "https://registry.npmjs.org/braces/-/braces-1.0.0.tgz", integrity: TEST_SHA512_INTEGRITY.slice(0, -1) } })],
+    ["noncandidate noncanonical pad bits", release("1.0.0", { dist: { tarball: "https://registry.npmjs.org/braces/-/braces-1.0.0.tgz", integrity: noncanonicalPadBits } })],
+    ["invalid historical integrity algorithm", release("1.0.0", { dist: { tarball: "https://registry.npmjs.org/braces/-/braces-1.0.0.tgz", integrity: "sha256-YQ==" } })],
   ]) {
     await t.test(name, () => assert.throws(() => validatePackument(packument({ "1.0.0": malformed })), /metadata|distribution|integrity/u));
   }

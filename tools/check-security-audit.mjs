@@ -164,24 +164,56 @@ function assertSameJson(actual, expected, message) {
   invariant(JSON.stringify(actual) === JSON.stringify(expected), message);
 }
 
-function advisoryLeaves(vulnerabilities, rootKey) {
-  const visiting = new Set();
-  const memo = new Map();
-  function visit(key) {
-    invariant(Object.hasOwn(vulnerabilities, key), `Dangling vulnerability reference: ${key}`);
-    if (memo.has(key)) return memo.get(key);
-    invariant(!visiting.has(key), `Cyclic vulnerability graph at ${key}`);
-    visiting.add(key);
-    const leaves = [];
-    for (const via of vulnerabilities[key].via) {
-      if (typeof via === "string") leaves.push(...visit(via));
-      else leaves.push(via);
+function summarizeAdvisoryGraph(vulnerabilities) {
+  const summaries = new Map();
+  const remainingChildren = new Map();
+  const parentsByChild = new Map(Object.keys(vulnerabilities).map((key) => [key, []]));
+  const ready = [];
+
+  for (const [key, record] of Object.entries(vulnerabilities)) {
+    const children = record.via.filter((via) => typeof via === "string");
+    remainingChildren.set(key, children.length);
+    if (children.length === 0) ready.push(key);
+    for (const child of children) {
+      invariant(Object.hasOwn(vulnerabilities, child), `Dangling vulnerability reference: ${child}`);
+      parentsByChild.get(child).push(key);
     }
-    visiting.delete(key);
-    memo.set(key, leaves);
-    return leaves;
   }
-  return visit(rootKey);
+
+  for (let index = 0; index < ready.length; index += 1) {
+    const key = ready[index];
+    const summary = { hasAdvisory: false, maximumSeverity: -1, unapprovedField: undefined };
+    for (const via of vulnerabilities[key].via) {
+      if (typeof via === "string") {
+        const child = summaries.get(via);
+        summary.hasAdvisory ||= child.hasAdvisory;
+        summary.maximumSeverity = Math.max(summary.maximumSeverity, child.maximumSeverity);
+        summary.unapprovedField ??= child.unapprovedField;
+        continue;
+      }
+
+      summary.hasAdvisory = true;
+      const advisorySeverity = via.severity;
+      summary.maximumSeverity = Math.max(summary.maximumSeverity, SEVERITY_RANK.get(advisorySeverity));
+      for (const [field, expected] of Object.entries(APPROVED_ADVISORY)) {
+        const actual = field === "severity" ? advisorySeverity : via[field];
+        if (actual !== expected) {
+          summary.unapprovedField ??= field;
+          break;
+        }
+      }
+    }
+    summaries.set(key, summary);
+
+    for (const parent of parentsByChild.get(key)) {
+      const remaining = remainingChildren.get(parent) - 1;
+      remainingChildren.set(parent, remaining);
+      if (remaining === 0) ready.push(parent);
+    }
+  }
+
+  invariant(summaries.size === Object.keys(vulnerabilities).length, "Cyclic vulnerability graph");
+  return summaries;
 }
 
 export function validateAuditReport(report, lock) {
@@ -205,8 +237,9 @@ export function validateAuditReport(report, lock) {
   invariant(report.metadata.vulnerabilities.total === SEVERITIES.reduce((sum, severity) => sum + actualCounts[severity], 0), "npm audit total counter is inconsistent");
   invariant(actualCounts.critical === 0, "npm audit contains a critical vulnerability");
 
+  const advisorySummaries = summarizeAdvisoryGraph(report.vulnerabilities);
   for (const [key, record] of entries) {
-    const leaves = advisoryLeaves(report.vulnerabilities, key);
+    const summary = advisorySummaries.get(key);
     const stringVias = record.via.filter((via) => typeof via === "string");
     if (stringVias.length > 0) {
       invariant(stringVias.some((via) => report.vulnerabilities[via].effects.includes(key)), `${key} has no inverse effects edge`);
@@ -215,9 +248,7 @@ export function validateAuditReport(report, lock) {
       invariant(Object.hasOwn(report.vulnerabilities, effect), `Dangling vulnerability effect: ${effect}`);
       invariant(report.vulnerabilities[effect].via.includes(key), `${key}/${effect} effects/via edge is inconsistent`);
     }
-    for (const leaf of leaves) {
-      invariant(SEVERITY_RANK.get(record.severity) >= SEVERITY_RANK.get(leaf.severity), `${key} understates a reachable advisory severity`);
-    }
+    invariant(SEVERITY_RANK.get(record.severity) >= summary.maximumSeverity, `${key} understates a reachable advisory severity`);
   }
 
   const highKeys = entries.filter(([, value]) => value.severity === "high").map(([key]) => key).sort();
@@ -233,13 +264,9 @@ export function validateAuditReport(report, lock) {
     for (const effect of record.effects) {
       invariant(highSet.has(effect), `${key} affects a vulnerability outside the approved high set`);
     }
-    const leaves = advisoryLeaves(report.vulnerabilities, key);
-    invariant(leaves.length > 0, `${key} does not resolve to an advisory leaf`);
-    for (const leaf of leaves) {
-      for (const [field, expected] of Object.entries(APPROVED_ADVISORY)) {
-        invariant(leaf[field] === expected, `${key} reaches an unapproved advisory ${field}`);
-      }
-    }
+    const summary = advisorySummaries.get(key);
+    invariant(summary.hasAdvisory, `${key} does not resolve to an advisory leaf`);
+    invariant(summary.unapprovedField === undefined, `${key} reaches an unapproved advisory ${summary.unapprovedField}`);
   }
   validateLockExposure(lock, highRecords);
   return { highKeys };
@@ -317,16 +344,26 @@ export async function runAuditCommand({
   });
 }
 
-const PACKAGE_VERSION_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+const SEMVER_IDENTIFIER = "(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)";
+const PACKAGE_VERSION_PATTERN = new RegExp(`^(?<major>0|[1-9][0-9]*)\\.(?<minor>0|[1-9][0-9]*)\\.(?<patch>0|[1-9][0-9]*)(?:-(?<prerelease>${SEMVER_IDENTIFIER}(?:\\.${SEMVER_IDENTIFIER})*))?(?:\\+(?<build>[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$`, "u");
 const APPROVED_BRACES_INTEGRITY = "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==";
 
+function isCanonicalSha512Integrity(value) {
+  if (typeof value !== "string" || !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(value)) return false;
+  const encoded = value.slice("sha512-".length);
+  const digest = Buffer.from(encoded, "base64");
+  return digest.byteLength === 64 && digest.toString("base64") === encoded;
+}
+
 function validatePackumentVersion(version, record) {
-  invariant(PACKAGE_VERSION_PATTERN.test(version), `braces version key is invalid: ${version}`);
+  const parsed = PACKAGE_VERSION_PATTERN.exec(version);
+  invariant(parsed, `braces version key is invalid: ${version}`);
   invariant(isRecord(record) && record.name === "braces" && record.version === version, `braces ${version} version metadata is invalid`);
   invariant(!Object.hasOwn(record, "deprecated") || (typeof record.deprecated === "string" && record.deprecated.length > 0), `braces ${version} deprecation metadata is invalid`);
   invariant(isRecord(record.dist), `braces ${version} distribution is invalid`);
   invariant(record.dist.tarball === `https://registry.npmjs.org/braces/-/braces-${version}.tgz`, `braces ${version} tarball is invalid`);
-  invariant(typeof record.dist.integrity === "string" && /^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(record.dist.integrity), `braces ${version} integrity is invalid`);
+  invariant(isCanonicalSha512Integrity(record.dist.integrity), `braces ${version} integrity is invalid`);
+  return parsed.groups;
 }
 
 export function validatePackument(packument) {
@@ -336,7 +373,10 @@ export function validatePackument(packument) {
   invariant(isRecord(packument.versions) && Object.keys(packument.versions).length > 0, "braces versions are empty or invalid");
   invariant(typeof packument.modified === "string" && Number.isFinite(Date.parse(packument.modified)), "braces modified timestamp is invalid");
 
-  for (const [version, record] of Object.entries(packument.versions)) validatePackumentVersion(version, record);
+  const parsedVersions = new Map();
+  for (const [version, record] of Object.entries(packument.versions)) {
+    parsedVersions.set(version, validatePackumentVersion(version, record));
+  }
   for (const [tag, version] of Object.entries(packument["dist-tags"])) {
     invariant(typeof tag === "string" && tag.length > 0 && typeof version === "string", "braces dist-tag is invalid");
     invariant(Object.hasOwn(packument.versions, version), `braces dist-tag ${tag} references a missing version`);
@@ -347,7 +387,8 @@ export function validatePackument(packument) {
 
   let removalVersion;
   for (const [version, record] of Object.entries(packument.versions)) {
-    if (!/^3\.0\.(?:0|[1-9][0-9]*)$/u.test(version) || Number(version.split(".")[2]) <= 3 || Object.hasOwn(record, "deprecated")) continue;
+    const parsed = parsedVersions.get(version);
+    if (parsed.major !== "3" || parsed.minor !== "0" || Number(parsed.patch) <= 3 || parsed.prerelease !== undefined || Object.hasOwn(record, "deprecated")) continue;
     removalVersion ??= version;
   }
   invariant(!removalVersion, `Temporary braces exception expired: compatible fixed release ${removalVersion} is available`);
