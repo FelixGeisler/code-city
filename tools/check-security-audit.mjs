@@ -207,6 +207,14 @@ export function validateAuditReport(report, lock) {
 
   for (const [key, record] of entries) {
     const leaves = advisoryLeaves(report.vulnerabilities, key);
+    const stringVias = record.via.filter((via) => typeof via === "string");
+    if (stringVias.length > 0) {
+      invariant(stringVias.some((via) => report.vulnerabilities[via].effects.includes(key)), `${key} has no inverse effects edge`);
+    }
+    for (const effect of record.effects) {
+      invariant(Object.hasOwn(report.vulnerabilities, effect), `Dangling vulnerability effect: ${effect}`);
+      invariant(report.vulnerabilities[effect].via.includes(key), `${key}/${effect} effects/via edge is inconsistent`);
+    }
     for (const leaf of leaves) {
       invariant(SEVERITY_RANK.get(record.severity) >= SEVERITY_RANK.get(leaf.severity), `${key} understates a reachable advisory severity`);
     }
@@ -224,7 +232,6 @@ export function validateAuditReport(report, lock) {
     }
     for (const effect of record.effects) {
       invariant(highSet.has(effect), `${key} affects a vulnerability outside the approved high set`);
-      invariant(report.vulnerabilities[effect].via.includes(key), `${key}/${effect} effects/via edge is inconsistent`);
     }
     const leaves = advisoryLeaves(report.vulnerabilities, key);
     invariant(leaves.length > 0, `${key} does not resolve to an advisory leaf`);
@@ -285,11 +292,15 @@ export async function runAuditCommand({
     };
     const onStdout = (chunk) => appendBounded(stdout, stdoutState, chunk, "npm audit stdout", maximumBytes, stop);
     const onStderr = (chunk) => appendBounded(stderr, stderrState, chunk, "npm audit stderr", maximumBytes, stop);
+    const onStdoutError = (error) => stop(new Error("npm audit stdout failed", { cause: error }));
+    const onStderrError = (error) => stop(new Error("npm audit stderr failed", { cause: error }));
     const onError = (error) => stop(new Error("npm audit process failed", { cause: error }));
     const onClose = (code, signal) => {
       clearTimeoutImpl(timer);
       child.stdout.removeListener("data", onStdout);
+      child.stdout.removeListener("error", onStdoutError);
       child.stderr.removeListener("data", onStderr);
+      child.stderr.removeListener("error", onStderrError);
       child.removeListener("error", onError);
       child.removeListener("close", onClose);
       if (failure) reject(failure);
@@ -297,28 +308,46 @@ export async function runAuditCommand({
       else resolve({ stdout: Buffer.concat(stdout, stdoutState.bytes), stderr: Buffer.concat(stderr, stderrState.bytes), code, signal });
     };
     child.stdout.on("data", onStdout);
+    child.stdout.once("error", onStdoutError);
     child.stderr.on("data", onStderr);
+    child.stderr.once("error", onStderrError);
     child.once("error", onError);
     child.once("close", onClose);
     timer = setTimeoutImpl(() => stop(new Error("npm audit exceeded 120 seconds")), timeoutMs);
   });
 }
 
+const PACKAGE_VERSION_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+const APPROVED_BRACES_INTEGRITY = "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==";
+
+function validatePackumentVersion(version, record) {
+  invariant(PACKAGE_VERSION_PATTERN.test(version), `braces version key is invalid: ${version}`);
+  invariant(isRecord(record) && record.name === "braces" && record.version === version, `braces ${version} version metadata is invalid`);
+  invariant(!Object.hasOwn(record, "deprecated") || (typeof record.deprecated === "string" && record.deprecated.length > 0), `braces ${version} deprecation metadata is invalid`);
+  invariant(isRecord(record.dist), `braces ${version} distribution is invalid`);
+  invariant(record.dist.tarball === `https://registry.npmjs.org/braces/-/braces-${version}.tgz`, `braces ${version} tarball is invalid`);
+  invariant(typeof record.dist.integrity === "string" && /^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(record.dist.integrity), `braces ${version} integrity is invalid`);
+}
+
 export function validatePackument(packument) {
   invariant(hasExactKeys(packument, ["name", "dist-tags", "versions", "modified"]), "braces packument shape changed");
   invariant(packument.name === "braces", "registry packument is not for braces");
-  invariant(isRecord(packument["dist-tags"]) && Object.values(packument["dist-tags"]).every((value) => typeof value === "string" && value.length > 0), "braces dist-tags are invalid");
+  invariant(isRecord(packument["dist-tags"]) && Object.keys(packument["dist-tags"]).length > 0, "braces dist-tags are empty or invalid");
+  invariant(isRecord(packument.versions) && Object.keys(packument.versions).length > 0, "braces versions are empty or invalid");
   invariant(typeof packument.modified === "string" && Number.isFinite(Date.parse(packument.modified)), "braces modified timestamp is invalid");
-  invariant(isRecord(packument.versions), "braces versions are invalid");
+
+  for (const [version, record] of Object.entries(packument.versions)) validatePackumentVersion(version, record);
+  for (const [tag, version] of Object.entries(packument["dist-tags"])) {
+    invariant(typeof tag === "string" && tag.length > 0 && typeof version === "string", "braces dist-tag is invalid");
+    invariant(Object.hasOwn(packument.versions, version), `braces dist-tag ${tag} references a missing version`);
+  }
+
+  const approved = packument.versions["3.0.3"];
+  invariant(approved?.dist?.integrity === APPROVED_BRACES_INTEGRITY, "braces 3.0.3 approved registry record is missing or changed");
+
   let removalVersion;
   for (const [version, record] of Object.entries(packument.versions)) {
-    if (!/^3\.0\.(?:0|[1-9][0-9]*)$/u.test(version) || Number(version.split(".")[2]) <= 3) continue;
-    invariant(isRecord(record) && record.name === "braces" && record.version === version, `braces ${version} candidate metadata is invalid`);
-    invariant(!Object.hasOwn(record, "deprecated") || (typeof record.deprecated === "string" && record.deprecated.length > 0), `braces ${version} deprecation metadata is invalid`);
-    if (Object.hasOwn(record, "deprecated")) continue;
-    invariant(isRecord(record.dist), `braces ${version} candidate distribution is invalid`);
-    invariant(record.dist.tarball === `https://registry.npmjs.org/braces/-/braces-${version}.tgz`, `braces ${version} candidate tarball is invalid`);
-    invariant(typeof record.dist.integrity === "string" && /^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(record.dist.integrity), `braces ${version} candidate integrity is invalid`);
+    if (!/^3\.0\.(?:0|[1-9][0-9]*)$/u.test(version) || Number(version.split(".")[2]) <= 3 || Object.hasOwn(record, "deprecated")) continue;
     removalVersion ??= version;
   }
   invariant(!removalVersion, `Temporary braces exception expired: compatible fixed release ${removalVersion} is available`);

@@ -92,7 +92,7 @@ function recount(report) {
   report.metadata.vulnerabilities.total = Object.keys(report.vulnerabilities).length;
 }
 
-function expectAuditMutation(mutator, pattern = /changed|invalid|inconsistent|unapproved|missing|Dangling|Cyclic|understates|development|production|consumer|high-severity|critical|empty|resolve/u) {
+function expectAuditMutation(mutator, pattern = /changed|invalid|inconsistent|unapproved|missing|Dangling|Cyclic|understates|development|production|consumer|high-severity|critical|empty|inverse|resolve/u) {
   const report = reportWithLow();
   const changedLock = structuredClone(lock);
   mutator(report, changedLock);
@@ -124,8 +124,10 @@ test("severity, graph, report schema, and counters fail closed", async (t) => {
     ["transitive severity understatement", (report) => { report.vulnerabilities["fast-glob"].severity = "moderate"; recount(report); }],
     ["below-high severity understatement", (report) => { report.vulnerabilities.example.via[0].severity = "moderate"; }],
     ["dangling via", (report) => { report.vulnerabilities.micromatch.via = ["absent"]; }],
+    ["dangling below-high effect", (report) => { report.vulnerabilities.example.effects = ["absent"]; }],
     ["cyclic via", (report) => { report.vulnerabilities.braces.via = ["micromatch"]; }],
-    ["inconsistent effects", (report) => { report.vulnerabilities.braces.effects.push("@asciidoctor/core"); }],
+    ["effect without inverse via", (report) => { report.vulnerabilities.braces.effects.push("@asciidoctor/core"); }],
+    ["via without any inverse effect", (report) => { report.vulnerabilities.braces.effects = report.vulnerabilities.braces.effects.filter((name) => name !== "micromatch"); }],
     ["malformed record", (report) => { delete report.vulnerabilities.braces.nodes; }],
     ["malformed top level", (report) => { report.error = { message: "registry unavailable" }; }],
     ["counter mismatch", (report) => { report.metadata.vulnerabilities.high += 1; }],
@@ -198,6 +200,29 @@ test("audit spawn, exit, signal, timeout, stdout, and stderr failures terminate 
       if (fixture.name.includes("overflow")) assert.equal(fixture.child.killed, true);
     });
   }
+  for (const stream of ["stdout", "stderr"]) {
+    await t.test(`${stream} error terminates the child and awaits delayed close`, async () => {
+      const child = fakeChild({ closeOnKill: false });
+      let cleared = false;
+      const { promise } = await runChild(child, {
+        setTimeoutImpl() { return 19; },
+        clearTimeoutImpl(value) { assert.equal(value, 19); cleared = true; },
+      });
+      child[stream].emit("error", new Error("pipe failed"));
+      let settled = false;
+      void promise.finally(() => { settled = true; }).catch(() => {});
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(child.killed, true);
+      assert.equal(settled, false);
+      child.emit("close", 143, "SIGTERM");
+      await assert.rejects(promise, new RegExp(`${stream} failed`, "u"));
+      assert.equal(cleared, true);
+      assert.equal(child[stream].listenerCount("data"), 0);
+      assert.equal(child[stream].listenerCount("error"), 0);
+      assert.equal(child.listenerCount("error"), 0);
+      assert.equal(child.listenerCount("close"), 0);
+    });
+  }
   await t.test("timeout does not settle before owned child closes and clears its timer", async () => {
     const child = fakeChild({ closeOnKill: false });
     let fire;
@@ -220,7 +245,7 @@ function packument(versions = {}) {
     name: "braces",
     "dist-tags": { latest: "3.0.3" },
     versions: {
-      "3.0.3": { name: "braces", version: "3.0.3", dist: { tarball: "https://registry.npmjs.org/braces/-/braces-3.0.3.tgz", integrity: "sha512-YQ==" } },
+      "3.0.3": { name: "braces", version: "3.0.3", dist: { tarball: "https://registry.npmjs.org/braces/-/braces-3.0.3.tgz", integrity: "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==" } },
       ...versions,
     },
     modified: "2026-01-01T00:00:00.000Z",
@@ -243,6 +268,26 @@ test("packument removal trigger distinguishes fixed, deprecated, prerelease, and
   assert.doesNotThrow(() => validatePackument(packument({ "3.0.4-beta.1": release("3.0.4-beta.1"), "3.1.0": release("3.1.0"), "4.0.0": release("4.0.0") })));
   assert.throws(() => validatePackument(packument({ "3.0.4": release("3.0.4", { dist: { tarball: "https://example.invalid/braces.tgz", integrity: "sha512-YQ==" } }) })), /tarball/u);
   assert.throws(() => validatePackument(packument({ "3.0.4": release("3.0.4", { dist: { tarball: "https://registry.npmjs.org/braces/-/braces-3.0.4.tgz", integrity: "sha256-YQ==" } }) })), /integrity/u);
+});
+
+test("packument validation rejects incomplete and malformed noncandidate metadata", async (t) => {
+  await t.test("empty dist-tags", () => assert.throws(() => validatePackument({ ...packument(), "dist-tags": {} }), /dist-tags/u));
+  await t.test("empty versions", () => assert.throws(() => validatePackument({ ...packument(), versions: {} }), /versions/u));
+  await t.test("dangling dist-tag", () => assert.throws(() => validatePackument({ ...packument(), "dist-tags": { latest: "3.0.4" } }), /missing version/u));
+  await t.test("missing approved version", () => assert.throws(() => validatePackument({ ...packument(), versions: { "2.3.2": release("2.3.2") }, "dist-tags": { latest: "2.3.2" } }), /3\.0\.3/u));
+  await t.test("changed approved integrity", () => {
+    const changed = packument();
+    changed.versions["3.0.3"].dist.integrity = "sha512-YQ==";
+    assert.throws(() => validatePackument(changed), /approved registry record/u);
+  });
+  for (const [name, malformed] of [
+    ["null record", null],
+    ["mismatched record version", release("1.0.1")],
+    ["missing distribution", { name: "braces", version: "1.0.0" }],
+    ["invalid historical integrity", release("1.0.0", { dist: { tarball: "https://registry.npmjs.org/braces/-/braces-1.0.0.tgz", integrity: "sha256-YQ==" } })],
+  ]) {
+    await t.test(name, () => assert.throws(() => validatePackument(packument({ "1.0.0": malformed })), /metadata|distribution|integrity/u));
+  }
 });
 
 function fakeGet(body, { statusCode = 200, headers, responseFailure, requestFailure, holdClose = false, holdBody = false } = {}) {
