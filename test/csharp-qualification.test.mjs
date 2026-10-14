@@ -28,17 +28,20 @@ const REQUIRED_CASES = [
   "lexical-directives-and-branches",
   "all-explicit-and-zero-unit-forms",
   "initialization-and-nested-ownership",
+  "foreach-forms",
   "decision-points",
   "switch-guards-filters-and-defaults",
   "zero-point-and-zero-unit-syntax",
+  "unicode-whitespace-lines",
   "representative-modern-syntax",
   "malformed-error",
   "truncated-missing",
   "recovery-error",
 ];
 const REQUIRED_COVERAGE = [
-  "abstract-zero", "accessor-add", "accessor-get", "accessor-init", "accessor-remove", "accessor-set", "anonymous-method", "attribute-zero", "auto-accessor-zero", "bitwise-zero", "bodyless-zero", "calls-zero", "case-label", "catch", "catch-filter", "comments", "comparisons-zero", "conditional", "conditional-access-zero", "const-zero", "constructor", "constructor-base", "conversion", "default-statement-zero", "destructor", "directives-source", "else-zero", "enum-zero", "error-signal", "expression-indexer", "expression-property", "extern-zero", "finally-zero", "guarded-discard", "if", "interpolated-string", "lambda", "local-function", "logical-and", "logical-or", "loop-do", "loop-for", "loop-foreach", "loop-while", "malformed", "method", "missing-signal", "modern-collection-expression", "modern-list-pattern", "modern-raw-string", "modern-record", "modern-required", "nested-callable", "nullish", "nullish-assign", "operator", "parameter-default-zero", "patterns-zero", "preprocessor-all-branches", "primary-base", "primary-header-zero", "query-zero", "raw-string", "recovery", "regular-string", "runtime-event-initializer", "runtime-field-initializer", "runtime-property-initializer", "signature-zero", "switch-expression-arm", "switch-expression-default-zero", "switch-guard", "switch-zero", "top-level", "truncated", "try-zero", "verbatim-string",
+  "abstract-zero", "accessor-add", "accessor-get", "accessor-init", "accessor-remove", "accessor-set", "anonymous-method", "attribute-zero", "auto-accessor-zero", "bitwise-zero", "bodyless-zero", "calls-zero", "case-label", "catch", "catch-filter", "comments", "comparisons-zero", "conditional", "conditional-access-zero", "const-zero", "constructor", "constructor-base", "conversion", "default-statement-zero", "destructor", "directives-source", "else-zero", "enum-zero", "error-signal", "expression-indexer", "expression-property", "extern-zero", "finally-zero", "guarded-discard", "if", "interpolated-string", "lambda", "local-function", "logical-and", "logical-or", "loop-do", "loop-for", "loop-foreach", "loop-foreach-deconstruction", "loop-foreach-ordinary", "loop-foreach-ref", "loop-while", "malformed", "method", "missing-signal", "modern-collection-expression", "modern-list-pattern", "modern-raw-string", "modern-record", "modern-required", "nested-callable", "nullish", "nullish-assign", "operator", "parameter-default-zero", "patterns-zero", "preprocessor-all-branches", "primary-base", "primary-header-zero", "query-zero", "raw-string", "recovery", "regular-string", "runtime-event-initializer", "runtime-field-initializer", "runtime-property-initializer", "signature-zero", "switch-expression-arm", "switch-expression-default-zero", "switch-guard", "switch-zero", "top-level", "truncated", "try-zero", "unicode-white-space", "verbatim-string",
 ];
+const FIXTURE_NON_ASCII_WHITE_SPACE = ["\u00a0", "\u3000"];
 
 function assertResourceClosure(events, valid) {
   const counts = Object.fromEntries([...new Set(events)].map((event) => [event, events.filter((candidate) => candidate === event).length]));
@@ -102,6 +105,22 @@ test("the closed C# fixture table pins validity, concrete shape, source lines, u
       assert(entry.expected.decisions.every((decision) => entry.expected.units.some((unit) => unit.id === decision.owner)), entry.id);
     }
   }
+});
+
+test("ordinary, deconstruction, and ref foreach forms each add one loop decision", () => {
+  const expected = fixture.cases.find((entry) => entry.id === "foreach-forms").expected;
+  assert.deepEqual(expected.decisions, [
+    { kind: "loop", owner: "method#1" },
+    { kind: "loop", owner: "method#1" },
+    { kind: "loop", owner: "method#1" },
+  ]);
+  assert.equal(expected.M, 4);
+});
+
+test("C# source lines use Unicode-scalar White_Space and preserve comment ranges after supplementary scalars", () => {
+  const entry = fixture.cases.find((candidate) => candidate.id === "unicode-whitespace-lines");
+  assert.equal(entry.expected.S, 3);
+  for (const scalar of FIXTURE_NON_ASCII_WHITE_SPACE) assert(entry.source.includes(scalar), `missing U+${scalar.codePointAt(0).toString(16).toUpperCase()}`);
 });
 
 test("guard, filter, switch default, and nested-callable ownership follow the fixed contract", () => {

@@ -263,6 +263,51 @@
       }
     },
     {
+      "id": "foreach-forms",
+      "source": "class ForeachForms {\n  void M(int[] values, (int Key, int Value)[] pairs) {\n    foreach (var value in values) {}\n    foreach (var (key, value) in pairs) {}\n    foreach (ref readonly var value in values) {}\n  }\n}\n",
+      "coverage": [
+        "loop-foreach-ordinary",
+        "loop-foreach-deconstruction",
+        "loop-foreach-ref"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 84,
+        "S": 7,
+        "U": 1,
+        "M": 4,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 4
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          }
+        ],
+        "shapeDigest": "6e213d39a9988d84a6a902eb479f5e33ec689a4aba80a1e01af85116a3ad6ac0"
+      }
+    },
+    {
       "id": "decision-points",
       "source": "class Decisions {\n  int M(int? x, int[] values) {\n    if (x > 0) {} else {}\n    for (int i = 0; i < 1; i++) {}\n    foreach (var value in values) {}\n    while (false) {}\n    do {} while (false);\n    x ??= 0;\n    return (x > 0 && x < 2 || x == 3) ? (x ?? 0) : 0;\n  }\n}\n",
       "coverage": [
@@ -289,19 +334,23 @@
         "visitedNodes": 137,
         "S": 11,
         "U": 1,
-        "M": 10,
+        "M": 11,
         "units": [
           {
             "id": "method#1",
             "kind": "method",
             "form": "block",
             "parent": "file",
-            "complexity": 10
+            "complexity": 11
           }
         ],
         "decisions": [
           {
             "kind": "if",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
             "owner": "method#1"
           },
           {
@@ -467,6 +516,36 @@
           }
         ],
         "shapeDigest": "adc32eb9cad2d8772fc646067ecb175b5959cf1cfcc6c02994c7af3dd5eafabe"
+      }
+    },
+    {
+      "id": "unicode-whitespace-lines",
+      "source": "class UnicodeWhitespace {\n  string Emoji = \"😀\";\n  // excluded after supplementary scalar\n}\n\u00a0\n\u3000\n",
+      "coverage": [
+        "unicode-white-space"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 19,
+        "S": 3,
+        "U": 1,
+        "M": 1,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "fa10ceb696790bcfa7efb9d61f8d904399305b653bcd3c4b075f7983b3ed593e"
       }
     },
     {

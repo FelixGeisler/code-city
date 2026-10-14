@@ -7,6 +7,7 @@ import { inspectWasm } from "./check-parser-assets.mjs";
 
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const decoder = new TextDecoder("utf8", { fatal: true });
+const WHITE_SPACE = /^\p{White_Space}$/u;
 const CSHARP_ASSET = "node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-c-sharp.wasm";
 const RUNTIME_JS = "node_modules/web-tree-sitter/web-tree-sitter.js";
 const RUNTIME_WASM = "node_modules/web-tree-sitter/web-tree-sitter.wasm";
@@ -48,7 +49,7 @@ const CALLABLE_KINDS = Object.freeze({
   lambda_expression: "lambda",
   anonymous_method_expression: "anonymous-method",
 });
-const LOOPS = new Set(["do_statement", "for_statement", "for_each_statement", "while_statement"]);
+const LOOPS = new Set(["do_statement", "for_statement", "foreach_statement", "while_statement"]);
 const DECLARATION_OWNERS = new Set(["field_declaration", "event_field_declaration"]);
 
 function invariant(condition, message) { if (!condition) throw new Error(message); }
@@ -170,16 +171,26 @@ function directChild(nodes, children, index, predicate) { return children[index]
 function inRange(node, range) { return node.start >= range.start && node.end <= range.end; }
 
 function sourceLines(source, nodes) {
-  const excluded = new Uint8Array(source.length);
-  for (const node of nodes) if (node.type === "comment") excluded.fill(1, node.start, node.end);
-  let lines = 0;
-  let hasSource = false;
-  for (let index = 0; index <= source.length; index += 1) {
-    const code = index === source.length ? 10 : source.charCodeAt(index);
-    if (code === 10) { if (hasSource) lines += 1; hasSource = false; }
-    else if (!excluded[index] && code !== 32 && code !== 9 && code !== 13 && code !== 11 && code !== 12) hasSource = true;
+  const exclusions = nodes
+    .filter((node) => node.type === "comment")
+    .map((node) => ({ start: node.start, end: node.end }));
+  let sourceOffset = 0;
+  let exclusionIndex = 0;
+  let lineHasSource = false;
+  let count = 0;
+  for (const scalar of source) {
+    while (exclusionIndex < exclusions.length && exclusions[exclusionIndex].end <= sourceOffset) exclusionIndex += 1;
+    const exclusion = exclusions[exclusionIndex];
+    const excluded = exclusion !== undefined && exclusion.start <= sourceOffset && sourceOffset + scalar.length <= exclusion.end;
+    if (scalar === "\n") {
+      if (lineHasSource) count += 1;
+      lineHasSource = false;
+    } else if (!excluded && !WHITE_SPACE.test(scalar)) {
+      lineHasSource = true;
+    }
+    sourceOffset += scalar.length;
   }
-  return lines;
+  return count + (lineHasSource ? 1 : 0);
 }
 
 function analyzeTree(source, nodes) {
