@@ -329,6 +329,207 @@
       }
     },
     {
+      "id": "excluded-syntax-in-callables",
+      "source": "class CallableExclusions {\n  void Method() {\n    [A((System.Func<int,int>)(attributeLambda => attributeLambda > 0 ? 1 : 0))]\n    void Local(int value = ((System.Func<int,int>)(defaultLambda => defaultLambda > 0 ? 1 : 0))(0)) {}\n    const int Constant = ((System.Func<int,int>)(constLambda => constLambda > 0 ? 1 : 0))(0);\n  }\n}\n",
+      "coverage": [
+        "excluded-attribute-nesting",
+        "excluded-parameter-default-nesting",
+        "excluded-const-in-callable"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 152,
+        "S": 7,
+        "U": 2,
+        "M": 1,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "local-function#2",
+            "kind": "local-function",
+            "form": "block",
+            "parent": "method#1",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "36d5df0ea662335dbf5d4f0263df410a4f8b7b6caa355fed09b21ee3fac765ac"
+      }
+    },
+    {
+      "id": "excluded-syntax-in-initialization",
+      "source": "[assembly: A((System.Func<int,int>)(attributeLambda => attributeLambda > 0 ? 1 : 0))]\nclass InitializationExclusions {\n  System.Func<int,int> Runtime = [A(true ? 1 : 0)] (int value = ((System.Func<int,int>)(defaultLambda => defaultLambda > 0 ? 1 : 0))(0)) => value;\n  const System.Func<int,int> Constant = (constLambda => constLambda > 0 ? 1 : 0);\n  enum E { Value = ((System.Func<int,int>)(enumLambda => enumLambda > 0 ? 1 : 0))(0) }\n}\n",
+      "coverage": [
+        "excluded-attribute-nesting",
+        "excluded-parameter-default-nesting",
+        "excluded-const-in-initialization",
+        "excluded-enum-value-nesting"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 209,
+        "S": 6,
+        "U": 2,
+        "M": 1,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "lambda#1",
+            "kind": "lambda",
+            "form": "expression",
+            "parent": "initialization/top-level",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "d6f5c029bf5fb1aecd822d712f7b275305699d0f0868125ee607c5cf393d27fc"
+      }
+    },
+    {
+      "id": "initializer-range-ownership",
+      "source": "{\n  const int Ignored = true ? 1 : 0;\n  Use(true ? 1 : 0);\n}\nclass InitializerOwnership {\n  System.Func<int> Field = () => { const int ignored = true ? 1 : 0; int kept = true ? 1 : 0; return kept; };\n  int Property { get { int kept = true ? 1 : 0; return kept; } } = true ? 1 : 0;\n  event System.Action Event = true ? A : B;\n}\n",
+      "coverage": [
+        "initializer-body-ownership",
+        "top-level-block-const-exclusion",
+        "runtime-property-initializer-decision"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 155,
+        "S": 9,
+        "U": 3,
+        "M": 4,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 4
+          },
+          {
+            "id": "lambda#1",
+            "kind": "lambda",
+            "form": "block",
+            "parent": "initialization/top-level",
+            "complexity": 2
+          },
+          {
+            "id": "get#2",
+            "kind": "get",
+            "form": "block",
+            "parent": "file",
+            "complexity": 2
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "conditional",
+            "owner": "lambda#1"
+          },
+          {
+            "kind": "conditional",
+            "owner": "get#2"
+          },
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          }
+        ],
+        "shapeDigest": "5e3dfc89465bddab22143a7e7b59399ce6047d00f413b424e243486d6039f874"
+      }
+    },
+    {
+      "id": "preprocessor-condition-and-branch-ownership",
+      "source": "#if TOP && OTHER\nUse(true ? 1 : 0);\n#else\nUse(false ? 1 : 0);\n#endif\nclass PreprocessorOwnership {\n  void Method() {\n#if INNER && FLAG || ALT\n    if (true) {}\n#else\n    while (false) {}\n#endif\n  }\n}\n",
+      "coverage": [
+        "preprocessor-condition-zero",
+        "preprocessor-top-level-branches"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 85,
+        "S": 14,
+        "U": 2,
+        "M": 3,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 3
+          },
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 3
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "if",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          }
+        ],
+        "shapeDigest": "bef41db677eae044fdbaf6c39d82c38f38968d2ea143c990af793e64310f9ddc"
+      }
+    },
+    {
       "id": "foreach-forms",
       "source": "class ForeachForms {\n  void M(int[] values, (int Key, int Value)[] pairs) {\n    foreach (var value in values) {}\n    foreach (var (key, value) in pairs) {}\n    foreach (ref readonly var value in values) {}\n  }\n}\n",
       "coverage": [

@@ -31,6 +31,10 @@ const REQUIRED_CASES = [
   "lexical-directives-and-branches",
   "all-explicit-and-zero-unit-forms",
   "initialization-and-nested-ownership",
+  "excluded-syntax-in-callables",
+  "excluded-syntax-in-initialization",
+  "initializer-range-ownership",
+  "preprocessor-condition-and-branch-ownership",
   "foreach-forms",
   "decision-points",
   "switch-guards-filters-and-defaults",
@@ -42,7 +46,7 @@ const REQUIRED_CASES = [
   "recovery-error",
 ];
 const REQUIRED_COVERAGE = [
-  "abstract-zero", "accessor-add", "accessor-get", "accessor-init", "accessor-remove", "accessor-set", "anonymous-method", "attribute-zero", "auto-accessor-zero", "bitwise-zero", "bodyless-zero", "calls-zero", "case-label", "catch", "catch-filter", "comments", "comparisons-zero", "conditional", "conditional-access-zero", "const-zero", "constructor", "constructor-base", "conversion", "default-statement-zero", "destructor", "directives-source", "else-zero", "enum-zero", "error-signal", "expression-indexer", "expression-property", "extern-zero", "finally-zero", "guarded-discard", "if", "interpolated-string", "lambda", "local-function", "logical-and", "logical-or", "loop-do", "loop-for", "loop-foreach", "loop-foreach-deconstruction", "loop-foreach-ordinary", "loop-foreach-ref", "loop-while", "malformed", "method", "missing-signal", "modern-collection-expression", "modern-list-pattern", "modern-raw-string", "modern-record", "modern-required", "nested-callable", "nullish", "nullish-assign", "operator", "parameter-default-zero", "patterns-zero", "preprocessor-all-branches", "primary-base", "primary-header-zero", "query-zero", "raw-string", "recovery", "regular-string", "runtime-event-initializer", "runtime-field-initializer", "runtime-property-initializer", "signature-zero", "switch-expression-arm", "switch-expression-default-zero", "switch-guard", "switch-zero", "top-level", "truncated", "try-zero", "unicode-white-space", "verbatim-string", "empty-file-zero-units", "comment-only-zero-units", "declaration-only-zero-units",
+  "abstract-zero", "accessor-add", "accessor-get", "accessor-init", "accessor-remove", "accessor-set", "anonymous-method", "attribute-zero", "auto-accessor-zero", "bitwise-zero", "bodyless-zero", "calls-zero", "case-label", "catch", "catch-filter", "comments", "comparisons-zero", "conditional", "conditional-access-zero", "const-zero", "constructor", "constructor-base", "conversion", "default-statement-zero", "destructor", "directives-source", "else-zero", "enum-zero", "error-signal", "excluded-attribute-nesting", "excluded-const-in-callable", "excluded-const-in-initialization", "excluded-enum-value-nesting", "excluded-parameter-default-nesting", "expression-indexer", "expression-property", "extern-zero", "finally-zero", "guarded-discard", "if", "initializer-body-ownership", "interpolated-string", "lambda", "local-function", "logical-and", "logical-or", "loop-do", "loop-for", "loop-foreach", "loop-foreach-deconstruction", "loop-foreach-ordinary", "loop-foreach-ref", "loop-while", "malformed", "method", "missing-signal", "modern-collection-expression", "modern-list-pattern", "modern-raw-string", "modern-record", "modern-required", "nested-callable", "nullish", "nullish-assign", "operator", "parameter-default-zero", "patterns-zero", "preprocessor-all-branches", "preprocessor-condition-zero", "preprocessor-top-level-branches", "primary-base", "primary-header-zero", "query-zero", "raw-string", "recovery", "regular-string", "runtime-event-initializer", "runtime-field-initializer", "runtime-property-initializer", "runtime-property-initializer-decision", "signature-zero", "switch-expression-arm", "switch-expression-default-zero", "switch-guard", "switch-zero", "top-level", "top-level-block-const-exclusion", "truncated", "try-zero", "unicode-white-space", "verbatim-string", "empty-file-zero-units", "comment-only-zero-units", "declaration-only-zero-units",
 ];
 const FIXTURE_NON_ASCII_WHITE_SPACE = ["\u00a0", "\u3000"];
 
@@ -126,6 +130,50 @@ test("valid empty, comment-only, and declaration-only forms have no executable u
     assert.deepEqual(expected.units, [], id);
     assert.deepEqual(expected.decisions, [], id);
   }
+});
+
+test("excluded C# syntax contributes no nested units, ownership, or decisions at callable and initialization depth", () => {
+  const byId = new Map(fixture.cases.map((entry) => [entry.id, entry]));
+  const callable = byId.get("excluded-syntax-in-callables");
+  assert.equal(occurrences(callable.source, "=>"), 3);
+  assert.deepEqual(callable.expected.units, [
+    { id: "method#1", kind: "method", form: "block", parent: "file", complexity: 1 },
+    { id: "local-function#2", kind: "local-function", form: "block", parent: "method#1", complexity: 1 },
+  ]);
+  assert.deepEqual(callable.expected.decisions, []);
+  assert.equal(callable.expected.M, 1);
+
+  const initialization = byId.get("excluded-syntax-in-initialization");
+  assert.equal(occurrences(initialization.source, "=>"), 5);
+  assert.deepEqual(initialization.expected.units, [
+    { id: "initialization/top-level", kind: "initialization/top-level", form: "file", parent: "file", complexity: 1 },
+    { id: "lambda#1", kind: "lambda", form: "expression", parent: "initialization/top-level", complexity: 1 },
+  ]);
+  assert.deepEqual(initialization.expected.decisions, []);
+  assert.equal(initialization.expected.M, 1);
+});
+
+test("initializer ranges preserve callable ownership and preprocessor conditions add no decisions", () => {
+  const byId = new Map(fixture.cases.map((entry) => [entry.id, entry.expected]));
+  const initialization = byId.get("initializer-range-ownership");
+  assert.deepEqual(initialization.decisions, [
+    { kind: "conditional", owner: "initialization/top-level" },
+    { kind: "conditional", owner: "lambda#1" },
+    { kind: "conditional", owner: "get#2" },
+    { kind: "conditional", owner: "initialization/top-level" },
+    { kind: "conditional", owner: "initialization/top-level" },
+  ]);
+  assert.equal(initialization.M, 4);
+
+  const preprocessor = byId.get("preprocessor-condition-and-branch-ownership");
+  assert.deepEqual(preprocessor.decisions, [
+    { kind: "conditional", owner: "initialization/top-level" },
+    { kind: "conditional", owner: "initialization/top-level" },
+    { kind: "if", owner: "method#1" },
+    { kind: "loop", owner: "method#1" },
+  ]);
+  assert.equal(preprocessor.decisions.some((decision) => decision.kind === "&&" || decision.kind === "||"), false);
+  assert.equal(preprocessor.M, 3);
 });
 
 test("ordinary, deconstruction, and ref foreach forms each add one loop decision", () => {

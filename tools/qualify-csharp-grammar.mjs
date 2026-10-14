@@ -156,17 +156,6 @@ function childIndexes(nodes) {
   for (let index = 1; index < nodes.length; index += 1) children[nodes[index].parent].push(index);
   return children;
 }
-function descendantsHave(nodes, index, predicate) {
-  for (let candidate = index + 1; candidate < nodes.length; candidate += 1) {
-    let parent = nodes[candidate].parent;
-    let inside = false;
-    while (parent >= 0) { if (parent === index) { inside = true; break; } parent = nodes[parent].parent; }
-    if (!inside) break;
-    if (predicate(nodes[candidate], candidate)) return true;
-  }
-  return false;
-}
-function ancestorIndex(nodes, index, predicate) { for (let current = nodes[index].parent; current >= 0; current = nodes[current].parent) if (predicate(nodes[current], current)) return current; return -1; }
 function directChild(nodes, children, index, predicate) { return children[index].find((child) => predicate(nodes[child], child)); }
 function inRange(node, range) { return node.start >= range.start && node.end <= range.end; }
 
@@ -197,11 +186,43 @@ function analyzeTree(source, nodes) {
   const children = childIndexes(nodes);
   const units = [];
   const initializationRanges = [];
+  const initializationKeys = new Set();
   const bodyFor = (index) => directChild(nodes, children, index, (child) => child.field === "body")
     ?? (nodes[index].type === "anonymous_method_expression" ? directChild(nodes, children, index, (child) => child.type === "block") : undefined);
+  const hasDirectConst = (index) => children[index].some((child) => nodes[child].type === "modifier"
+    && directChild(nodes, children, child, (candidate) => candidate.type === "const") !== undefined);
+  const excluded = new Uint8Array(nodes.length);
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    const parent = node.parent < 0 ? undefined : nodes[node.parent];
+    const excludedRoot = node.type === "attribute"
+      || node.type === "attribute_list"
+      || node.type === "global_attribute"
+      || node.type === "parameter_list"
+      || node.type === "bracketed_parameter_list"
+      || node.type === "parameter"
+      || node.type === "implicit_parameter"
+      || node.type === "enum_member_declaration"
+      || ((node.type === "field_declaration" || node.type === "local_declaration_statement") && hasDirectConst(index))
+      || (node.field === "condition" && (parent?.type === "preproc_if" || parent?.type === "preproc_elif"));
+    excluded[index] = Number(excludedRoot || (node.parent >= 0 && excluded[node.parent] === 1));
+  }
+  const addInitializationRange = (index) => {
+    if (index === undefined || excluded[index] === 1) return;
+    const range = { start: nodes[index].start, end: nodes[index].end };
+    const key = `${range.start}:${range.end}`;
+    if (!initializationKeys.has(key)) { initializationKeys.add(key); initializationRanges.push(range); }
+  };
+  const directTopLevelStatement = (index) => {
+    let parent = nodes[index].parent;
+    if (parent < 0 || !nodes[parent].type.startsWith("preproc_")) return false;
+    while (parent >= 0 && nodes[parent].type.startsWith("preproc_")) parent = nodes[parent].parent;
+    return parent >= 0 && nodes[parent].type === "compilation_unit";
+  };
 
   for (let index = 0; index < nodes.length; index += 1) {
     const node = nodes[index];
+    if (excluded[index] === 1) continue;
     let kind = CALLABLE_KINDS[node.type];
     let body = kind ? bodyFor(index) : undefined;
     if (node.type === "accessor_declaration") {
@@ -226,31 +247,29 @@ function analyzeTree(source, nodes) {
   for (let index = 0; index < nodes.length; index += 1) {
     const node = nodes[index];
     if (node.type === "global_statement") {
-      const isConst = descendantsHave(nodes, index, (candidate) => candidate.type === "const");
-      if (!isConst) initializationRanges.push({ start: node.start, end: node.end });
+      const statement = directChild(nodes, children, index, (child) => child.named);
+      if (statement === undefined || nodes[statement].type !== "local_declaration_statement" || !hasDirectConst(statement)) addInitializationRange(index);
       continue;
     }
-    if (node.type === "local_declaration_statement"
-      && ancestorIndex(nodes, index, (candidate) => Object.hasOwn(CALLABLE_KINDS, candidate.type) || candidate.type === "accessor_declaration") < 0
-      && ancestorIndex(nodes, index, (candidate) => candidate.type.startsWith("preproc_")) >= 0) {
-      const isConst = descendantsHave(nodes, index, (candidate) => candidate.type === "const");
-      if (!isConst) initializationRanges.push({ start: node.start, end: node.end });
+    if ((node.type.endsWith("_statement") || node.type === "block") && directTopLevelStatement(index)) {
+      if (node.type !== "local_declaration_statement" || !hasDirectConst(index)) addInitializationRange(index);
       continue;
     }
     if (node.type === "variable_declarator" && directChild(nodes, children, index, (child) => child.type === "=") !== undefined) {
-      const declaration = ancestorIndex(nodes, index, (candidate) => DECLARATION_OWNERS.has(candidate.type));
-      if (declaration >= 0 && !descendantsHave(nodes, declaration, (candidate) => candidate.type === "const")) initializationRanges.push({ start: node.start, end: node.end });
+      const variableDeclaration = node.parent >= 0 && nodes[node.parent].type === "variable_declaration" ? node.parent : -1;
+      const declaration = variableDeclaration >= 0 ? nodes[variableDeclaration].parent : -1;
+      if (declaration >= 0 && DECLARATION_OWNERS.has(nodes[declaration].type) && !hasDirectConst(declaration)) addInitializationRange(index);
       continue;
     }
-    if (node.type === "equals_value_clause") {
-      const property = ancestorIndex(nodes, index, (candidate) => candidate.type === "property_declaration" || candidate.type === "event_declaration");
-      if (property >= 0) initializationRanges.push({ start: node.start, end: node.end });
+    if (node.type === "property_declaration") {
+      const initializer = directChild(nodes, children, index, (child) => child.field === "value" && child.type !== "arrow_expression_clause");
+      if (initializer !== undefined) addInitializationRange(initializer);
       continue;
     }
     if (node.type === "base_list") {
       const declaration = node.parent;
       const primaryParameters = directChild(nodes, children, declaration, (candidate) => candidate.type === "parameter_list");
-      if (primaryParameters !== undefined) for (const child of children[index]) if (nodes[child].type === "argument_list") initializationRanges.push({ start: nodes[child].start, end: nodes[child].end });
+      if (primaryParameters !== undefined) for (const child of children[index]) if (nodes[child].type === "argument_list") addInitializationRange(child);
     }
   }
 
@@ -272,6 +291,7 @@ function analyzeTree(source, nodes) {
   const add = (index, kind, offset = 0) => points.push({ node: nodes[index], kind, sequence: sequence++, at: nodes[index].start + offset });
   for (let index = 0; index < nodes.length; index += 1) {
     const node = nodes[index];
+    if (excluded[index] === 1) continue;
     if (node.type === "if_statement") add(index, "if");
     else if (LOOPS.has(node.type)) add(index, "loop");
     else if (node.type === "switch_section") {
