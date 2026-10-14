@@ -197,9 +197,18 @@ test("every labelled notice mutation fails closed", async () => {
   }
 });
 
-test("the four prior and six narrow parser byte-fidelity attributes remain exact and effective", async () => {
+test("the declared byte-fidelity attributes remain exact and effective", async () => {
   const expected = [
     "test/fixtures/wasm-inventory.tsv text eol=lf",
+    "test/fixtures/csharp-candidate.json text eol=lf",
+    "test/fixtures/csharp-qualification-cases.json text eol=lf",
+    "test/fixtures/csharp-source-license.txt text eol=lf",
+    "test/fixtures/csharp-wasm-inventory.tsv text eol=lf",
+    "package.json text eol=lf",
+    "package-lock.json text eol=lf",
+    "src/domain/source-admission.ts text eol=lf",
+    "src/domain/base-metrics.ts text eol=lf",
+    "src/edge/tree-sitter-assets.ts text eol=lf",
     "docs/modules/architecture/pages/adr/0011-interactive-webgl2-navigation-and-inspection.adoc text eol=lf",
     "test/fixtures/interactive/fixture.json text eol=lf",
     "docs/modules/architecture/pages/adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc text eol=lf",
@@ -215,23 +224,36 @@ test("the four prior and six narrow parser byte-fidelity attributes remain exact
   const committedBlob = execFileSync("git", ["show", "HEAD:.gitattributes"], { cwd: projectRoot, encoding: "utf8" });
   assert.equal(workingTree, expected);
   assert.equal(committedBlob, expected);
-  const paths = [
+  const csharpBytePinnedPaths = [
+    "test/fixtures/csharp-candidate.json",
+    "test/fixtures/csharp-qualification-cases.json",
+    "test/fixtures/csharp-source-license.txt",
+    "test/fixtures/csharp-wasm-inventory.tsv",
+    "package.json",
+    "package-lock.json",
+    "src/domain/source-admission.ts",
+    "src/domain/base-metrics.ts",
+    "src/edge/tree-sitter-assets.ts",
+  ];
+  const parserTextPaths = [
     "vendor/tree-sitter-typescript/LICENSE",
     "vendor/tree-sitter-typescript/LICENSE.javascript",
     "vendor/tree-sitter-typescript/grammar.patch",
     "vendor/tree-sitter-typescript/provenance.json",
+  ];
+  const binaryPaths = [
     "vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm",
     "vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm",
-    "index.html",
   ];
-  const output = execFileSync("git", ["check-attr", "text", "eol", "--", ...paths], { cwd: projectRoot, encoding: "utf8" });
-  for (const relativePath of paths.slice(0, 4).concat("index.html")) {
+  const lfPaths = [...csharpBytePinnedPaths, ...parserTextPaths, "index.html"];
+  const output = execFileSync("git", ["check-attr", "text", "eol", "--", ...lfPaths, ...binaryPaths], { cwd: projectRoot, encoding: "utf8" });
+  for (const relativePath of lfPaths) {
     assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: text: set`));
     assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: eol: lf`));
   }
-  for (const relativePath of paths.slice(4, 6)) assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: text: unset`));
-  for (const relativePath of ["LICENSE", "LICENSE.javascript", "grammar.patch", "provenance.json"]) {
-    const bytes = await readFile(path.join(projectRoot, "vendor", "tree-sitter-typescript", relativePath));
+  for (const relativePath of binaryPaths) assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: text: unset`));
+  for (const relativePath of [...csharpBytePinnedPaths, ...parserTextPaths]) {
+    const bytes = await readFile(path.join(projectRoot, ...relativePath.split("/")));
     assert(!bytes.includes(0x0d), `${relativePath} contains CR bytes`);
   }
 });
