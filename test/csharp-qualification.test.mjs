@@ -183,51 +183,112 @@ test("the production adapter projects every valid C# fixture through the fixed d
   assert.deepEqual(live, { parser: 0, tree: 0, cursor: 0, stream: 0 });
 });
 
-test("focused C# observations preserve complete unit spans, body ownership, runtime anchors, exclusions, comments, guards, and preprocessor branches", async () => {
+test("focused C# observations have exact packed payloads, UTF-8 spans, and owned regions", async () => {
   const adapter = createTreeSitterAdapter(adapterAssets, { loadBytes: bytesFromFileUrl });
   const byId = new Map(fixture.cases.map((entry) => [entry.id, entry]));
-  const project = async (id) => {
-    const entry = byId.get(id); const stream = await adapter.project("csharp", entry.source);
-    return { source: entry.source, stream, observations: [...stream.observations] };
+  const region = (startByte, endByte) => ({ startByte, endByte });
+  const unit = (form, startByte, endByte, ownedRegions) => ({ kind: "explicit-unit", form, startByte, endByte, ownedRegions });
+  const value = (startByte, endByte) => ({ kind: "value-anchor", valueKind: "runtime-statement/declaration", startByte, endByte });
+  const decision = (decisionKind, startByte, endByte) => ({ kind: "decision", decisionKind, startByte, endByte });
+  const lexical = (startByte, endByte) => ({ kind: "lexical-exclusion", startByte, endByte });
+  const assertPacked = async (id, expected) => {
+    const entry = byId.get(id);
+    const stream = await adapter.project("csharp", entry.source);
+    assert.equal(stream.observations.length, expected.length, `${id} packed length`);
+    for (let index = 0; index < expected.length; index += 1) {
+      assert.deepEqual(stream.observations.at(index), expected[index], `${id} packed observation ${index}`);
+    }
+    assert.deepEqual(stream.observations.toJSON(), expected, `${id} packed table`);
+    stream.release();
+    return entry.source;
   };
-  const utf8Slice = (source, observation) => Buffer.from(source, "utf8").subarray(observation.startByte, observation.endByte).toString("utf8");
 
-  const forms = await project("all-explicit-and-zero-unit-forms");
-  const units = forms.observations.filter((observation) => observation.kind === "explicit-unit");
-  assert.deepEqual(units.map((unit) => unit.form), ["getter", "getter", "getter", "setter", "setter", "setter", "setter", "constructor", "method", "method", "function", "arrow", "function", "method", "method"]);
-  assert.deepEqual(units.map((unit) => unit.ownedRegions.map((region) => utf8Slice(forms.source, region))), [
-    ["=> 1"], ["=> i"], ["{ return 1; }"], ["=> Use(value)"], ["{ Use(value); }"], ["=> Use(value)"], ["{ Use(value); }"],
-    [": base()", "{}"], ["{}"], ["{ void Local() {} Func<int,int> a = x => x; var b = delegate(int y) { return y; }; }"], ["{}"], ["x"], ["{ return y; }"], ["=> a"], ["=> 1"],
+  await assertPacked("all-explicit-and-zero-unit-forms", [
+    unit("getter", 142, 153, [region(148, 152)]),
+    unit("getter", 156, 177, [region(172, 176)]),
+    unit("getter", 188, 205, [region(192, 205)]),
+    unit("setter", 206, 224, [region(210, 223)]),
+    unit("setter", 225, 245, [region(230, 245)]),
+    unit("setter", 267, 285, [region(271, 284)]),
+    unit("setter", 286, 308, [region(293, 308)]),
+    unit("constructor", 313, 332, [region(321, 329), region(330, 332)]),
+    unit("method", 335, 346, [region(344, 346)]),
+    unit("method", 349, 451, [region(367, 451)]),
+    unit("function", 369, 384, [region(382, 384)]),
+    unit("arrow", 403, 409, [region(408, 409)]),
+    unit("function", 419, 448, [region(435, 448)]),
+    unit("method", 454, 508, [region(503, 507)]),
+    unit("method", 511, 561, [region(556, 560)]),
   ]);
-  assert.equal(forms.observations.filter((observation) => observation.kind === "value-anchor").length, 0, "explicit bodies must not create top-level anchors");
-  forms.stream.release();
 
-  const initialization = await project("initialization-and-nested-ownership");
-  assert.deepEqual(initialization.observations.filter((observation) => observation.kind === "value-anchor").map((observation) => utf8Slice(initialization.source, observation)), [
-    "Use(0);", "(p > 0 ? p : 0)", "field = p ?? 0", "E = Handler", "F()", "nested = x => x > 0 ? x : 0",
+  await assertPacked("initialization-and-nested-ownership", [
+    value(0, 7),
+    value(32, 47),
+    decision("ternary", 33, 46),
+    value(56, 70),
+    decision("nullish", 64, 70),
+    value(87, 98),
+    value(126, 129),
+    value(147, 174),
+    unit("arrow", 156, 174, [region(161, 174)]),
+    decision("ternary", 161, 174),
+    unit("constructor", 215, 243, [region(222, 240), region(241, 243)]),
+    decision("nullish", 229, 239),
   ]);
-  const constructor = initialization.observations.find((observation) => observation.kind === "explicit-unit" && observation.form === "constructor");
-  assert.deepEqual(constructor.ownedRegions.map((region) => utf8Slice(initialization.source, region)), [": base(F() ?? G())", "{}"]);
-  initialization.stream.release();
 
-  for (const id of ["excluded-syntax-in-callables", "excluded-syntax-in-initialization"]) {
-    const excluded = await project(id);
-    assert.equal(excluded.observations.filter((observation) => observation.kind === "decision").length, 0, id);
-    assert.equal(excluded.observations.filter((observation) => observation.kind === "explicit-unit").length, byId.get(id).expected.U - (id.endsWith("initialization") ? 1 : 0), id);
-    excluded.stream.release();
-  }
+  await assertPacked("excluded-syntax-in-callables", [
+    unit("method", 29, 325, [region(43, 325)]),
+    unit("function", 49, 227, [region(225, 227)]),
+  ]);
+  await assertPacked("excluded-syntax-in-initialization", [
+    value(142, 264),
+    unit("arrow", 152, 264, [region(259, 264)]),
+  ]);
 
-  const branches = await project("switch-guards-filters-and-defaults");
-  assert.deepEqual(branches.observations.filter((observation) => observation.kind === "decision").map((observation) => observation.decisionKind), ["case", "if", "case", "case", "catch", "if", "case", "if", "case", "if"]);
-  branches.stream.release();
-  const preprocessor = await project("preprocessor-condition-and-branch-ownership");
-  assert.deepEqual(preprocessor.observations.filter((observation) => observation.kind === "decision").map((observation) => observation.decisionKind), ["ternary", "ternary", "if", "loop"]);
-  assert.equal(preprocessor.observations.filter((observation) => observation.kind === "value-anchor").length, 2, "both top-level branches are traversed");
-  preprocessor.stream.release();
+  await assertPacked("decision-points", [
+    unit("method", 20, 264, [region(48, 264)]),
+    decision("if", 54, 75),
+    decision("loop", 80, 110),
+    decision("loop", 115, 147),
+    decision("loop", 152, 168),
+    decision("loop", 173, 193),
+    decision("nullish-assign", 198, 205),
+    decision("ternary", 218, 259),
+    decision("logical-or", 219, 243),
+    decision("logical-and", 219, 233),
+    decision("nullish", 248, 254),
+  ]);
 
-  const unicode = await project("unicode-whitespace-lines");
-  assert.deepEqual(unicode.observations.filter((observation) => observation.kind === "lexical-exclusion").map((observation) => utf8Slice(unicode.source, observation)), ["// excluded after supplementary scalar"]);
-  unicode.stream.release();
+  await assertPacked("switch-guards-filters-and-defaults", [
+    unit("method", 19, 236, [region(32, 236)]),
+    decision("case", 51, 76),
+    decision("if", 58, 68),
+    decision("case", 77, 84),
+    decision("case", 85, 99),
+    decision("catch", 129, 162),
+    decision("if", 147, 159),
+    decision("case", 185, 202),
+    decision("if", 187, 197),
+    decision("case", 204, 221),
+    decision("if", 206, 216),
+  ]);
+
+  await assertPacked("preprocessor-condition-and-branch-ownership", [
+    value(17, 35),
+    decision("ternary", 21, 33),
+    value(42, 61),
+    decision("ternary", 46, 59),
+    unit("method", 101, 196, [region(115, 196)]),
+    decision("if", 146, 158),
+    decision("loop", 169, 185),
+  ]);
+
+  const unicodeSource = await assertPacked("unicode-whitespace-lines", [
+    value(35, 49),
+    lexical(53, 91),
+  ]);
+  assert.equal(unicodeSource.indexOf("// excluded after supplementary scalar"), 51, "fixture UTF-16 comment offset");
+  assert.equal(Buffer.from(unicodeSource.slice(0, 51), "utf8").byteLength, 53, "supplementary scalar shifts the exact UTF-8 comment offset");
 });
 
 test("a production adapter rejects dormant C# projection before runtime initialization", async () => {
