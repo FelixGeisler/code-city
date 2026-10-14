@@ -75,6 +75,52 @@ published Code City envelope.
 Parser errors, missing nodes, or recovery fail the complete attempt. Type
 checking, name resolution, linting, and dependency analysis are not performed.
 
+== Planned C# contract (not admitted)
+
+C# is planned but is not a supported source kind. `.cs` and ASCII-case variants
+remain unsupported, and no C# grammar is present in the production package.
+The existing packaged grammar candidate has been qualified only as recorded by
+xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
+It defines accepted syntax without claiming a C# language version.
+
+When a later accepted change admits C#, its metrics use this fixed contract:
+
+* `S` counts each physical line containing non-whitespace, non-comment C#
+  source. Declarations, attributes, metadata, and every preprocessor directive
+  count. Comment-looking content in regular, verbatim, interpolated, and raw
+  strings remains source. All syntactically present preprocessor branch bodies
+  are analysed without symbol evaluation; directive conditions add no unit or
+  decision.
+* `U` counts one unit for each explicit body of a method, local function,
+  constructor, destructor, operator, conversion, accessor (`get`, `set`,
+  `init`, `add`, or `remove`), lambda, or anonymous method. Block and expression
+  bodies count. An expression-bodied property or indexer is one getter unit.
+  Auto accessors, bodyless, signature-only, abstract, extern, and generated
+  members, and a primary-constructor header alone, count zero.
+* Runtime field, property, and event initializers, top-level statements, and
+  primary-constructor base arguments outside explicit bodies share at most one
+  file-wide `initialization/top-level` unit. An explicit constructor initializer
+  belongs to that constructor. Nested callables own their bodies exclusively,
+  although creating one can establish the surrounding initialization unit.
+  Attributes, type and signature syntax, parameter defaults, const
+  initializers, and enum values establish neither a unit nor runtime ownership.
+* Each unit starts at complexity 1. Add one owned point for each `if`, loop,
+  switch-statement `case` label, `catch`, conditional expression, and occurrence
+  of `&&`, `||`, `??`, or `??=`. Add one for each switch-expression arm except
+  an unguarded discard arm (`_ =>`), and one more for each switch-arm `when`
+  guard and catch `when` filter. Thus a guarded discard arm and a filtered
+  catch each add two points. Multiple `case` labels each count; `default` adds
+  zero.
+* Patterns, query clauses, attributes, type and signature syntax, parameter
+  defaults, const and enum syntax, preprocessor conditions, `else`, `switch`,
+  `default`, `try`, `finally`, calls, comparisons, bitwise operators, and
+  conditional access add no point themselves. `M` is the maximum unit
+  complexity, or zero when there is no unit.
+
+After admission, any C# parser error, missing node, or recovery fails the whole
+attempt as `Metric processing failed` / `M1-MET-1`, without a diagnostic,
+partial result, retry, fallback, or source execution.
+
 == Metrics
 
 === Source lines (`S`)

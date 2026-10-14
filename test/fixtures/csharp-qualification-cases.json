@@ -1,0 +1,572 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "lexical-directives-and-branches",
+      "source": "#define A\n#if A\nvar branchA = @\"// source\"; // trailing\n#else\nvar branchB = \"\"\"/* source */\"\"\";\n#endif\nclass Lexical {\n  /* block\n     only */\n  [Obsolete(\"/* metadata */\")]\n  string M() => $\"// {1}\";\n}\n",
+      "coverage": [
+        "comments",
+        "regular-string",
+        "verbatim-string",
+        "interpolated-string",
+        "raw-string",
+        "directives-source",
+        "preprocessor-all-branches"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 70,
+        "S": 10,
+        "U": 2,
+        "M": 1,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "b5ea72c9a132ad4ac52883bae6054cfe1f4092fb16756906b04abaf89a415806"
+      }
+    },
+    {
+      "id": "all-explicit-and-zero-unit-forms",
+      "source": "abstract class Units {\n  public abstract void Abstract();\n  [DllImport(\"x\")] public static extern void External();\n  int Auto { get; set; }\n  int Q => 1;\n  int this[int i] => i;\n  int R { get { return 1; } set => Use(value); init { Use(value); } }\n  event Action E { add => Use(value); remove { Use(value); } }\n  Units() : base() {}\n  ~Units() {}\n  void M(int p = 1) { void Local() {} Func<int,int> a = x => x; var b = delegate(int y) { return y; }; }\n  public static Units operator +(Units a, Units b) => a;\n  public static explicit operator int(Units a) => 1;\n}\ninterface I { void Signature(); }\n",
+      "coverage": [
+        "method",
+        "local-function",
+        "constructor",
+        "destructor",
+        "operator",
+        "conversion",
+        "accessor-get",
+        "accessor-set",
+        "accessor-init",
+        "accessor-add",
+        "accessor-remove",
+        "lambda",
+        "anonymous-method",
+        "expression-property",
+        "expression-indexer",
+        "auto-accessor-zero",
+        "bodyless-zero",
+        "abstract-zero",
+        "extern-zero",
+        "signature-zero",
+        "parameter-default-zero",
+        "attribute-zero"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 292,
+        "S": 15,
+        "U": 15,
+        "M": 1,
+        "units": [
+          {
+            "id": "property-getter#1",
+            "kind": "property-getter",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "indexer-getter#2",
+            "kind": "indexer-getter",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "get#3",
+            "kind": "get",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "set#4",
+            "kind": "set",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "init#5",
+            "kind": "init",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "add#6",
+            "kind": "add",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "remove#7",
+            "kind": "remove",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "constructor#8",
+            "kind": "constructor",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "destructor#9",
+            "kind": "destructor",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "method#10",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "local-function#11",
+            "kind": "local-function",
+            "form": "block",
+            "parent": "method#10",
+            "complexity": 1
+          },
+          {
+            "id": "lambda#12",
+            "kind": "lambda",
+            "form": "expression",
+            "parent": "method#10",
+            "complexity": 1
+          },
+          {
+            "id": "anonymous-method#13",
+            "kind": "anonymous-method",
+            "form": "block",
+            "parent": "method#10",
+            "complexity": 1
+          },
+          {
+            "id": "operator#14",
+            "kind": "operator",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "conversion#15",
+            "kind": "conversion",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "f7b1f634134181bc4d6bc088fa718e61df591efa14befbb3e9465703455e42cf"
+      }
+    },
+    {
+      "id": "initialization-and-nested-ownership",
+      "source": "Use(0);\nclass Init(int p) : Base(p > 0 ? p : 0) {\n  int field = p ?? 0;\n  event Action E = Handler;\n  int Property { get; } = F();\n  Func<int,int> nested = x => x > 0 ? x : 0;\n  const int Constant = true ? 1 : 0;\n  Init() : base(F() ?? G()) {}\n}\n",
+      "coverage": [
+        "runtime-field-initializer",
+        "runtime-property-initializer",
+        "runtime-event-initializer",
+        "top-level",
+        "primary-base",
+        "constructor-base",
+        "nested-callable",
+        "primary-header-zero",
+        "const-zero"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 144,
+        "S": 9,
+        "U": 3,
+        "M": 3,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 3
+          },
+          {
+            "id": "lambda#1",
+            "kind": "lambda",
+            "form": "expression",
+            "parent": "initialization/top-level",
+            "complexity": 2
+          },
+          {
+            "id": "constructor#2",
+            "kind": "constructor",
+            "form": "block",
+            "parent": "file",
+            "complexity": 2
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "??",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "conditional",
+            "owner": "lambda#1"
+          },
+          {
+            "kind": "??",
+            "owner": "constructor#2"
+          }
+        ],
+        "shapeDigest": "59cbf5a49e25e84b8722c5d4c71ae60dba2a09a591c0b3145a5fbda37ef58dd3"
+      }
+    },
+    {
+      "id": "decision-points",
+      "source": "class Decisions {\n  int M(int? x, int[] values) {\n    if (x > 0) {} else {}\n    for (int i = 0; i < 1; i++) {}\n    foreach (var value in values) {}\n    while (false) {}\n    do {} while (false);\n    x ??= 0;\n    return (x > 0 && x < 2 || x == 3) ? (x ?? 0) : 0;\n  }\n}\n",
+      "coverage": [
+        "if",
+        "loop-for",
+        "loop-foreach",
+        "loop-while",
+        "loop-do",
+        "conditional",
+        "logical-and",
+        "logical-or",
+        "nullish",
+        "nullish-assign",
+        "else-zero",
+        "comparisons-zero"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 137,
+        "S": 11,
+        "U": 1,
+        "M": 10,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 10
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "if",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "??=",
+            "owner": "method#1"
+          },
+          {
+            "kind": "conditional",
+            "owner": "method#1"
+          },
+          {
+            "kind": "||",
+            "owner": "method#1"
+          },
+          {
+            "kind": "&&",
+            "owner": "method#1"
+          },
+          {
+            "kind": "??",
+            "owner": "method#1"
+          }
+        ],
+        "shapeDigest": "18d05a0790bd95bec91e62be3083a1729c39f461fb08b0b50cb9d6adfdcef50a"
+      }
+    },
+    {
+      "id": "switch-guards-filters-and-defaults",
+      "source": "class Branches {\n  int M(int x) {\n    switch (x) { case 1 when x > 0: break; case 2: case 3: break; default: break; }\n    try {} catch (Exception) when (x > 0) {}\n    return x switch { 1 when x > 0 => 1, _ when x < 0 => 2, _ => 0 };\n  }\n}\n",
+      "coverage": [
+        "case-label",
+        "switch-guard",
+        "catch",
+        "catch-filter",
+        "switch-expression-arm",
+        "switch-expression-default-zero",
+        "guarded-discard",
+        "switch-zero",
+        "default-statement-zero",
+        "try-zero"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 117,
+        "S": 7,
+        "U": 1,
+        "M": 11,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 11
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "case",
+            "owner": "method#1"
+          },
+          {
+            "kind": "switch-guard",
+            "owner": "method#1"
+          },
+          {
+            "kind": "case",
+            "owner": "method#1"
+          },
+          {
+            "kind": "case",
+            "owner": "method#1"
+          },
+          {
+            "kind": "catch",
+            "owner": "method#1"
+          },
+          {
+            "kind": "catch-filter",
+            "owner": "method#1"
+          },
+          {
+            "kind": "switch-expression-arm",
+            "owner": "method#1"
+          },
+          {
+            "kind": "switch-guard",
+            "owner": "method#1"
+          },
+          {
+            "kind": "switch-expression-arm",
+            "owner": "method#1"
+          },
+          {
+            "kind": "switch-guard",
+            "owner": "method#1"
+          }
+        ],
+        "shapeDigest": "8fe622fd2319ea1a30bad157b4866be98e81167e333649424f92624f700e759a"
+      }
+    },
+    {
+      "id": "zero-point-and-zero-unit-syntax",
+      "source": "[A(true ? 1 : 0)]\nclass Zero(int p = true ? 1 : 0) {\n  const int C = true ? 1 : 0;\n  enum E { A = 1, B = 2 }\n  int M(int x = true ? 1 : 0) {\n    try { var q = from n in new[] { 1 } where n > 0 select n; if (x is > 0 and < 3 or not 9) Call()?.Next(); return (x & 1) == 0 ? 1 : 0; } finally {}\n  }\n}\n",
+      "coverage": [
+        "attribute-zero",
+        "primary-header-zero",
+        "parameter-default-zero",
+        "const-zero",
+        "enum-zero",
+        "patterns-zero",
+        "query-zero",
+        "finally-zero",
+        "calls-zero",
+        "bitwise-zero",
+        "conditional-access-zero"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 183,
+        "S": 8,
+        "U": 1,
+        "M": 3,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 3
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "if",
+            "owner": "method#1"
+          },
+          {
+            "kind": "conditional",
+            "owner": "method#1"
+          }
+        ],
+        "shapeDigest": "adc32eb9cad2d8772fc646067ecb175b5959cf1cfcc6c02994c7af3dd5eafabe"
+      }
+    },
+    {
+      "id": "representative-modern-syntax",
+      "source": "record Point(int X, int Y);\nclass Modern {\n  required string Name { get; init; }\n  int[] Values() => [1, 2, 3];\n  string Text() => \"\"\"raw // text\"\"\";\n  bool Match(object value) => value is [1, ..];\n}\n",
+      "coverage": [
+        "modern-record",
+        "modern-required",
+        "modern-collection-expression",
+        "modern-raw-string",
+        "modern-list-pattern"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 94,
+        "S": 7,
+        "U": 3,
+        "M": 1,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "method#2",
+            "kind": "method",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "method#3",
+            "kind": "method",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "1cff029d55b5111fe17e931da4d0403d15fa3e08f26d30e33b96a778145ce784"
+      }
+    },
+    {
+      "id": "malformed-error",
+      "source": "class Broken { void M() { int x = ; } }",
+      "coverage": [
+        "malformed",
+        "error-signal"
+      ],
+      "expected": {
+        "valid": false,
+        "signals": {
+          "rootHasError": true,
+          "errorNodes": 1,
+          "missingNodes": 0
+        },
+        "visitedNodes": 24
+      }
+    },
+    {
+      "id": "truncated-missing",
+      "source": "namespace N",
+      "coverage": [
+        "truncated",
+        "missing-signal"
+      ],
+      "expected": {
+        "valid": false,
+        "signals": {
+          "rootHasError": true,
+          "errorNodes": 0,
+          "missingNodes": 1
+        },
+        "visitedNodes": 5
+      }
+    },
+    {
+      "id": "recovery-error",
+      "source": "class Recovery { void M(int = 1) {} }",
+      "coverage": [
+        "recovery",
+        "error-signal"
+      ],
+      "expected": {
+        "valid": false,
+        "signals": {
+          "rootHasError": true,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 21
+      }
+    }
+  ]
+}
