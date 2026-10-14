@@ -56,18 +56,26 @@ The `tree-sitter-c-sharp.wasm` already contained in
 `@vscode/tree-sitter-wasm@0.3.1` is qualified with the current
 `web-tree-sitter@0.27.0` runtime for a later C# admission decision. This is
 candidate coverage under this ADR, not production selection: `.cs` remains
-unsupported, the C# asset is not emitted, and no production parser URL, type,
-projection, notice, dependency, or package file changes.
+unsupported, the C# asset is not emitted, and no production parser URL,
+notice, dependency, or package file changes. The existing adapter recognizes
+the dormant `csharp` grammar family and can load the candidate only through a
+specifically named optional asset input. Direct tests inject that URL and
+exercise validation and grammar-neutral projection; canonical production
+assets do not supply it, so a direct production C# request fails closed before
+parsing.
 
 Qualification pins the package and source provenance, exact candidate bytes,
 ABI, complete imports, exports, memory and `dylink.0` inventory, and both MIT
 licences. It directly loads and parses with the accepted runtime, walks every
 tree iteratively, rejects parser errors, missing nodes, and recovery, and
-releases each parser, tree, cursor, source, and qualification-observation
-resource. The closed synthetic table fixes the C# metric contract and concrete
-parse shapes without adding that projection to production. Exact 2 MiB dense
-and deep modules establish candidate compatibility with the existing
-per-module boundary; elapsed time is diagnostic only.
+releases each parser, tree, cursor, source, and observation resource. The
+closed synthetic table fixes the C# metric contract and concrete parse shapes.
+The same table now also exercises the existing adapter and Metrics with the
+test-injected candidate, including exact observations, ownership, `S`, `U`,
+and `M`, without making the candidate a production-selected asset. Exact 2
+MiB dense and deep modules establish validation, projection, and metric
+compatibility with the existing per-module boundary; elapsed time is
+diagnostic only.
 
 Any package, candidate asset, runtime, source commit, inventory, ABI, or
 licence change stops C# admission work until this ADR is requalified. A failed

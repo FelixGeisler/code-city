@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CSHARP_CANDIDATE,
   createCSharpQualifier,
@@ -21,6 +21,19 @@ registerHooks({
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const fixture = JSON.parse(await readFile(path.join(projectRoot, "test", "fixtures", "csharp-qualification-cases.json"), "utf8"));
 const initialized = await verifyCSharpCandidate(projectRoot);
+const { createTreeSitterAdapter } = await import("../src/edge/tree-sitter-adapter.ts");
+const { deriveBaseMetricAnalysis } = await import("../src/domain/base-metrics.ts");
+const { finalizeModuleComplexity } = await import("../src/domain/complexity.ts");
+const assetUrl = (relativePath) => pathToFileURL(path.join(projectRoot, ...relativePath.split("/"))).href;
+const adapterAssets = {
+  runtimeJavaScript: assetUrl("node_modules/web-tree-sitter/web-tree-sitter.js"),
+  runtimeWasm: assetUrl("node_modules/web-tree-sitter/web-tree-sitter.wasm"),
+  grammarJavaScript: assetUrl("node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm"),
+  grammarTypeScript: assetUrl("vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm"),
+  grammarTsx: assetUrl("vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm"),
+  grammarCSharp: assetUrl(CSHARP_CANDIDATE.asset.path),
+};
+const bytesFromFileUrl = async (url) => new Uint8Array(await readFile(fileURLToPath(url)));
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const occurrences = (source, token) => source.split(token).length - 1;
 
@@ -112,6 +125,152 @@ test("the closed C# fixture table pins validity, concrete shape, source lines, u
       assert(entry.expected.decisions.every((decision) => entry.expected.units.some((unit) => unit.id === decision.owner)), entry.id);
     }
   }
+});
+
+test("the production adapter projects every valid C# fixture through the fixed domain metrics and rejects every invalid fixture", async () => {
+  const events = [];
+  const loads = [];
+  const adapter = createTreeSitterAdapter(adapterAssets, {
+    async loadBytes(url) { loads.push(url); return bytesFromFileUrl(url); },
+    observeResource: (event) => events.push(event),
+  });
+  const formForKind = {
+    method: "method", destructor: "method", operator: "method", conversion: "method",
+    "local-function": "function", "anonymous-method": "function", constructor: "constructor",
+    "property-getter": "getter", "indexer-getter": "getter", get: "getter",
+    set: "setter", init: "setter", add: "setter", remove: "setter", lambda: "arrow",
+  };
+  const live = { parser: 0, tree: 0, cursor: 0, stream: 0 };
+  const peak = { ...live };
+  const deltas = {
+    "parser-created": ["parser", 1], "parser-deleted": ["parser", -1],
+    "tree-created": ["tree", 1], "tree-deleted": ["tree", -1],
+    "cursor-created": ["cursor", 1], "cursor-deleted": ["cursor", -1],
+    "observation-stream-created": ["stream", 1], "observation-stream-released": ["stream", -1],
+  };
+  let consumedEvents = 0;
+  for (const entry of fixture.cases) {
+    const before = events.length;
+    if (!entry.expected.valid) {
+      await assert.rejects(() => adapter.project("csharp", entry.source), /Syntax validation failed/u, entry.id);
+      assert.deepEqual(events.slice(before), ["parser-created", "tree-created", "cursor-created", "cursor-deleted", "tree-deleted", "parser-deleted"], entry.id);
+      continue;
+    }
+    const stream = await adapter.project("csharp", entry.source);
+    const base = deriveBaseMetricAnalysis("fixture.js", entry.source, stream.observations);
+    const finalized = finalizeModuleComplexity(base);
+    assert.deepEqual({ S: base.S, U: base.U, M: finalized.fact.M }, { S: entry.expected.S, U: entry.expected.U, M: entry.expected.M }, entry.id);
+    assert.deepEqual(Array.from(finalized.perUnitComplexities), entry.expected.units.map((unit) => unit.complexity), `${entry.id} per-owner complexity`);
+    assert.deepEqual([...base.units].map((unit) => unit.kind), entry.expected.units.map((unit) => unit.kind === "initialization/top-level" ? "top-level" : formForKind[unit.kind]), `${entry.id} transport forms`);
+    for (const observation of stream.observations) {
+      const common = ["kind", "startByte", "endByte"];
+      const keys = observation.kind === "explicit-unit" ? [...common, "form", "ownedRegions"]
+        : observation.kind === "value-anchor" ? [...common, "valueKind"]
+        : observation.kind === "decision" ? [...common, "decisionKind"] : common;
+      assert.deepEqual(Object.keys(observation).sort(), keys.sort(), `${entry.id} source-free ${observation.kind}`);
+    }
+    stream.release();
+    stream.release();
+    assert.deepEqual(events.slice(before), ["parser-created", "tree-created", "cursor-created", "cursor-deleted", "cursor-created", "cursor-deleted", "observation-stream-created", "tree-deleted", "parser-deleted", "observation-stream-released"], entry.id);
+  }
+  assert.equal(loads.filter((url) => url === adapterAssets.grammarCSharp).length, 1, "candidate language load count");
+  assert.deepEqual(loads, [adapterAssets.grammarJavaScript, adapterAssets.grammarTypeScript, adapterAssets.grammarTsx, adapterAssets.grammarCSharp]);
+  for (const event of events) {
+    const change = deltas[event]; if (!change) continue;
+    const [kind, delta] = change; live[kind] += delta; assert(live[kind] >= 0, `${event} after event ${consumedEvents}`); peak[kind] = Math.max(peak[kind], live[kind]); consumedEvents += 1;
+  }
+  assert.deepEqual(peak, { parser: 1, tree: 1, cursor: 1, stream: 1 });
+  assert.deepEqual(live, { parser: 0, tree: 0, cursor: 0, stream: 0 });
+});
+
+test("focused C# observations preserve complete unit spans, body ownership, runtime anchors, exclusions, comments, guards, and preprocessor branches", async () => {
+  const adapter = createTreeSitterAdapter(adapterAssets, { loadBytes: bytesFromFileUrl });
+  const byId = new Map(fixture.cases.map((entry) => [entry.id, entry]));
+  const project = async (id) => {
+    const entry = byId.get(id); const stream = await adapter.project("csharp", entry.source);
+    return { source: entry.source, stream, observations: [...stream.observations] };
+  };
+  const utf8Slice = (source, observation) => Buffer.from(source, "utf8").subarray(observation.startByte, observation.endByte).toString("utf8");
+
+  const forms = await project("all-explicit-and-zero-unit-forms");
+  const units = forms.observations.filter((observation) => observation.kind === "explicit-unit");
+  assert.deepEqual(units.map((unit) => unit.form), ["getter", "getter", "getter", "setter", "setter", "setter", "setter", "constructor", "method", "method", "function", "arrow", "function", "method", "method"]);
+  assert.deepEqual(units.map((unit) => unit.ownedRegions.map((region) => utf8Slice(forms.source, region))), [
+    ["=> 1"], ["=> i"], ["{ return 1; }"], ["=> Use(value)"], ["{ Use(value); }"], ["=> Use(value)"], ["{ Use(value); }"],
+    [": base()", "{}"], ["{}"], ["{ void Local() {} Func<int,int> a = x => x; var b = delegate(int y) { return y; }; }"], ["{}"], ["x"], ["{ return y; }"], ["=> a"], ["=> 1"],
+  ]);
+  assert.equal(forms.observations.filter((observation) => observation.kind === "value-anchor").length, 0, "explicit bodies must not create top-level anchors");
+  forms.stream.release();
+
+  const initialization = await project("initialization-and-nested-ownership");
+  assert.deepEqual(initialization.observations.filter((observation) => observation.kind === "value-anchor").map((observation) => utf8Slice(initialization.source, observation)), [
+    "Use(0);", "(p > 0 ? p : 0)", "field = p ?? 0", "E = Handler", "F()", "nested = x => x > 0 ? x : 0",
+  ]);
+  const constructor = initialization.observations.find((observation) => observation.kind === "explicit-unit" && observation.form === "constructor");
+  assert.deepEqual(constructor.ownedRegions.map((region) => utf8Slice(initialization.source, region)), [": base(F() ?? G())", "{}"]);
+  initialization.stream.release();
+
+  for (const id of ["excluded-syntax-in-callables", "excluded-syntax-in-initialization"]) {
+    const excluded = await project(id);
+    assert.equal(excluded.observations.filter((observation) => observation.kind === "decision").length, 0, id);
+    assert.equal(excluded.observations.filter((observation) => observation.kind === "explicit-unit").length, byId.get(id).expected.U - (id.endsWith("initialization") ? 1 : 0), id);
+    excluded.stream.release();
+  }
+
+  const branches = await project("switch-guards-filters-and-defaults");
+  assert.deepEqual(branches.observations.filter((observation) => observation.kind === "decision").map((observation) => observation.decisionKind), ["case", "if", "case", "case", "catch", "if", "case", "if", "case", "if"]);
+  branches.stream.release();
+  const preprocessor = await project("preprocessor-condition-and-branch-ownership");
+  assert.deepEqual(preprocessor.observations.filter((observation) => observation.kind === "decision").map((observation) => observation.decisionKind), ["ternary", "ternary", "if", "loop"]);
+  assert.equal(preprocessor.observations.filter((observation) => observation.kind === "value-anchor").length, 2, "both top-level branches are traversed");
+  preprocessor.stream.release();
+
+  const unicode = await project("unicode-whitespace-lines");
+  assert.deepEqual(unicode.observations.filter((observation) => observation.kind === "lexical-exclusion").map((observation) => utf8Slice(unicode.source, observation)), ["// excluded after supplementary scalar"]);
+  unicode.stream.release();
+});
+
+test("a production adapter rejects dormant C# projection before runtime initialization", async () => {
+  let touched = false;
+  const production = createTreeSitterAdapter({ ...adapterAssets, grammarCSharp: undefined }, {
+    async importRuntime() { touched = true; throw new Error("must not initialize"); },
+    async loadBytes() { touched = true; throw new Error("must not load"); },
+  });
+  await assert.rejects(() => production.project("csharp", "class C {}"), /C# parser asset is not configured/u);
+  assert.equal(touched, false);
+});
+
+test("a projection-time failure releases both cursors, tree, and parser without returning a stream", async () => {
+  const events = [];
+  let runtimeOptions;
+  let parses = 0;
+  const rootNode = {
+    hasError: false,
+    walk() {
+      return {
+        nodeType: "comment", nodeIsNamed: true, nodeIsMissing: false, currentFieldName: null, startIndex: 0, endIndex: 2,
+        gotoFirstChild: () => false, gotoNextSibling: () => false, gotoParent: () => false, delete() {},
+      };
+    },
+  };
+  class FakeParser {
+    static async init(options) { runtimeOptions = options; }
+    setLanguage() {}
+    parse() { parses += 1; return { rootNode, delete() {} }; }
+    delete() {}
+  }
+  const adapter = createTreeSitterAdapter({ runtimeJavaScript: "runtime.js", runtimeWasm: "runtime.wasm", grammarJavaScript: "javascript.wasm", grammarTypeScript: "typescript.wasm", grammarTsx: "tsx.wasm", grammarCSharp: "csharp.wasm" }, {
+    importRuntime: async () => ({ Parser: FakeParser, Language: { load: async () => ({}) } }),
+    loadBytes: async () => new Uint8Array(),
+    observeResource: (event) => events.push(event),
+  });
+  await assert.rejects(() => adapter.project("csharp", "x"), /Invalid parser endpoint/u);
+  assert.equal(parses, 1);
+  assert.equal(typeof runtimeOptions.print, "function");
+  assert.equal(typeof runtimeOptions.printErr, "function");
+  assert.equal(runtimeOptions.print("suppressed"), undefined);
+  assert.equal(runtimeOptions.printErr("suppressed"), undefined);
+  assert.deepEqual(events, ["parser-created", "tree-created", "cursor-created", "cursor-deleted", "cursor-created", "cursor-deleted", "tree-deleted", "parser-deleted"]);
 });
 
 test("valid empty, comment-only, and declaration-only forms have no executable units or complexity", () => {
@@ -226,7 +385,9 @@ test("malformed, missing, and recovery trees fail closed through each candidate 
   for (const id of ["malformed-error", "truncated-missing", "recovery-error"]) assert.equal(byId.get(id).valid, false, id);
 });
 
-test("both exact-2-MiB candidate modules validate iteratively without a timing threshold", async (t) => {
+test("both exact-2-MiB candidate modules validate, project, and derive exact metrics without a timing threshold", async (t) => {
+  const events = [];
+  const adapter = createTreeSitterAdapter(adapterAssets, { loadBytes: bytesFromFileUrl, observeResource: (event) => events.push(event) });
   for (const kind of ["dense", "deep"]) {
     const source = createExactStressModule(kind);
     assert.equal(Buffer.byteLength(source, "utf8"), 2_097_152, kind);
@@ -244,30 +405,32 @@ test("both exact-2-MiB candidate modules validate iteratively without a timing t
       assert.equal(expression.slice(literal + 1, terminator).length, 100_000);
       assert(/^\)+$/u.test(expression.slice(literal + 1, terminator)));
     }
-    const events = [];
+    const before = events.length;
     const started = performance.now();
-    const result = await createCSharpQualifier(initialized, { observeResource: (event) => events.push(event) }).qualify(source, { analyze: false });
-    t.diagnostic(`${kind} candidate validation elapsed ${Math.round(performance.now() - started)} ms`);
-    assert.equal(result.valid, true, kind);
-    assert(result.visitedNodes > (kind === "dense" ? 1_000_000 : 200_000), kind);
-    assertResourceClosure(events, false);
+    const stream = await adapter.project("csharp", source);
+    const base = deriveBaseMetricAnalysis("fixture.js", source, stream.observations);
+    const finalized = finalizeModuleComplexity(base);
+    t.diagnostic(`${kind} adapter validation, projection, and metrics elapsed ${Math.round(performance.now() - started)} ms`);
+    assert.deepEqual(finalized.fact, { canonicalPath: "fixture.js", S: 1, U: 1, M: 1 }, kind);
+    stream.release();
+    assert.deepEqual(events.slice(before), ["parser-created", "tree-created", "cursor-created", "cursor-deleted", "cursor-created", "cursor-deleted", "observation-stream-created", "tree-deleted", "parser-deleted", "observation-stream-released"], kind);
   }
 });
 
-test("qualification leaves C# admission, production grammar selection, assets, dependencies, and package entry unchanged", async () => {
+test("projection adds only dormant C# family selection while admission, production assets, dependencies, and package entry stay unchanged", async () => {
   const { SUPPORTED_SUFFIXES, hasSupportedSuffix } = await import("../src/domain/source-admission.ts");
   const { selectGrammarFamily } = await import("../src/domain/base-metrics.ts");
   assert.deepEqual(SUPPORTED_SUFFIXES, [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]);
   for (const pathValue of ["a.cs", "A.CS", "a.Cs", "a.cS"]) {
     assert.equal(hasSupportedSuffix(pathValue), false, pathValue);
-    assert.throws(() => selectGrammarFamily(pathValue), /Unsupported parser suffix/u, pathValue);
+    assert.equal(selectGrammarFamily(pathValue), "csharp", pathValue);
   }
   const pins = {
     "package.json": "384787527c06e0f003b76268caa5de48a90d0200601ff482e4660b7240e02128",
     "package-lock.json": "c0fc6511487ff8383c6c7730b8aa84775f94d8b0e515ab033c4bd3e1567912e4",
     "index.html": "a81a4853261bea9de8338ccde715eebad1cf0444c661cf788330151a1ff9b030",
     "src/domain/source-admission.ts": "b8b2463a8fd79fffe40e21bc7c150fcfd14cf8a699900a824f88d35e4d4bfa89",
-    "src/domain/base-metrics.ts": "e48de706601e945579b660c0f4c970714af48e361db81db432ba2df46c02d3c5",
+    "src/domain/base-metrics.ts": "72503f7b527a5fc443edf5986ee447f365827ecccad7eeacabcaaf3684d9286a",
     "src/edge/tree-sitter-assets.ts": "da61189043bcc6944199a06c5500260c901a600d2e0c9d00c95b37d37c8f33e5",
   };
   for (const [relativePath, expected] of Object.entries(pins)) assert.equal(sha256(await readFile(path.join(projectRoot, ...relativePath.split("/")))), expected, relativePath);
