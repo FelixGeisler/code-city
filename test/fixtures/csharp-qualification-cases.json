@@ -2,6 +2,72 @@
   "schemaVersion": 1,
   "cases": [
     {
+      "id": "empty-file-zero-units",
+      "source": "",
+      "coverage": [
+        "empty-file-zero-units"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 1,
+        "S": 0,
+        "U": 0,
+        "M": 0,
+        "units": [],
+        "decisions": [],
+        "shapeDigest": "41e198da231af7cd6489d8d70d972f69b1612b90bb918925595a6b1b04b4db6b"
+      }
+    },
+    {
+      "id": "comment-only-zero-units",
+      "source": "// line comment\n/* block\n   comment */\n",
+      "coverage": [
+        "comment-only-zero-units"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 3,
+        "S": 0,
+        "U": 0,
+        "M": 0,
+        "units": [],
+        "decisions": [],
+        "shapeDigest": "06fbb6dc23d3c78a12086796e16dd52a9c1341b1e673250136e0512eb07b0659"
+      }
+    },
+    {
+      "id": "declaration-only-zero-units",
+      "source": "[A(true ? 1 : 0)]\nabstract class Declarations(int p = true ? 1 : 0) {\n  const int C = true ? 1 : 0;\n  enum E { A = 1 }\n  public abstract void Abstract();\n  [DllImport(\"x\")] public static extern void External();\n  int Auto { get; set; }\n}\ninterface I { void Signature(); }\n",
+      "coverage": [
+        "declaration-only-zero-units"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 127,
+        "S": 9,
+        "U": 0,
+        "M": 0,
+        "units": [],
+        "decisions": [],
+        "shapeDigest": "ad398d6a893715bee60f440d5c280463b56b90f1527dd1293323889a624cb717"
+      }
+    },
+    {
       "id": "lexical-directives-and-branches",
       "source": "#define A\n#if A\nvar branchA = @\"// source\"; // trailing\n#else\nvar branchB = \"\"\"/* source */\"\"\";\n#endif\nclass Lexical {\n  /* block\n     only */\n  [Obsolete(\"/* metadata */\")]\n  string M() => $\"// {1}\";\n}\n",
       "coverage": [

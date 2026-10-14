@@ -25,6 +25,9 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const occurrences = (source, token) => source.split(token).length - 1;
 
 const REQUIRED_CASES = [
+  "empty-file-zero-units",
+  "comment-only-zero-units",
+  "declaration-only-zero-units",
   "lexical-directives-and-branches",
   "all-explicit-and-zero-unit-forms",
   "initialization-and-nested-ownership",
@@ -39,7 +42,7 @@ const REQUIRED_CASES = [
   "recovery-error",
 ];
 const REQUIRED_COVERAGE = [
-  "abstract-zero", "accessor-add", "accessor-get", "accessor-init", "accessor-remove", "accessor-set", "anonymous-method", "attribute-zero", "auto-accessor-zero", "bitwise-zero", "bodyless-zero", "calls-zero", "case-label", "catch", "catch-filter", "comments", "comparisons-zero", "conditional", "conditional-access-zero", "const-zero", "constructor", "constructor-base", "conversion", "default-statement-zero", "destructor", "directives-source", "else-zero", "enum-zero", "error-signal", "expression-indexer", "expression-property", "extern-zero", "finally-zero", "guarded-discard", "if", "interpolated-string", "lambda", "local-function", "logical-and", "logical-or", "loop-do", "loop-for", "loop-foreach", "loop-foreach-deconstruction", "loop-foreach-ordinary", "loop-foreach-ref", "loop-while", "malformed", "method", "missing-signal", "modern-collection-expression", "modern-list-pattern", "modern-raw-string", "modern-record", "modern-required", "nested-callable", "nullish", "nullish-assign", "operator", "parameter-default-zero", "patterns-zero", "preprocessor-all-branches", "primary-base", "primary-header-zero", "query-zero", "raw-string", "recovery", "regular-string", "runtime-event-initializer", "runtime-field-initializer", "runtime-property-initializer", "signature-zero", "switch-expression-arm", "switch-expression-default-zero", "switch-guard", "switch-zero", "top-level", "truncated", "try-zero", "unicode-white-space", "verbatim-string",
+  "abstract-zero", "accessor-add", "accessor-get", "accessor-init", "accessor-remove", "accessor-set", "anonymous-method", "attribute-zero", "auto-accessor-zero", "bitwise-zero", "bodyless-zero", "calls-zero", "case-label", "catch", "catch-filter", "comments", "comparisons-zero", "conditional", "conditional-access-zero", "const-zero", "constructor", "constructor-base", "conversion", "default-statement-zero", "destructor", "directives-source", "else-zero", "enum-zero", "error-signal", "expression-indexer", "expression-property", "extern-zero", "finally-zero", "guarded-discard", "if", "interpolated-string", "lambda", "local-function", "logical-and", "logical-or", "loop-do", "loop-for", "loop-foreach", "loop-foreach-deconstruction", "loop-foreach-ordinary", "loop-foreach-ref", "loop-while", "malformed", "method", "missing-signal", "modern-collection-expression", "modern-list-pattern", "modern-raw-string", "modern-record", "modern-required", "nested-callable", "nullish", "nullish-assign", "operator", "parameter-default-zero", "patterns-zero", "preprocessor-all-branches", "primary-base", "primary-header-zero", "query-zero", "raw-string", "recovery", "regular-string", "runtime-event-initializer", "runtime-field-initializer", "runtime-property-initializer", "signature-zero", "switch-expression-arm", "switch-expression-default-zero", "switch-guard", "switch-zero", "top-level", "truncated", "try-zero", "unicode-white-space", "verbatim-string", "empty-file-zero-units", "comment-only-zero-units", "declaration-only-zero-units",
 ];
 const FIXTURE_NON_ASCII_WHITE_SPACE = ["\u00a0", "\u3000"];
 
@@ -104,6 +107,24 @@ test("the closed C# fixture table pins validity, concrete shape, source lines, u
       assert.equal(entry.expected.M, entry.expected.units.length === 0 ? 0 : Math.max(...entry.expected.units.map((unit) => unit.complexity)), entry.id);
       assert(entry.expected.decisions.every((decision) => entry.expected.units.some((unit) => unit.id === decision.owner)), entry.id);
     }
+  }
+});
+
+test("valid empty, comment-only, and declaration-only forms have no executable units or complexity", () => {
+  const expectedById = new Map(fixture.cases.map((entry) => [entry.id, entry.expected]));
+  const sourceLinesById = {
+    "empty-file-zero-units": 0,
+    "comment-only-zero-units": 0,
+    "declaration-only-zero-units": 9,
+  };
+  for (const [id, S] of Object.entries(sourceLinesById)) {
+    const expected = expectedById.get(id);
+    assert.equal(expected.valid, true, id);
+    assert.equal(expected.S, S, id);
+    assert.equal(expected.U, 0, id);
+    assert.equal(expected.M, 0, id);
+    assert.deepEqual(expected.units, [], id);
+    assert.deepEqual(expected.decisions, [], id);
   }
 });
 
