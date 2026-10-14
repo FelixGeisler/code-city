@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "status": "qualified-not-admitted",
+  "package": {
+    "name": "@vscode/tree-sitter-wasm",
+    "version": "0.3.1",
+    "resolved": "https://registry.npmjs.org/@vscode/tree-sitter-wasm/-/tree-sitter-wasm-0.3.1.tgz",
+    "integrity": "sha512-RJFoomET6FajjG511fmQxeBQfU6M24a0aFZPqpid+ttIxanWf1VGytBG0UmsGjt07qmIPJS8U31D+aecuCucsQ==",
+    "tagCommit": "78c97c860ddd965b9617f0e30962ad1da08c4c91",
+    "repository": "https://github.com/microsoft/vscode-tree-sitter-wasm",
+    "license": {
+      "kind": "MIT",
+      "path": "node_modules/@vscode/tree-sitter-wasm/LICENSE",
+      "bytes": 1141,
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    }
+  },
+  "sourceGrammar": {
+    "repository": "https://github.com/tree-sitter/tree-sitter-c-sharp",
+    "commit": "485f0bae0274ac9114797fc10db6f7034e4086e3",
+    "pinnedByPackageTagCommit": "78c97c860ddd965b9617f0e30962ad1da08c4c91",
+    "buildDefinition": "https://github.com/microsoft/vscode-tree-sitter-wasm/blob/78c97c860ddd965b9617f0e30962ad1da08c4c91/build/main.ts#L19-L24",
+    "license": {
+      "kind": "MIT",
+      "path": "test/fixtures/csharp-source-license.txt",
+      "bytes": 1133,
+      "sha256": "778fb7d63b8c1844da315648c02f325c4713a6f4a5d19644fd413421422776d3",
+      "productionNoticeRequiredOnAdmission": true
+    }
+  },
+  "runtime": {
+    "package": "web-tree-sitter",
+    "version": "0.27.0",
+    "minimumAbi": 13,
+    "maximumAbi": 15
+  },
+  "asset": {
+    "path": "node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-c-sharp.wasm",
+    "bytes": 5103332,
+    "sha256": "d12d85996c25957b4c1b71e26db2d7cc8a294997b60642e9c2a3b031b2c66dd3",
+    "abi": 15
+  },
+  "dylink": {
+    "memorySize": 5013132,
+    "memoryAlign": 4,
+    "tableSize": 7,
+    "tableAlign": 0,
+    "neededLibraries": [],
+    "subsectionTypes": [
+      1
+    ]
+  },
+  "inventory": {
+    "path": "test/fixtures/csharp-wasm-inventory.tsv",
+    "bytes": 874,
+    "rows": 19,
+    "sha256": "ec51af39771906e32e2bb98c718a9564f30f8eb843be29970add80e74300f3fa"
+  },
+  "renewalRule": "Any package, asset, runtime, source commit, inventory, ABI, or licence change requires renewed ADR 0007 qualification."
+}
