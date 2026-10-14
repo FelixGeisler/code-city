@@ -114,12 +114,27 @@ table. `tools/qualify-csharp-grammar.mjs` and
 `test/csharp-qualification.test.mjs` independently verify candidate identity,
 direct runtime loading, complete iterative validation, concrete shape digests,
 metric ownership, malformed-tree signals, and deterministic resource release.
-They also generate and validate two 2,097,152-byte modules: one method body
-with exactly 1,000,000 empty statements and one expression-bodied method with
-exactly 100,000 nested parenthesis pairs. A trailing line comment is the only
-padding. Both parse directly with the candidate. No elapsed-time threshold is
-part of the evidence.
+Issue https://github.com/FelixGeisler/code-city/issues/602[#602] adds direct
+adapter projection evidence against that unchanged table. Every valid case is
+projected through the packed, source-free observation stream and Metrics with
+exact `S`, `U`, per-owner complexity, and `M`; every invalid case returns no
+stream. Focused assertions cover complete unit spans, body-only and constructor
+initializer ownership, runtime anchors, comments and Unicode byte endpoints,
+excluded nesting, switch guards and defaults, catch filters, and all
+preprocessor branches. Sequential evidence fixes one language load, one parse,
+non-overlapping validation and projection cursors, bounded live resources, and
+exactly-once idempotent stream release.
 
-The C# asset remains outside ADR 0007's production-selected assets. Any change
-to the package, asset, runtime, source commit, inventory, ABI, or licence
-requires renewed qualification before C# admission can proceed.
+The evidence also generates and processes two 2,097,152-byte modules: one
+method body with exactly 1,000,000 empty statements and one expression-bodied
+method with exactly 100,000 nested parenthesis pairs. A trailing line comment
+is the only padding. Both complete direct validation, projection, and metric
+derivation with `S=1`, `U=1`, and `M=1`. No elapsed-time threshold is part of
+the evidence.
+
+The C# asset remains outside ADR 0007's production-selected assets. The
+adapter's optional `grammarCSharp` input is supplied only by direct tests;
+`CANONICAL_PARSER_ASSET_URLS` supplies no C# URL, production packaging remains
+at four WASMs, and `.cs` remains outside admission. Any change to the package,
+asset, runtime, source commit, inventory, ABI, or licence requires renewed
+qualification before C# admission can proceed.
