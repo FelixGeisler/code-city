@@ -19,7 +19,7 @@ by unsigned UTF-8 bytes.
 
 |Suffix
 |Compare the final suffix ASCII case-insensitively with `.js`, `.jsx`, `.mjs`,
-`.cjs`, `.ts`, `.tsx`, `.mts`, or `.cts`.
+`.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, or `.cs`.
 
 |Kind
 |Admit regular files. Skip directories, links, submodules and their descendants,
@@ -70,20 +70,21 @@ published Code City envelope.
 
 |`.tsx`
 |TSX
+
+|`.cs`
+|C#
 |===
 
 Parser errors, missing nodes, or recovery fail the complete attempt. Type
 checking, name resolution, linting, and dependency analysis are not performed.
 
-== Planned C# contract (not admitted)
+== C# metric contract
 
-C# is planned but is not a supported source kind. `.cs` and ASCII-case variants
-remain unsupported, and no C# grammar is present in the production package.
-The existing packaged grammar candidate has been qualified only as recorded by
+C# and ASCII-case `.cs` variants are supported by the production-selected,
+pinned grammar recorded by
 xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
-It defines accepted syntax without claiming a C# language version.
-
-When a later accepted change admits C#, its metrics use this fixed contract:
+The selection defines accepted syntax without claiming a C# language version.
+C# metrics use this fixed contract:
 
 * `S` counts each physical line containing non-whitespace, non-comment C#
   source. Declarations, attributes, metadata, and every preprocessor directive
@@ -117,7 +118,7 @@ When a later accepted change admits C#, its metrics use this fixed contract:
   conditional access add no point themselves. `M` is the maximum unit
   complexity, or zero when there is no unit.
 
-After admission, any C# parser error, missing node, or recovery fails the whole
+Any C# parser error, missing node, or recovery fails the whole
 attempt as `Metric processing failed` / `M1-MET-1`, without a diagnostic,
 partial result, retry, fallback, or source execution.
 

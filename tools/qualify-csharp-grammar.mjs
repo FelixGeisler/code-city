@@ -15,7 +15,7 @@ const EXPECTED_INVENTORY = Object.freeze({ bytes: 874, rows: 19, sha256: "ec51af
 
 export const CSHARP_CANDIDATE = Object.freeze({
   schemaVersion: 1,
-  status: "qualified-not-admitted",
+  status: "qualified-and-selected",
   package: Object.freeze({
     name: "@vscode/tree-sitter-wasm",
     version: "0.3.1",

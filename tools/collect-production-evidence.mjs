@@ -49,7 +49,7 @@ const SAFE_HEADERS = new Set([
   "accept", "access-control-allow-origin", "cache-control", "content-type", "origin", "pragma",
   "x-github-api-version", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset",
 ]);
-const SOURCE_SUFFIXES = [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"];
+const SOURCE_SUFFIXES = [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".cs"];
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const QUALIFICATION_IDENTITIES = new WeakMap();
 const CHECKER_DIAGNOSTICS = Object.freeze({

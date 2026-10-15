@@ -150,11 +150,11 @@ test("STOP aborts current work, releases it, stops downstream publication, and d
   assert.equal(order.filter((entry) => entry === "ATTEMPT_DRAINED").length, 1);
 });
 
-test("all five initialization failures traverse selected-revision worker ownership and drain atomically", async () => {
+test("all six initialization failures traverse selected-revision worker ownership and drain atomically", async () => {
   const rows = [
-    ["runtime-import", 0], ["Parser.init/runtime-WASM", 0], ["JS grammar load", 1], ["TS grammar load", 2], ["TSX grammar load", 3],
+    ["runtime-import", 0], ["Parser.init/runtime-WASM", 0], ["JS grammar load", 1], ["TS grammar load", 2], ["TSX grammar load", 3], ["C# grammar load", 4],
   ];
-  const initializationOrder = ["runtime-import", "Parser.init/runtime-WASM", "JS grammar load", "TS grammar load", "TSX grammar load"];
+  const initializationOrder = ["runtime-import", "Parser.init/runtime-WASM", "JS grammar load", "TS grammar load", "TSX grammar load", "C# grammar load"];
   for (const [injected, failingLoad] of rows) {
     const order = [];
     const resourceEvents = [];
@@ -167,7 +167,7 @@ test("all five initialization failures traverse selected-revision worker ownersh
       parse() { projects += 1; throw new Error("no module may start"); }
       delete() {}
     }
-    const parser = createTreeSitterAdapter({ runtimeJavaScript: "runtime.js", runtimeWasm: "runtime.wasm", grammarJavaScript: "javascript.wasm", grammarTypeScript: "typescript.wasm", grammarTsx: "tsx.wasm" }, {
+    const parser = createTreeSitterAdapter({ runtimeJavaScript: "runtime.js", runtimeWasm: "runtime.wasm", grammarJavaScript: "javascript.wasm", grammarTypeScript: "typescript.wasm", grammarTsx: "tsx.wasm", grammarCSharp: "csharp.wasm" }, {
       async importRuntime() {
         order.push("runtime-import");
         if (injected === "runtime-import") throw new Error(injected);
@@ -182,15 +182,16 @@ test("all five initialization failures traverse selected-revision worker ownersh
         { path: "a.js", mode: "100644", type: "blob", sha: SHA },
         { path: "b.ts", mode: "100644", type: "blob", sha: SHA },
         { path: "c.tsx", mode: "100644", type: "blob", sha: SHA },
+        { path: "d.cs", mode: "100644", type: "blob", sha: SHA },
       ] }; },
       async readSource(_repository, _revision, candidate) { order.push(`retrieved:${candidate.canonicalPath}`); return { kind: "source", decodedSource: "" }; },
     }, (message) => { order.push(message.type); ownershipAtPublication.push([message.type, pipeline.ownership()]); }, undefined, parser, (event) => order.push(event));
     pipeline.start(REPOSITORY, 8);
     await tick(); await tick();
-    assert.deepEqual(order.slice(0, 5), ["REVISION_SELECTED", "retrieved:a.js", "retrieved:b.ts", "retrieved:c.tsx", "PROVIDER_DRAINED_STATIC_ENTERED"], injected);
-    assert.deepEqual(order.slice(5, 5 + initializationOrder.indexOf(injected) + 1), initializationOrder.slice(0, initializationOrder.indexOf(injected) + 1), injected);
-    assert.deepEqual(order.slice(-5), ["source-released", "source-released", "source-released", "FAILURE", "ATTEMPT_DRAINED"], injected);
-    assert.equal(order.filter((entry) => entry === "source-released").length, 3, injected);
+    assert.deepEqual(order.slice(0, 6), ["REVISION_SELECTED", "retrieved:a.js", "retrieved:b.ts", "retrieved:c.tsx", "retrieved:d.cs", "PROVIDER_DRAINED_STATIC_ENTERED"], injected);
+    assert.deepEqual(order.slice(6, 6 + initializationOrder.indexOf(injected) + 1), initializationOrder.slice(0, initializationOrder.indexOf(injected) + 1), injected);
+    assert.deepEqual(order.slice(-6), ["source-released", "source-released", "source-released", "source-released", "FAILURE", "ATTEMPT_DRAINED"], injected);
+    assert.equal(order.filter((entry) => entry === "source-released").length, 4, injected);
     assert.equal(order.includes("source-acquired"), false, injected);
     assert.equal(projects, 0, injected);
     assert.deepEqual(resourceEvents, [], injected);

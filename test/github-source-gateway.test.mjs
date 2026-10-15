@@ -253,7 +253,7 @@ test("raw status/final URL, digest mismatch/unavailability, and strict UTF-8 fai
   const invalid = Uint8Array.from([0xff]);
   const invalidId = await blobId(invalid);
   const invalidUtf8 = createGithubSourceGateway(async (url) => streamResponse(url, invalid), (algorithm, payload) => webcrypto.subtle.digest(algorithm, payload));
-  assert.deepEqual(await invalidUtf8.readSource(REPOSITORY, SHA40, { canonicalPath: "a.ts", rawPath: "a.ts", expectedBlobId: invalidId }, new AbortController().signal), { kind: "invalid-content" });
+  assert.deepEqual(await invalidUtf8.readSource(REPOSITORY, SHA40, { canonicalPath: "a.CS", rawPath: "a.CS", expectedBlobId: invalidId }, new AbortController().signal), { kind: "invalid-content" });
 });
 
 test("aborting an active raw read cancels its acquired reader and releases its lock exactly once", async () => {

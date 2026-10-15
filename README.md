@@ -1,6 +1,8 @@
 # Code City
 
-Code City turns a public GitHub repository into a deterministic city. Open the [hosted application](https://felixgeisler.github.io/code-city/), enter a public repository URL such as `https://github.com/FelixGeisler/code-city`, and select **Build city**. The protected default branch is `main`.
+Code City turns the supported JavaScript, TypeScript, and C# modules in a public GitHub repository into a deterministic city. Open the [hosted application](https://felixgeisler.github.io/code-city/), enter a public repository URL such as `https://github.com/FelixGeisler/code-city`, and submit it. The protected default branch is `main`.
+
+Supported languages: JavaScript, TypeScript, and C#.
 
 ## Develop
 

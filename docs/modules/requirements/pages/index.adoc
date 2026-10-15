@@ -13,7 +13,7 @@
 |The current head commit of the repository's default branch
 
 |Files
-|`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, and `.cts`
+|`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, and `.cs` (ASCII case-insensitive)
 
 |Result
 |One deterministic city for the selected commit, with navigation, selection,

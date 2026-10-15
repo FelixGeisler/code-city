@@ -10,8 +10,9 @@ image::runtime.svg[Successful aligned city validation, staging, commit, and inte
   and retrieve one complete admitted source set.
 . Release every GitHub request, reader, provider object, raw buffer, and hash
   workspace.
-. Parse and measure one module at a time, then build one aligned
-  `{geometry,inspection}` city.
+. Initialize the parser once by eagerly loading JavaScript, TypeScript, TSX,
+  and C# in that order; parse and measure one module at a time; then build one
+  aligned `{geometry,inspection}` city.
 . Return one generation-tagged, source-free success.
 . The controller's sole validator creates non-aliasing geometry, inspection, and
   immutable numeric-presentation snapshots--ordered plate cells,
@@ -151,8 +152,8 @@ and the accumulating normalised module set. Parser and WebGL resources do not
 exist.
 
 |Static
-|No provider resource remains. Fixed parser runtime and loaded grammar modules
-may remain for the worker lifetime; one source module, parser, tree, cursor, and
+|No provider resource remains. The fixed parser runtime and four eagerly loaded
+grammar modules may remain for the worker lifetime; one source module, parser, tree, cursor, and
 observation stream is active at a time.
 
 |Handoff
