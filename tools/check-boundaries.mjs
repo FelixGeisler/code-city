@@ -27,6 +27,7 @@ const PARSER_ASSET_IMPORTS = new Set([
   "web-tree-sitter?url",
   "web-tree-sitter/web-tree-sitter.wasm?url",
   "@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm?url",
+  "@vscode/tree-sitter-wasm/wasm/tree-sitter-c-sharp.wasm?url",
   "../../vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm?url",
   "../../vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm?url",
 ]);
@@ -522,7 +523,7 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
         if (query.type === "parser-asset") {
           if (sourceClassification.relativePath !== "src/edge/tree-sitter-assets.ts"
             || !PARSER_ASSET_IMPORTS.has(reference.specifier)) {
-            violations.push({ ...common, reason: "?url is restricted to the five accepted parser asset imports" });
+            violations.push({ ...common, reason: "?url is restricted to the six accepted parser asset imports" });
           } else {
             evidence.push({ ...common, resolved: null, targetLayer: "outside-src" });
           }

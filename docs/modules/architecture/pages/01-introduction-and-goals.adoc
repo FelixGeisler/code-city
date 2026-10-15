@@ -1,7 +1,7 @@
 = 1. Introduction and Goals
 
 Code City turns one public GitHub repository into a deterministic 3D city of
-its JavaScript and TypeScript modules.
+its JavaScript, TypeScript, and C# modules.
 
 == Architecture goals
 

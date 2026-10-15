@@ -98,15 +98,15 @@ test("kind table admits only regular blobs and handles boundary descendants befo
   }
 });
 
-test("all eight final-segment suffixes are ASCII-case-insensitive, vendor paths are ordinary, and order is unsigned UTF-8", () => {
+test("all nine final-segment suffixes are ASCII-case-insensitive, vendor paths are ordinary, and order is unsigned UTF-8", () => {
   const paths = [
-    "z.JS", "vendor/a.JsX", "x.MJS", "x.CjS", "x.TS", "x.tSx", "x.MtS", "x.cTS",
+    "z.JS", "vendor/a.JsX", "x.MJS", "x.CjS", "x.TS", "x.tSx", "x.MtS", "x.cTS", "vendor/generated/x.Cs",
     "unsupported.ts.txt", "directory.js/file.txt", "\u00e9.ts", "z/child.ts",
   ];
   const result = prepareSourceInventory(paths.map((path) => regular(path)));
   assert.equal(result.kind, "candidates");
   assert.deepEqual(result.candidates.map((candidate) => candidate.canonicalPath), [
-    "vendor/a.JsX", "x.CjS", "x.MJS", "x.MtS", "x.TS", "x.cTS", "x.tSx", "z.JS", "z/child.ts", "\u00e9.ts",
+    "vendor/a.JsX", "vendor/generated/x.Cs", "x.CjS", "x.MJS", "x.MtS", "x.TS", "x.cTS", "x.tSx", "z.JS", "z/child.ts", "\u00e9.ts",
   ]);
 });
 
@@ -126,6 +126,30 @@ test("ADM-06 and ADM-07 are mutually exclusive across mixed skipped inventories"
   for (const entries of [[directory], [link], [directory, submodule], [link, submodule, submoduleChild], [link, linkChild]]) {
     assert.equal(failure(entries).code, "ADM-07");
   }
+});
+
+test("C# variants inherit canonical identity, kind boundaries, ordering, and content normalization unchanged", () => {
+  const entries = [
+    regular("z/file.cS", { mode: "100755" }), regular("A.CS"), regular("cafe\u0301.Cs"),
+    { path: "boundary.cs", mode: "120000", type: "blob" },
+    { path: "boundary.cs/ignored.CS", mode: "unknown", type: "unknown" },
+    { path: "tree.CS", mode: "040000", type: "tree" },
+    { path: "submodule.cs", mode: "160000", type: "commit" },
+  ];
+  const result = prepareSourceInventory(entries);
+  assert.equal(result.kind, "candidates");
+  assert.deepEqual(result.candidates.map(({ canonicalPath, rawPath }) => ({ canonicalPath, rawPath })), [
+    { canonicalPath: "A.CS", rawPath: "A.CS" },
+    { canonicalPath: "caf\u00e9.Cs", rawPath: "cafe\u0301.Cs" },
+    { canonicalPath: "z/file.cS", rawPath: "z/file.cS" },
+  ]);
+  const session = createSourceAdmissionSession();
+  assert.equal(session.add(result.candidates[0], "\uFEFFclass A {}\r\n// end\r"), undefined);
+  assert.deepEqual(session.complete(), [{ canonicalPath: "A.CS", normalizedSource: "class A {}\n// end\n" }]);
+  assert.equal(failure([regular("caf\u00e9.cs"), regular("cafe\u0301.cs")]).code, "M1-ADM-1");
+  assert.equal(failure([{ path: "only.Cs", mode: "120000", type: "blob" }]).code, "ADM-07");
+  assert.equal(failure([{ path: "only.cS", mode: "040000", type: "tree" }]).code, "ADM-07");
+  assert.equal(failure([{ path: "only.CS", mode: "160000", type: "commit" }]).code, "ADM-06");
 });
 
 test("content admission removes one BOM, normalizes newlines, permits empty text, and rejects NUL", () => {

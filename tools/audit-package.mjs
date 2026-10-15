@@ -57,7 +57,7 @@ function assertProductionShape(manifest) {
   invariant(html.length === 1 && html[0].path === "index.html", "Production package must contain only the index HTML document");
   invariant(css.length === 1, "Production package must contain exactly one stylesheet");
   invariant(javascript.length === 3, "Production package must contain main, worker, and external parser runtime JavaScript");
-  invariant(wasm.length === 4, "Production package must contain exactly one runtime and three grammar WASMs");
+  invariant(wasm.length === 5, "Production package must contain exactly one runtime and four grammar WASMs");
   invariant(manifest.files.length === html.length + css.length + javascript.length + wasm.length, "Production package contains a non-runtime artifact");
 
   const workerAssets = javascript.filter((record) => /(?:^|\/)processing-worker-[A-Za-z0-9_-]+\.js$/.test(record.path));
@@ -68,10 +68,11 @@ function assertProductionShape(manifest) {
     "5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240",
     "e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9",
     "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7",
+    "d12d85996c25957b4c1b71e26db2d7cc8a294997b60642e9c2a3b031b2c66dd3",
   ]);
   const selectedAssets = manifest.files.filter((record) => expectedAssetDigests.has(record.sha256));
-  invariant(selectedAssets.length === 5, "Packaged parser assets differ from the five accepted selected files");
-  invariant(new Set(selectedAssets.map((record) => record.sha256)).size === 5, "Packaged parser asset digest is duplicated");
+  invariant(selectedAssets.length === 6, "Packaged parser assets differ from the six accepted selected files");
+  invariant(new Set(selectedAssets.map((record) => record.sha256)).size === 6, "Packaged parser asset digest is duplicated");
   return workerAssets[0];
 }
 

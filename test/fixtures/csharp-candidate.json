@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "qualified-not-admitted",
+  "status": "qualified-and-selected",
   "package": {
     "name": "@vscode/tree-sitter-wasm",
     "version": "0.3.1",

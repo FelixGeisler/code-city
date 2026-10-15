@@ -179,16 +179,20 @@ test("every labelled notice mutation fails closed", async () => {
   const text = sourceIndex.toString("utf8");
   const firstStart = text.indexOf("  <!-- third-party-notice:source-grammar:");
   const secondStart = text.indexOf("  <!-- third-party-notice:source-grammar-dependency:");
+  const thirdStart = text.indexOf("  <!-- third-party-notice:source-grammar:tree-sitter-c-sharp@");
   const viewportStart = text.indexOf("  <meta name=\"viewport\"");
-  assert(firstStart >= 0 && secondStart > firstStart && viewportStart > secondStart);
+  assert(firstStart >= 0 && secondStart > firstStart && thirdStart > secondStart && viewportStart > thirdStart);
   const first = text.slice(firstStart, secondStart);
-  const second = text.slice(secondStart, viewportStart);
+  const second = text.slice(secondStart, thirdStart);
+  const third = text.slice(thirdStart, viewportStart);
   const mutations = [
     text.slice(0, firstStart) + text.slice(secondStart),
     text.replace("Permission is hereby granted", "Permission is hereby changed"),
     text.slice(0, secondStart) + first + text.slice(secondStart),
+    text.slice(0, thirdStart) + text.slice(viewportStart),
     text.replace("third-party-notice:source-grammar:tree-sitter-typescript@0.23.2", "third-party-notice:source-grammar:unknown"),
-    text.slice(0, firstStart) + second + first + text.slice(viewportStart),
+    text.replace("tree-sitter-c-sharp@485f0bae0274ac9114797fc10db6f7034e4086e3", "tree-sitter-c-sharp@unknown"),
+    text.slice(0, firstStart) + third + second + first + text.slice(viewportStart),
     text.replace("-->\n  <!-- third-party-notice:source-grammar-dependency:", "\nthird-party-notice:source-grammar-dependency:"),
     text.replaceAll("\n", "\r\n"),
   ];
@@ -204,6 +208,7 @@ test("the declared byte-fidelity attributes remain exact and effective", async (
     "test/fixtures/csharp-qualification-cases.json text eol=lf",
     "test/fixtures/csharp-source-license.txt text eol=lf",
     "test/fixtures/csharp-wasm-inventory.tsv text eol=lf",
+    "test/fixtures/csharp-admission-browser.json text eol=lf",
     "package.json text eol=lf",
     "package-lock.json text eol=lf",
     "src/domain/source-admission.ts text eol=lf",
@@ -229,6 +234,7 @@ test("the declared byte-fidelity attributes remain exact and effective", async (
     "test/fixtures/csharp-qualification-cases.json",
     "test/fixtures/csharp-source-license.txt",
     "test/fixtures/csharp-wasm-inventory.tsv",
+    "test/fixtures/csharp-admission-browser.json",
     "package.json",
     "package-lock.json",
     "src/domain/source-admission.ts",
@@ -345,6 +351,8 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert(inputTag);
   assert.match(formTag, /\snovalidate(?:\s|>)/i);
   assert.match(indexHtml, /<label\s+for="repository">GitHub repository URL<\/label>/);
+  assert.equal((indexHtml.match(/Supported languages: JavaScript, TypeScript, and C#\./g) ?? []).length, 1);
+  assert.match(indexHtml, /<p data-supported-languages>Supported languages: JavaScript, TypeScript, and C#\.<\/p>/);
   assert.match(inputTag, /\sid="repository"(?:\s|>)/i);
   assert.match(inputTag, /\sname="repository"(?:\s|>)/i);
   assert.match(inputTag, /\stype="text"(?:\s|>)/i);
@@ -730,7 +738,10 @@ test("commands preserve the canonical package audit sequence and CI separates re
 });
 
 test("both evidence observers require SUCCESS.city.geometry and contain no inspection access or retention surface", async () => {
-  const browserObserver = await readText("tools/check-browser-evidence.mjs");
+  const browserEvidence = await readText("tools/check-browser-evidence.mjs");
+  const browserStart = browserEvidence.indexOf("function pageObservationSource");
+  const browserEnd = browserEvidence.indexOf("async function checkProductionSuccessPath", browserStart);
+  const browserObserver = browserEvidence.slice(browserStart, browserEnd);
   const productionObserver = await readText("tools/collect-production-evidence.mjs");
   assert.equal((browserObserver.match(/message\.city\.geometry/gu) ?? []).length, 2);
   const productionStart = productionObserver.indexOf("export function createWorkerObserverSource");
@@ -759,6 +770,8 @@ test("the packaged-Chrome watchdog is the exact ten-minute whole-harness bound",
   assert.match(race, /document\.querySelector\('#result'\)\?\.textContent \|\| ''/);
   assert.match(race, /if \(text\) return JSON\.parse\(text\);/);
   assert.match(race, /Packaged browser evidence exceeded the ten-minute watchdog/);
+  assert.match(race, /exception-count=\$\{browserExceptions\.length\}; request-count=\$\{requestedUrls\.length\}/);
+  assert.doesNotMatch(race, /requestedUrls\.join/);
   assert.match(race, /watchdog = setTimeout\([\s\S]*, WATCHDOG_MS\);/);
 });
 

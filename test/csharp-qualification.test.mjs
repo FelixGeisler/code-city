@@ -24,6 +24,8 @@ const initialized = await verifyCSharpCandidate(projectRoot);
 const { createTreeSitterAdapter } = await import("../src/edge/tree-sitter-adapter.ts");
 const { deriveBaseMetricAnalysis } = await import("../src/domain/base-metrics.ts");
 const { finalizeModuleComplexity } = await import("../src/domain/complexity.ts");
+const { processAdmittedBaseMetrics } = await import("../src/application/base-metric-processing.ts");
+const { createWorkerAttemptPipeline } = await import("../src/application/worker-attempt.ts");
 const assetUrl = (relativePath) => pathToFileURL(path.join(projectRoot, ...relativePath.split("/"))).href;
 const adapterAssets = {
   runtimeJavaScript: assetUrl("node_modules/web-tree-sitter/web-tree-sitter.js"),
@@ -79,7 +81,6 @@ function assertResourceClosure(events, valid) {
 
 test("the existing packaged C# candidate has immutable provenance, licence, ABI, inventory, and direct-load evidence", async () => {
   assert.equal(Object.isFrozen(CSHARP_CANDIDATE), true);
-  assert.equal(CSHARP_CANDIDATE.status, "qualified-not-admitted");
   assert.equal(CSHARP_CANDIDATE.sourceGrammar.license.productionNoticeRequiredOnAdmission, true);
   assert.equal(initialized.language.abiVersion, 15);
   assert.deepEqual(CSHARP_CANDIDATE.dylink, {
@@ -291,7 +292,7 @@ test("focused C# observations have exact packed payloads, UTF-8 spans, and owned
   assert.equal(Buffer.from(unicodeSource.slice(0, 51), "utf8").byteLength, 53, "supplementary scalar shifts the exact UTF-8 comment offset");
 });
 
-test("a production adapter rejects dormant C# projection before runtime initialization", async () => {
+test("an adapter without the required C# URL rejects projection before runtime initialization", async () => {
   let touched = false;
   const production = createTreeSitterAdapter({ ...adapterAssets, grammarCSharp: undefined }, {
     async importRuntime() { touched = true; throw new Error("must not initialize"); },
@@ -446,6 +447,46 @@ test("malformed, missing, and recovery trees fail closed through each candidate 
   for (const id of ["malformed-error", "truncated-missing", "recovery-error"]) assert.equal(byId.get(id).valid, false, id);
 });
 
+test("qualified error, missing, and recovery fixtures map to one complete application and worker M1-MET-1 failure", async () => {
+  const invalidCases = fixture.cases.filter(({ id }) => ["malformed-error", "truncated-missing", "recovery-error"].includes(id));
+  assert.equal(invalidCases.length, 3);
+  for (const [index, entry] of invalidCases.entries()) {
+    const applicationEvents = [];
+    const application = await processAdmittedBaseMetrics(
+      [{ canonicalPath: `failure-${index}.CS`, normalizedSource: entry.source }],
+      createTreeSitterAdapter(adapterAssets, { loadBytes: bytesFromFileUrl }),
+      (event) => applicationEvents.push(event),
+    );
+    assert.deepEqual(application, { kind: "failure", category: "Metric processing failed", code: "M1-MET-1" }, entry.id);
+    assert.deepEqual(applicationEvents, ["source-acquired", "source-released"], entry.id);
+
+    const messages = [];
+    const selected = String(index + 1).repeat(40);
+    const parser = createTreeSitterAdapter(adapterAssets, { loadBytes: bytesFromFileUrl });
+    const pipeline = createWorkerAttemptPipeline(
+      async () => ({ kind: "revision", revision: selected }),
+      {
+        async loadInventory() { return { kind: "inventory", entries: [{ path: `failure-${index}.CS`, mode: "100644", type: "blob", sha: selected }] }; },
+        async readSource() { return { kind: "source", decodedSource: entry.source }; },
+      },
+      (message) => messages.push(message),
+      undefined,
+      parser,
+    );
+    pipeline.start({ owner: "owner", repository: "repo" }, index + 1);
+    const deadline = Date.now() + 10_000;
+    while (!messages.some(({ type }) => type === "ATTEMPT_DRAINED") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(messages, [
+      { type: "REVISION_SELECTED", generation: index + 1, revision: selected },
+      { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: index + 1 },
+      { type: "FAILURE", generation: index + 1, revision: selected, category: "Metric processing failed", code: "M1-MET-1" },
+      { type: "ATTEMPT_DRAINED", generation: index + 1 },
+    ], entry.id);
+    assert.doesNotMatch(JSON.stringify(messages), /failure-|normalizedSource|parser|diagnostic|source body/iu, entry.id);
+    assert.deepEqual(pipeline.ownership(), { phase: "idle", selectedRevisionRetained: false, admittedModuleCount: 0, presentationModelRetained: false, finalFactCount: 0, providerResource: false }, entry.id);
+  }
+});
+
 test("both exact-2-MiB candidate modules validate, project, and derive exact metrics without a timing threshold", async (t) => {
   const events = [];
   const adapter = createTreeSitterAdapter(adapterAssets, { loadBytes: bytesFromFileUrl, observeResource: (event) => events.push(event) });
@@ -478,23 +519,21 @@ test("both exact-2-MiB candidate modules validate, project, and derive exact met
   }
 });
 
-test("projection adds only dormant C# family selection while admission, production assets, dependencies, and package entry stay unchanged", async () => {
+test("production admission selects the exact qualified C# package asset without dependency changes", async () => {
   const { SUPPORTED_SUFFIXES, hasSupportedSuffix } = await import("../src/domain/source-admission.ts");
   const { selectGrammarFamily } = await import("../src/domain/base-metrics.ts");
-  assert.deepEqual(SUPPORTED_SUFFIXES, [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]);
+  assert.deepEqual(SUPPORTED_SUFFIXES, [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".cs"]);
   for (const pathValue of ["a.cs", "A.CS", "a.Cs", "a.cS"]) {
-    assert.equal(hasSupportedSuffix(pathValue), false, pathValue);
+    assert.equal(hasSupportedSuffix(pathValue), true, pathValue);
     assert.equal(selectGrammarFamily(pathValue), "csharp", pathValue);
   }
   const pins = {
     "package.json": "384787527c06e0f003b76268caa5de48a90d0200601ff482e4660b7240e02128",
     "package-lock.json": "c0fc6511487ff8383c6c7730b8aa84775f94d8b0e515ab033c4bd3e1567912e4",
-    "index.html": "a81a4853261bea9de8338ccde715eebad1cf0444c661cf788330151a1ff9b030",
-    "src/domain/source-admission.ts": "b8b2463a8fd79fffe40e21bc7c150fcfd14cf8a699900a824f88d35e4d4bfa89",
     "src/domain/base-metrics.ts": "72503f7b527a5fc443edf5986ee447f365827ecccad7eeacabcaaf3684d9286a",
-    "src/edge/tree-sitter-assets.ts": "da61189043bcc6944199a06c5500260c901a600d2e0c9d00c95b37d37c8f33e5",
   };
   for (const [relativePath, expected] of Object.entries(pins)) assert.equal(sha256(await readFile(path.join(projectRoot, ...relativePath.split("/")))), expected, relativePath);
   const productionAssets = await readFile(path.join(projectRoot, "src", "edge", "tree-sitter-assets.ts"), "utf8");
-  assert.doesNotMatch(productionAssets, /c-sharp|csharp/iu);
+  assert.match(productionAssets, /import grammarCSharp from "@vscode\/tree-sitter-wasm\/wasm\/tree-sitter-c-sharp\.wasm\?url";/u);
+  assert.match(productionAssets, /grammarTsx,\s*grammarCSharp,/u);
 });

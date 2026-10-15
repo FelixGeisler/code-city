@@ -1,5 +1,5 @@
 export const SUPPORTED_SUFFIXES = [
-  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".cs",
 ] as const;
 
 export const MAX_ADMITTED_MODULES = 4_000;

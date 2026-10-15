@@ -21,8 +21,11 @@ architecture decision.
 |TSX WASM |SHA-256
 `23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7`;
 1,446,550 bytes; ABI 14
-|Canonical WASM inventory |10,167 UTF-8 bytes; 219 rows
-|Inventory SHA-256 |`727c583b8823fdaa80204c3f3211c37ed4c6bd8b07a89afbf8bcc90bad28d931`
+|C# WASM |SHA-256
+`d12d85996c25957b4c1b71e26db2d7cc8a294997b60642e9c2a3b031b2c66dd3`;
+5,103,332 bytes; ABI 15
+|Canonical WASM inventory |11,041 UTF-8 bytes; 238 rows
+|Inventory SHA-256 |`50400a778a4ad9bfe8d1b09f4194d89ace4b9f63b3685b54e61001869afeffe0`
 |Production provenance |`vendor/tree-sitter-typescript/provenance.json`;
 SHA-256
 `885ad8788f6ba6f50c82702ebb61179408f4825ba3ec1cbbee494d43b50f3bc3`;
@@ -37,8 +40,11 @@ remain separate exact 1,080-byte MIT payloads with SHA-256 values
 and
 `2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1`.
 Each payload is also carried once in deployed `index.html` by its labelled,
-non-executable comment. The package therefore remains the same nine runtime
-files; it does not emit either notice as a standalone file.
+non-executable comment. The exact 1,133-byte C# source-grammar MIT payload,
+SHA-256 `778fb7d63b8c1844da315648c02f325c4713a6f4a5d19644fd413421422776d3`,
+follows those two comments under its pinned source-commit label. The package
+contains ten runtime files: one HTML file, one stylesheet, three JavaScript
+files, and five WASMs. No notice is emitted as a standalone file.
 
 The TypeScript and TSX node-type files remain pinned at, respectively,
 `c790a733fc756b54d4e54dceeb7d2d51e40d8b57136e70277753a75804cce3e3`
@@ -70,10 +76,11 @@ decision and qualification record. It records the human-approved narrow
 grammar amendment separately from the delegated Requirements Engineer choice
 to package the two notices in labelled HTML comments.
 
-== C# candidate qualification
+== C# qualification and production selection
 
-Issue https://github.com/FelixGeisler/code-city/issues/600[#600] qualifies an
-existing package asset without selecting it for production.
+Issue https://github.com/FelixGeisler/code-city/issues/600[#600] qualifies the
+existing package asset. Issue https://github.com/FelixGeisler/code-city/issues/604[#604]
+selects those exact qualified bytes for production.
 
 [cols="2,3",options="header"]
 |===
@@ -104,10 +111,10 @@ and neither shared nor 64-bit memory. The canonical inventory records every
 import, export, and memory descriptor; ordinary verification regenerates it
 from the exact candidate and compares all bytes.
 
-`test/fixtures/csharp-candidate.json` is the closed provenance and renewal
-record. `test/fixtures/csharp-source-license.txt` preserves the exact source
-licence. Production admission must carry that source-grammar MIT notice; this
-qualification does not alter the current production notice or package shape.
+`test/fixtures/csharp-candidate.json` is the closed qualification provenance
+and renewal record. `test/fixtures/csharp-source-license.txt` preserves the
+exact source licence and supplies the production entry comment without an
+additional runtime file.
 
 `test/fixtures/csharp-qualification-cases.json` is the closed syntax and metric
 table. `tools/qualify-csharp-grammar.mjs` and
@@ -115,8 +122,10 @@ table. `tools/qualify-csharp-grammar.mjs` and
 direct runtime loading, complete iterative validation, concrete shape digests,
 metric ownership, malformed-tree signals, and deterministic resource release.
 Issue https://github.com/FelixGeisler/code-city/issues/602[#602] adds direct
-adapter projection evidence against that unchanged table. Every valid case is
-projected through the packed, source-free observation stream and Metrics with
+adapter projection evidence against that unchanged table. Production admission
+retains it and adds packaged-browser mixed-language, malformed-tree, envelope,
+and exact dense/deep evidence. Every valid case is projected through the
+packed, source-free observation stream and Metrics with
 exact `S`, `U`, per-owner complexity, and `M`; every invalid case returns no
 stream. Focused assertions cover complete unit spans, body-only and constructor
 initializer ownership, runtime anchors, comments and Unicode byte endpoints,
@@ -132,9 +141,9 @@ is the only padding. Both complete direct validation, projection, and metric
 derivation with `S=1`, `U=1`, and `M=1`. No elapsed-time threshold is part of
 the evidence.
 
-The C# asset remains outside ADR 0007's production-selected assets. The
-adapter's optional `grammarCSharp` input is supplied only by direct tests;
-`CANONICAL_PARSER_ASSET_URLS` supplies no C# URL, production packaging remains
-at four WASMs, and `.cs` remains outside admission. Any change to the package,
-asset, runtime, source commit, inventory, ABI, or licence requires renewed
-qualification before C# admission can proceed.
+The C# block is appended as the fifth block in the canonical inventory and is
+byte-equivalent to `test/fixtures/csharp-wasm-inventory.tsv`.
+`CANONICAL_PARSER_ASSET_URLS` supplies its exact Vite package URL and the
+production worker requests the same-origin emitted WASM. Any change to the
+package, asset, runtime, source commit, inventory, ABI, or licence requires
+renewed qualification under ADR 0007 before production selection can continue.

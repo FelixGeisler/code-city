@@ -4,8 +4,8 @@ Status:: Accepted
 
 == Context
 
-Metrics need deterministic JavaScript and TypeScript syntax without executing
-source. A parser fallback would give the same module two meanings.
+Metrics need deterministic JavaScript, TypeScript, and C# syntax without
+executing source. A parser fallback would give the same module two meanings.
 
 == Decision
 
@@ -18,10 +18,15 @@ source. A parser fallback would give the same module two meanings.
 |TypeScript and TSX grammar assets |Pinned, locally patched WASM reproduced
 from `tree-sitter-typescript@0.23.2` as fixed by issue
 https://github.com/FelixGeisler/code-city/issues/577[#577]
+|C# grammar asset |`tree-sitter-c-sharp.wasm` from
+`@vscode/tree-sitter-wasm@0.3.1`, qualified by issue
+https://github.com/FelixGeisler/code-city/issues/600[#600] and selected by issue
+https://github.com/FelixGeisler/code-city/issues/604[#604]
 |`.js`, `.mjs`, `.cjs` |JavaScript grammar; visible JSX rejected
 |`.jsx` |JavaScript grammar with JSX
 |`.ts`, `.mts`, `.cts` |TypeScript grammar
 |`.tsx` |TSX grammar
+|`.cs` |C# grammar
 |===
 
 For each module:
@@ -50,19 +55,18 @@ Use no fallback parser, query layer, general custom-grammar mechanism,
 incremental tree, type checker, linter, dependency resolver, recursive
 JavaScript tree walk, parser logging, or source execution.
 
-== Qualified C# candidate outside production selection
+== Qualified C# production selection
 
 The `tree-sitter-c-sharp.wasm` already contained in
 `@vscode/tree-sitter-wasm@0.3.1` is qualified with the current
-`web-tree-sitter@0.27.0` runtime for a later C# admission decision. This is
-candidate coverage under this ADR, not production selection: `.cs` remains
-unsupported, the C# asset is not emitted, and no production parser URL,
-notice, dependency, or package file changes. The existing adapter recognizes
-the dormant `csharp` grammar family and can load the candidate only through a
-specifically named optional asset input. Direct tests inject that URL and
-exercise validation and grammar-neutral projection; canonical production
-assets do not supply it, so a direct production C# request fails closed before
-parsing.
+`web-tree-sitter@0.27.0` runtime and selected for production by issue
+https://github.com/FelixGeisler/code-city/issues/604[#604]. `.cs` is admitted
+by the shared suffix rule. The canonical parser assets supply the specifically
+named `grammarCSharp` URL, and adapter initialization eagerly loads it once
+after JavaScript, TypeScript, and TSX. The exact asset is emitted as the fifth
+WASM; its source-grammar MIT payload is carried once in the source, built, and
+HTTP-served entry HTML after the two existing parser notices. No dependency,
+network origin, fallback, retry, plugin, or registry is added.
 
 Qualification pins the package and source provenance, exact candidate bytes,
 ABI, complete imports, exports, memory and `dylink.0` inventory, and both MIT
@@ -70,10 +74,9 @@ licences. It directly loads and parses with the accepted runtime, walks every
 tree iteratively, rejects parser errors, missing nodes, and recovery, and
 releases each parser, tree, cursor, source, and observation resource. The
 closed synthetic table fixes the C# metric contract and concrete parse shapes.
-The same table now also exercises the existing adapter and Metrics with the
-test-injected candidate, including exact observations, ownership, `S`, `U`,
-and `M`, without making the candidate a production-selected asset. Exact 2
-MiB dense and deep modules establish validation, projection, and metric
+The same table exercises the production adapter and Metrics with the exact
+selected asset, including exact observations, ownership, `S`, `U`, and `M`.
+Exact 2 MiB dense and deep modules establish validation, projection, and metric
 compatibility with the existing per-module boundary; elapsed time is
 diagnostic only.
 
