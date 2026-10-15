@@ -3,6 +3,15 @@
 Code City turns one public GitHub repository into a deterministic 3D city of
 its JavaScript, TypeScript, and C# modules.
 
+== Approved target ownership
+
+Accepted xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
+assigns source acquisition, analysis, and the authoritative association of
+source, results, and optional saved investigations to the Code City server. The
+browser owns presentation and investigation, including on-demand viewing of the
+exact analyzed source. This is the approved target boundary, not an implemented
+server claim.
+
 == Architecture goals
 
 [cols="1,3",options="header"]
@@ -16,15 +25,25 @@ its JavaScript, TypeScript, and C# modules.
 |Repository content remains untrusted data and is never executed.
 
 |Atomic
-|The user sees one complete current city or no city.
+|The user sees one complete current city or no city; Save creates a new complete
+snapshot or none.
 
 |Bounded
 |Source, processing, and rendering stay within the published envelope and
 finite provider safeguards.
 
-|Simple to operate
-|The application is a static browser package with no backend or credentials.
+|Authoritative association
+|The target server owns acquisition, analysis, and the retained source-result
+association; the browser remains the investigation interface.
 
 |Understandable
 |Core product rules stay separate from external mechanisms.
 |===
+
+== Current implemented baseline at `9bcf7c8`
+
+The current application is a static browser package with no backend,
+credentials, or persistence. It directly acquires and analyzes public GitHub
+source in the browser. Those current implementation facts are retained as
+historical baseline context; ADR 0013 supersedes their browser-only and
+non-persistence status for the target.

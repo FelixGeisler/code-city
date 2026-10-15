@@ -1,33 +1,55 @@
 = 4. Solution Strategy
 
+== Approved target strategy
+
 [cols="1,3",options="header"]
 |===
 |Strategy |Approach
 
 |Stable input
-|Resolve the repository's default branch once and process its immutable commit
+|Resolve the repository's default branch only on Analyze or Reanalyze and bind
+one complete analysis to its immutable commit.
+
+|Server authority
+|The server owns source acquisition, analysis, and the authoritative association
+between source, results, and optional saved investigations, as fixed by
+xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013].
+
+|Browser investigation
+|Keep city presentation, selection, metrics, and on-demand exact-source
+investigation in the browser.
 
 |Independent core
 |Keep validation, admission, metrics, city construction, and state policy free
-of browser and provider APIs
+of external mechanism APIs.
 
 |Bounded processing
-|Run retrieval and static analysis as one ordered worker pipeline with explicit
-limits
+|Apply fixed exclusions and published limits, require complete acquisition, and
+then continue across individually unsupported or unanalyzable files.
 
-|Direct provider access
-|Use anonymous GitHub REST and raw-content requests; no backend or credential
+|Fixed syntax and mapping
+|Retain pinned Tree-sitter grammars and the fixed globally bounded visual
+mapping without executing repository content.
 
-|Fixed syntax
-|Use pinned Tree-sitter WebAssembly grammars and fail on incomplete syntax
-
-|Fixed presentation
-|Build a renderer-neutral city, then present it with browser-native WebGL2
-
-|Atomic publication
-|Only the current attempt may replace the visible state; failures publish no
-partial city
+|Atomic publication and saving
+|Publish no partial city; explicit Save creates a new immutable server snapshot
+or none.
 |===
 
-The architecture prefers explicit, single-purpose parts over extension points,
-fallbacks, plugins, or configurable pipelines.
+Runtime, API, storage, access, deletion, backup, ingress, deployment, recursive
+presentation, and portable-interchange mechanics remain unresolved. The target
+strategy does not claim an implemented or deployed server.
+
+== Current implemented strategy at `9bcf7c8`
+
+The current static browser package resolves the default branch on submit, uses
+one ordered worker pipeline with explicit limits, accesses anonymous GitHub REST
+and raw content directly, uses pinned Tree-sitter WebAssembly grammars, builds a
+renderer-neutral city, presents it with browser-native WebGL2, and atomically
+publishes only the current complete attempt. Direct provider access,
+browser-owned analysis, two-segment grouping, and session-only results are
+current implementation details rather than the approved target ownership and
+persistence strategy.
+
+The architecture prefers explicit, single-purpose parts over speculative
+extension points, fallbacks, plugins, or configurable pipelines.

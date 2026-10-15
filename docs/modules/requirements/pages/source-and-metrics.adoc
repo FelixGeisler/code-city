@@ -1,7 +1,127 @@
 = Source and Metrics
 
-Repository content is untrusted data. Code City never executes or imports it.
+== Approved whole-core source and analysis target
 
+The requirements in this section are the approved target. The detailed language
+and metric rules later on this page are the single authoritative algorithms for
+both the current implementation and the initial server-owned target. Current
+browser acquisition and whole-attempt parser behavior remain implementation
+facts at `9bcf7c8`; they are not the approved ownership or failure target.
+
+[[CC-CORE-SRC-01]]
+=== Public repository input
+
+Accept one anonymously accessible public GitHub repository URL. The initial
+acceptance repository is `https://github.com/FelixGeisler/code-city`. Private
+repositories, uploads, archives, local folders, other providers, and arbitrary
+refs are excluded.
+
+[[CC-CORE-SRC-02]]
+=== Explicit immutable-revision analysis
+
+Only an explicit Analyze or Reanalyze action resolves the then-current tip of
+the default branch and records its full immutable commit ID. No selection
+event, watch, or schedule starts analysis. Later runs do not alter earlier
+results.
+
+[[CC-CORE-SRC-03]]
+=== Server-owned acquisition and analysis
+
+The Code City server acquires and analyzes the complete selected-commit dataset
+and owns its authoritative association with results and optional saved
+investigations. The browser owns presentation and investigation, as fixed by
+xref:architecture:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013].
+
+[[CC-CORE-SRC-04]]
+=== Untrusted source
+
+Repository content is untrusted data. Code City never executes or imports it as
+application code. It never runs repository tests, builds, package scripts,
+generators, or hooks.
+
+[[CC-CORE-SRC-05]]
+=== Path exclusions
+
+Before analysis, exclude these case-sensitive directory segments at any depth:
+`node_modules`, `dist`, `build`, `bin`, and `obj`. Additional exclusions are
+newline-separated canonical repository-relative paths without glob or regular-
+expression syntax; each excludes itself and descendants. Reject duplicate or
+invalid entries before provider work and retain and display the effective set.
+Do not infer generated or third-party status from content, and do not exclude
+`packages` by name.
+
+[[CC-CORE-SRC-06]]
+=== Complete acquisition
+
+Failure to establish the immutable revision or acquire its complete eligible
+dataset publishes no partial city. Individual supported files may fail only
+after complete acquisition under the per-file policy in
+xref:city-and-failures.adoc#target-failures[Target failures].
+
+=== Fixed processing envelope
+
+The initial target retains inclusive limits of 4,000 supported files, 2 MiB of
+normalized UTF-8 per file, and 40 MiB in aggregate after exclusions. Exceeding
+a limit fails the complete analysis as `Repository exceeds Code City limits`.
+Code City does not sample, truncate, retry automatically, or silently apply a
+lower limit.
+
+== Approved whole-core metric target
+
+[[CC-CORE-MET-01]]
+=== Metric dimensions
+
+Height represents physical SLOC, footprint represents executable-unit count,
+and colour represents the maximum cyclomatic complexity of a unit in the file.
+
+[[CC-CORE-MET-02]]
+=== Physical SLOC
+
+Count a physical line once when it has non-whitespace source outside comments.
+Blank and comment-only lines count zero; declarations and executable source
+count; trailing-comment and multiple-statement lines count once; minified one-
+line source has SLOC 1. The exact initial per-language contract is defined once
+in xref:#authoritative-source-lines[Source lines] and the C# qualification in
+xref:#authoritative-csharp-contract[C# metric contract].
+
+[[CC-CORE-MET-03]]
+=== Executable units and complexity
+
+Each executable unit starts at complexity 1 and owns its branching
+contributions; nested units own their bodies. The exact JS, JSX, TS, TSX, and C#
+inclusion, ownership, syntax, and counted-construct contracts are defined once
+in xref:#authoritative-syntax[Syntax],
+xref:#authoritative-csharp-contract[C# metric contract], and
+xref:#authoritative-metrics[Metrics]. Retain each unit's kind, exact source
+span, complexity, and owned contribution kinds and spans.
+
+[[CC-CORE-MET-04]]
+=== Fixed visual mapping
+
+Fixed, compressed, globally bounded mappings give equal raw values equal visual
+meaning across analyses. The formulas, caps, rounding rules, and palette remain
+authoritative in xref:city-and-failures.adoc#authoritative-visual-mapping[Visual
+mapping]. Visual caps change neither raw values nor processing limits.
+
+[[CC-CORE-MET-05]]
+=== Evidence without classification
+
+Raw maximum complexity remains visible. Colour communicates magnitude only and
+creates no health, correctness, risk, defect, warning, or pass/fail
+classification.
+
+== Authoritative language and metric contract
+
+The suffixes, pinned grammar selection, strict UTF-8, BOM, newline, and NUL
+handling, unit ownership, syntax coverage, and metric algorithms below are the
+initial target contract. ADR 0007 remains the grammar authority. The current
+implementation and its tests provide evidence for these rules without implying
+that server acquisition, recursive presentation, or persistence exists.
+Current evidence is in `test/base-metrics.test.mjs`,
+`test/complexity.test.mjs`, `test/csharp-qualification.test.mjs`, and
+`test/source-admission.test.mjs`.
+
+[[authoritative-admission]]
 == Admission
 
 [cols="1,3",options="header"]
@@ -22,14 +142,16 @@ by unsigned UTF-8 bytes.
 `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, or `.cs`.
 
 |Kind
-|Admit regular files. Skip directories, links, submodules and their descendants,
-and unsupported suffixes. Do not apply vendor or generated-path exclusions.
+|After the approved path exclusions, admit regular files. Skip directories,
+links, submodules and their descendants, and unsupported suffixes. Apply no
+additional inferred vendor or generated-content exclusion.
 
 |Content
 |Decode strict UTF-8, remove one leading BOM, reject NUL, convert CRLF and CR
 to LF, and perform no other transformation. Empty content is valid.
 |===
 
+[[authoritative-processing-envelope]]
 == Supported processing envelope
 
 These are Code City limits, not copies of GitHub limits. All maxima are
@@ -53,6 +175,7 @@ otherwise incomplete provider result fails as incomplete source. Internal
 buffers and counters are implementation safeguards and must not reduce the
 published Code City envelope.
 
+[[authoritative-syntax]]
 == Syntax
 
 [cols="2,3",options="header"]
@@ -75,9 +198,12 @@ published Code City envelope.
 |C#
 |===
 
-Parser errors, missing nodes, or recovery fail the complete attempt. Type
-checking, name resolution, linting, and dependency analysis are not performed.
+After complete acquisition, parser errors, missing nodes, or recovery omit the
+individual file under `Syntax could not be analyzed`. Shared parser
+initialization failure fails the complete analysis. Type checking, name
+resolution, linting, and dependency analysis are not performed.
 
+[[authoritative-csharp-contract]]
 == C# metric contract
 
 C# and ASCII-case `.cs` variants are supported by the production-selected,
@@ -118,12 +244,15 @@ C# metrics use this fixed contract:
   conditional access add no point themselves. `M` is the maximum unit
   complexity, or zero when there is no unit.
 
-Any C# parser error, missing node, or recovery fails the whole
-attempt as `Metric processing failed` / `M1-MET-1`, without a diagnostic,
-partial result, retry, fallback, or source execution.
+After complete acquisition, any C# parser error, missing node, or recovery
+omits that file under `Syntax could not be analyzed`, without exposing a raw
+diagnostic, retrying, falling back, or executing source. A metric derivation
+failure instead uses `Metrics could not be computed`.
 
+[[authoritative-metrics]]
 == Metrics
 
+[[authoritative-source-lines]]
 === Source lines (`S`)
 
 Count a physical line once when it contains non-whitespace, non-comment source.

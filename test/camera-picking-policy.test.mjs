@@ -789,7 +789,7 @@ test("district projection fails complete W, depth, finite, dimension, and exact-
   ]) failure(result, id);
 });
 
-test("accepted ADR history and current perspective requirements stay synchronized without ADR 0013", async () => {
+test("accepted ADR history, ADR 0013, and current perspective requirements stay synchronized", async () => {
   const adrFiles = [
     ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 5_274, "b493f62f8a9a51d447b4b103a37a65f75687bcf0178465174d877234b278bb18"],
     ["0011-interactive-webgl2-navigation-and-inspection.adoc", 23_113, "9cc5774e0bc5b14575269904d304a83504a94173fc9bef3f61b257dc56eec912"],
@@ -812,7 +812,12 @@ test("accepted ADR history and current perspective requirements stay synchronize
   assert(adrs[2].includes("Subsequent refinement (issue 571)"));
   assert(adrs.every((adr) => adr.includes("issues/573") && adr.includes("issues/575") && adr.includes("issues/586")));
   assert(adrs[2].includes("Subsequent refinement (issue 588)"));
-  assert.equal(await readFile(path.join(root, "docs/modules/architecture/nav.adoc"), "utf8").then((text) => text.includes("0013")), false);
+  const ownershipAdr = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc"), "utf8");
+  const ownershipBytes = Buffer.from(ownershipAdr.replaceAll("\r\n", "\n"));
+  assert.equal(createHash("sha256").update(ownershipBytes).digest("hex"), "d8e320f40967ca834ecf20b9d6198df76ebb65a91e35cd0cac289c7ff86921da");
+  assert.match(ownershipAdr, /^Status:: Accepted$/mu);
+  const architectureNav = await readFile(path.join(root, "docs/modules/architecture/nav.adoc"), "utf8");
+  assert(architectureNav.includes("xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc"));
   const requirements = await readFile(path.join(root, "docs/modules/requirements/pages/city-and-failures.adoc"), "utf8");
   const normalized = requirements.replace(/\s+/g, " ");
   for (const statement of [

@@ -1,6 +1,6 @@
 = ADR 0002: Browser-only runtime
 
-Status:: Accepted
+Status:: Superseded by ADR 0013
 
 == Context
 

@@ -1,6 +1,12 @@
 = 3. Context and Scope
 
-image::context.svg[Code City system context]
+== Current implemented context at `9bcf7c8`
+
+The diagram and table in this section describe the current browser-only,
+static-hosted, direct-provider system. They do not describe an implemented
+server.
+
+image::context.svg[Current Code City browser system context]
 
 [cols="1,2,2",options="header"]
 |===
@@ -16,14 +22,14 @@ image::context.svg[Code City system context]
 
 |Public GitHub
 |Default-branch head identity, immutable tree, and source bytes
-|Anonymous requests for one selected revision
+|Anonymous browser requests for one selected revision
 
-|Code City
+|Code City browser
 |Anonymous GitHub requests
 |Untrusted provider data and source bytes
 |===
 
-== Boundaries
+=== Current boundaries
 
 * User input crosses a logical trust boundary into the UI.
 * Repository data crosses a second logical trust boundary from Public GitHub
@@ -44,4 +50,20 @@ image::context.svg[Code City system context]
   contextual label visibility or layout. Plates and the contextual row have no
   picking identity.
 * No product data is sent to GitHub Pages after the static application loads.
-* There is no backend, database, relay, telemetry service, or second provider.
+* The current baseline has no backend, database, relay, telemetry service, or
+  second provider.
+
+== Approved target context
+
+Accepted xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
+introduces a Code City server boundary. The server receives an explicit public-
+repository analysis request, acquires the selected immutable revision, analyzes
+the complete eligible dataset, and owns the authoritative source-result
+association and optional immutable saved investigations. The browser receives
+presentation and investigation data and requests exact analyzed source on
+demand.
+
+Repository and user inputs remain untrusted at every boundary. Server platform,
+API, storage, admission mechanism, deployment, and recursive presentation
+mechanics remain unresolved. This target context does not claim that those
+components exist today.
