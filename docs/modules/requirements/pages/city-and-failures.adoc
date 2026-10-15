@@ -1,11 +1,148 @@
 = City and Failures
 
-== Building mapping
+== Approved whole-core city target
 
-The scene contains exactly one axis-aligned prism for each admitted module.
-Admission, raw `S`, `U`, and `M`, and source limits remain defined by
-xref:source-and-metrics.adoc[Source and Metrics]. The six current `M` thresholds
-remain unchanged; displayed dimensions and base colours are fixed here.
+The requirements in this section describe the approved target, not the current
+two-segment browser presentation at `9bcf7c8`. Recursive geometry, ordering,
+spacing, labels, and picking remain unresolved.
+
+[[CC-CORE-CITY-01]]
+=== Recursive repository city
+
+The selected repository root is the city. Every ancestor directory induced by
+a successfully analyzed file is represented recursively as a subdivision. The
+target does not yet select recursive geometry, ordering, spacing, labels, or
+picking behavior.
+
+[[CC-CORE-CITY-02]]
+=== One building per successful source file
+
+Every successfully analyzed source file has exactly one building. The initial
+core has no type-based split, aggregation, collapse, or replacement of file
+buildings.
+
+== Approved whole-core investigation target
+
+[[CC-CORE-INV-01]]
+=== Shared file selection
+
+The city remains primary. Selecting a building or file-list result updates one
+shared file selection and first shows raw file metrics and units in the order
+below. Selection does not open source or move, frame, reveal, reset, or animate
+the camera.
+
+[[CC-CORE-INV-02]]
+=== Explicit unit drill-down
+
+Explicit unit drill-down shows read-only source corresponding to the analyzed
+commit, the unit's exact complexity, and only its owned complexity-contribution
+spans. Each contribution exposes its textual kind and source location; colour
+is not the only indication.
+
+[[CC-CORE-INV-03]]
+=== Searchable and sortable file list
+
+A searchable, sortable list contains every successful file's canonical
+repository-relative path and raw metrics. Search is a case-sensitive literal
+substring; an empty query shows all successful files. Available sorts are SLOC,
+executable-unit count, and maximum unit complexity. Metric sorts are descending
+and then unsigned UTF-8 canonical path ascending. Initial order is SLOC
+descending.
+
+Unit order is complexity descending, source start byte ascending, end byte
+descending, then unit kind ascending. Top-level drill-down shows the complete
+normalized file; an explicit unit shows its exact normalized syntax span with
+one-based line numbers.
+
+[[CC-CORE-INV-04]]
+=== Investigation evidence only
+
+Values, ranking, colour, legend, and highlights are investigation evidence
+only. Code City does not generate threshold findings, warnings, grades,
+recommendations, AI guidance, or fixes.
+
+[[target-failures]]
+== Approved whole-core failure target
+
+[[CC-CORE-FAIL-01]]
+=== Per-file continuation
+
+After complete acquisition, an individual supported file with unsupported
+source text, unanalyzable syntax, or uncomputable metrics does not abort other
+files. Omit its building and never fabricate zero metrics.
+
+[[CC-CORE-FAIL-02]]
+=== Sanitized failed-file inventory
+
+Show every failed file in a separate `Not analyzed files` list as inert
+canonical path text plus one sanitized category. Invalid UTF-8 or NUL uses
+`Source text is not supported`; malformed or recovered syntax uses `Syntax
+could not be analyzed`; metric derivation failure uses `Metrics could not be
+computed`. Expose no raw parser or provider text, stack, credential, server
+path, or active content.
+
+[[CC-CORE-FAIL-03]]
+=== Unsupported, excluded, and all-failed outcomes
+
+Unsupported and path-excluded files are neither successful files nor analysis
+failures. If every attempted supported file fails, show no city and the
+complete `Not analyzed files` list.
+
+Revision, complete-tree, blob-integrity or retrieval, processing-envelope,
+shared-parser-initialization, persistence-service, and city or presentation
+failures are whole-analysis failures. They publish no partial city.
+
+== Approved whole-core temporary and saved analyses
+
+[[CC-CORE-SAVE-01]]
+=== Explicit Save
+
+A completed analysis is temporary unless the user explicitly chooses Save.
+Analyze and Reanalyze neither silently save nor overwrite.
+
+[[CC-CORE-SAVE-02]]
+=== Unsaved lifetime
+
+An unsaved analysis has no reopening identifier after explicit discard,
+replacement by a new analysis, page reload, navigation away, or close.
+Technical cleanup and recovery remain later design work.
+
+[[CC-CORE-SAVE-03]]
+=== Immutable saved snapshot
+
+Save creates a new immutable snapshot atomically. It retains repository
+identity, full commit, effective exclusions, exact eligible source and
+normalized analyzed text needed for inspection, per-file outcomes, hierarchy,
+units and contributions, raw metrics, and fixed visualization inputs. Reopen
+performs no GitHub acquisition or analysis. Saved snapshots have no automatic
+expiry.
+
+Failed Save leaves the temporary investigation usable. Reanalysis never
+overwrites a snapshot. The inventory label is `<owner>/<repository> @ <short
+commit>` plus saved UTC time, with the full commit visible.
+
+[[CC-CORE-SAVE-04]]
+=== Shared inventory and retained source
+
+Every user admitted to the internal Code City website can view the shared
+saved-analysis inventory and retained source. This requirement does not select
+admission or authentication, action authorization, deletion, backup, quotas,
+ingress, deployment, API, or storage technology.
+
+Server persistence is the initial Save and reopen implementation. Portable
+source-bearing export and import is not permanently excluded: whether it is
+added, whether it shares the server representation, and its JSON-or-similar
+format and I/O contract remain unresolved. A downstream API is outside the
+whole core.
+
+[[authoritative-visual-mapping]]
+== Authoritative visual mapping
+
+The current scene and the target mapping use exactly one axis-aligned prism for
+each successfully analyzed module. Admission, raw `S`, `U`, and `M`, and source
+limits are defined by xref:source-and-metrics.adoc[Source and Metrics]. The six
+`M` thresholds remain unchanged; displayed dimensions and base colours are
+fixed here.
 
 For every admitted non-negative safe-integer fact:
 
@@ -50,6 +187,19 @@ corresponding capped displayed dimension.
 
 The geometry payload stores this exact opaque base RGBA. Face display
 transforms do not change band membership or the payload colour.
+
+== Current implemented presentation at `9bcf7c8`
+
+The sections from Layout through Atomic lifecycle describe current browser
+behavior and test evidence. Two-segment grouping, whole-attempt processing
+failure, search-triggered camera reveal, and the current absence of source
+viewing are not the approved whole-core target.
+
+Current city construction and payload evidence is in `test/city-model.test.mjs`
+and `test/city-payload.test.mjs`. Current camera and presentation evidence is in
+`test/camera-picking-policy.test.mjs` and `test/city-presenter.test.mjs`. These
+tests do not claim coverage of future server, recursive, or saved-investigation
+behavior.
 
 == Layout
 
@@ -768,21 +918,42 @@ inspection, WebGL, or release evidence. The existing browser and production
 evidence observers access only required geometry and never clone, enumerate,
 hash, serialise, log, packetise, wrap, or retain inspection facts.
 
-== Non-goals
+== Whole-core non-goals
 
-This baseline adds no source viewing or download, dependency view, filtering,
-history, authentication, private-repository support, metric configuration,
-export, AI guidance, touch-specific gesture, preset,
-first-person movement, minimap, road, parcel, persistent building label,
-tooltip, static building edge, animation, saved view,
-sharing, or telemetry.
+The approved whole core excludes:
 
-This perspective change changes no admission, syntax, raw metric, source limit,
-provider, browser-only topology, privacy boundary, failure category, retry,
-fallback, input, or traversal policy. It adds no backend, worker, context,
-canvas, renderer/UI/picking dependency, GPU readback, BVH, alternate publication
-path, projection toggle, or camera-collision policy. Its only camera and CPU
-picking policy changes are the synchronized perspective fit, lens projection,
-depth/clipping oracle, target-plane pan spans, and divergent ray specified
-above; AABB intersection, nearest-hit, and canonical-tie policy remain
-unchanged.
+* automatic camera movement after initialization;
+* favorites, bookmarks, catalog, or account features added for them;
+* history, arbitrary refs, watching, or scheduling;
+* private repositories, non-GitHub providers, uploads, archives, or local
+  folders;
+* source editing or automated fixes;
+* dependency analysis;
+* threshold findings, warnings, grades, or recommendations;
+* AI guidance;
+* telemetry;
+* configurable metric or visual mappings; and
+* a downstream API.
+
+Portable source-bearing export and import is deliberately absent from this
+non-goal list because its representation, format, and I/O contract remain
+unresolved.
+
+== Unresolved target design
+
+Recursive city geometry, ordering, spacing, labels, and picking remain
+unselected. Server runtime, API, storage, access, deletion, backup, ingress,
+deployment technologies, and production resource values also remain
+unselected. This baseline records the accepted server ownership and persistence
+boundary without claiming that a server is implemented or deployed and without
+creating a functional-code handoff.
+
+== Current baseline boundaries
+
+At `9bcf7c8`, the browser implementation has no source view, server persistence,
+portable interchange, recursive hierarchy, per-file failure continuation,
+sortable successful-file inventory, or target camera policy. The current
+perspective behavior changes no admission, syntax, raw metric, source limit,
+provider, browser topology, privacy boundary, failure category, retry, fallback,
+input, or traversal policy. It adds no backend, GPU readback, BVH, alternate
+publication path, projection toggle, or camera-collision policy.

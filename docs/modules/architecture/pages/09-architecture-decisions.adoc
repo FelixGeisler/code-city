@@ -13,8 +13,9 @@ page, code, or test.
 |Keeps product policy testable and replaceable
 
 |xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
-|Browser-only runtime on GitHub Pages
-|Avoids credentials, backend operation, and persistence
+|Historical browser-only runtime and non-persistence baseline; superseded by
+ADR 0013 for those decisions
+|Records the implemented baseline without governing target ownership
 
 |xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
 |Explicit core responsibilities and ports
@@ -52,4 +53,10 @@ xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-conten
 |xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[ADR 0012]
 |Bounded grouped construction and fixed direct-WebGL face shading
 |Makes the current interactive city readable without widening its boundaries
+
+|xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
+|Server ownership of acquisition, analysis, and authoritative saved
+source-result associations; browser ownership of investigation
+|Fixes the target responsibility boundary without choosing server, API,
+storage, access, or deployment mechanics
 |===

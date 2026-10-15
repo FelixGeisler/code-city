@@ -28,3 +28,9 @@ GitHub owns response and rate limits.
 
 A later submission may resolve a newer head. Movement of the branch cannot
 change an attempt after its commit has been selected.
+
+== Scope clarification
+
+This record remains accepted history and authority for the current implemented
+browser acquisition path. It does not approve or select future server
+acquisition or provider mechanics.

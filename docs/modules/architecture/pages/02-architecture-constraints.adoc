@@ -1,8 +1,14 @@
 = 2. Architecture Constraints
 
+== Current implemented baseline at `9bcf7c8`
+
+The following table describes the current browser application. Browser-only,
+direct-provider, static-hosting, and session-only entries are implementation
+facts, not target constraints.
+
 [cols="1,3",options="header"]
 |===
-|Constraint |Consequence
+|Current constraint |Current consequence
 
 |Browser only
 |UI and presentation run in the main context; processing uses at most one worker.
@@ -23,5 +29,17 @@
 |Users cannot configure revision, metrics, layout, palette, or limits.
 
 |One publisher
-|Only protected `main` may publish the production application.
+|Only protected `main` may publish the current production application.
 |===
+
+== Approved target boundary
+
+Accepted xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
+replaces browser ownership of acquisition and analysis and the session-only
+non-persistence boundary. The target server owns acquisition, analysis, and
+optional saved investigations; the browser owns presentation and investigation.
+
+The target does not yet select a server runtime or version, API, storage
+technology or schema, access or deletion policy, backup, ingress, deployment
+topology, or production resource values. Recursive presentation design and
+portable source-bearing interchange are also unresolved.

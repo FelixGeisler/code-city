@@ -63,3 +63,9 @@ near-envelope repository before this mechanism is considered dependable at the
 published maximum. Unacceptable latency, throttling, or failure frequency
 reopens this decision; it must not silently introduce concurrency, retry, a
 backend, or a private lower limit.
+
+== Scope clarification
+
+This record remains accepted history and authority for the current implemented
+browser acquisition path. It does not approve or select future server
+acquisition or provider mechanics.
