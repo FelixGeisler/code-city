@@ -23,10 +23,9 @@ A failure in any current file's retrieval, admission, syntax, or metric work
 fails the whole attempt. The current implementation does not apply the target's
 per-file continuation policy.
 
-The dependency direction follows
-xref:adr/0001-core-dependency-boundary.adoc[ADR 0001]: domain rules do not know
-browser or provider APIs; application services coordinate capabilities; edge
-adapters own GitHub, worker, DOM, parser, and WebGL integration. Detailed
+The dependency direction keeps domain rules independent of browser and provider
+APIs; application services coordinate capabilities; edge adapters own GitHub,
+worker, DOM, parser, and WebGL integration. Detailed
 admission, metric, city, camera, and failure algorithms remain with
 xref:requirements:source-and-metrics.adoc[Source and Metrics],
 xref:requirements:city-and-failures.adoc[City and Failures], and their executable

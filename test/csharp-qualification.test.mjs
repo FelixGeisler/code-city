@@ -91,7 +91,7 @@ test("the existing packaged C# candidate has immutable provenance, licence, ABI,
     neededLibraries: [],
     subsectionTypes: [1],
   });
-  assert.match(CSHARP_CANDIDATE.renewalRule, /requires renewed ADR 0007 qualification/u);
+  assert.match(CSHARP_CANDIDATE.renewalRule, /requires renewed C# grammar qualification/u);
   const qualificationSource = await readFile(path.join(projectRoot, "tools", "qualify-csharp-grammar.mjs"), "utf8");
   for (const forbidden of [".children", ".namedChildren", ".child(", ".namedChild(", ".text", "QueryCursor", "new Query"]) assert(!qualificationSource.includes(forbidden), forbidden);
   for (const required of ["root.walk()", "cursor.gotoFirstChild()", "cursor.gotoNextSibling()", "cursor.gotoParent()", "cursor.delete()", "tree.delete()", "parser.delete()"]) assert(qualificationSource.includes(required), required);

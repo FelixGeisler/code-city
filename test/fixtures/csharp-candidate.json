@@ -56,5 +56,5 @@
     "rows": 19,
     "sha256": "ec51af39771906e32e2bb98c718a9564f30f8eb843be29970add80e74300f3fa"
   },
-  "renewalRule": "Any package, asset, runtime, source commit, inventory, ABI, or licence change requires renewed ADR 0007 qualification."
+  "renewalRule": "Any package, asset, runtime, source commit, inventory, ABI, or licence change requires renewed C# grammar qualification."
 }

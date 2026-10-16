@@ -124,8 +124,8 @@ classification.
 
 The suffixes, pinned grammar selection, strict UTF-8, BOM, newline, and NUL
 handling, unit ownership, syntax coverage, and metric algorithms below are the
-initial target contract. ADR 0007 remains the grammar authority. The current
-implementation and its tests provide evidence for these rules without implying
+initial target contract and grammar authority. The pinned assets, provenance
+evidence, and current tests support these rules without implying
 that server acquisition, recursive presentation, or persistence exists.
 Current evidence is in `test/base-metrics.test.mjs`,
 `test/complexity.test.mjs`, `test/csharp-qualification.test.mjs`, and
@@ -223,9 +223,11 @@ resolution, linting, and dependency analysis are not performed.
 == C# metric contract
 
 C# and ASCII-case `.cs` variants are supported by the production-selected,
-pinned grammar recorded by
-xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
-The selection defines accepted syntax without claiming a C# language version.
+pinned grammar. Its package, asset, runtime, source-commit, inventory, ABI, and
+licence pins and qualification evidence are recorded in
+`test/fixtures/csharp-candidate.json`, `tools/qualify-csharp-grammar.mjs`, and
+`test/csharp-qualification.test.mjs`. The selection defines accepted syntax
+without claiming a C# language version.
 C# metrics use this fixed contract:
 
 * `S` counts each physical line containing non-whitespace, non-comment C#

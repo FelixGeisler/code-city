@@ -4,11 +4,9 @@
 
 * The application is a static TypeScript package built with Vite and runs in a
   browser main context plus one module worker. It has no application server or
-  persistence runtime. See xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004].
+  persistence runtime.
 * The current provider is anonymous public GitHub. The browser resolves the
-  default-branch head and retrieves source for that immutable commit under
-  xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005]
-  and xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006].
+  default-branch head and retrieves source for that immutable commit.
 * Repository content is untrusted data. It is decoded and parsed but never
   imported, executed, built, or tested. The static package applies its manifest-
   owned content security and connection policy.
@@ -16,10 +14,9 @@
   and visual mapping are product constraints owned by
   xref:requirements:source-and-metrics.adoc[Source and Metrics] and
   xref:requirements:city-and-failures.adoc[City and Failures].
-* Syntax analysis uses the pinned WebAssembly grammar boundary recorded by
-  xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
-* Presentation requires WebGL2 and follows the accepted browser presentation
-  decisions linked from xref:09-architecture-decisions.adoc[Architecture Decisions].
+* Syntax analysis uses pinned WebAssembly grammars.
+* Presentation requires WebGL2 and follows the product presentation contract in
+  xref:requirements:city-and-failures.adoc[City and Failures].
 * Dependency and tool versions are authoritative only in `package.json` and
   `package-lock.json`.
 

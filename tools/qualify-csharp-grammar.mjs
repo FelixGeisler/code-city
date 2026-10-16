@@ -36,7 +36,7 @@ export const CSHARP_CANDIDATE = Object.freeze({
   asset: Object.freeze({ path: CSHARP_ASSET, bytes: 5_103_332, sha256: "d12d85996c25957b4c1b71e26db2d7cc8a294997b60642e9c2a3b031b2c66dd3", abi: 15 }),
   dylink: Object.freeze({ memorySize: 5_013_132, memoryAlign: 4, tableSize: 7, tableAlign: 0, neededLibraries: Object.freeze([]), subsectionTypes: Object.freeze([1]) }),
   inventory: Object.freeze({ path: "test/fixtures/csharp-wasm-inventory.tsv", ...EXPECTED_INVENTORY }),
-  renewalRule: "Any package, asset, runtime, source commit, inventory, ABI, or licence change requires renewed ADR 0007 qualification.",
+  renewalRule: "Any package, asset, runtime, source commit, inventory, ABI, or licence change requires renewed C# grammar qualification.",
 });
 
 const CALLABLE_KINDS = Object.freeze({
