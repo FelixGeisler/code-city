@@ -34,8 +34,10 @@ before one current publication; failure removes the complete city.
 for presentation. A canonical path can reach validated controller facts and
 inert text nodes. In UI and rendering publication, neither source nor path text
 becomes active HTML or CSS, shader source, or a resource locator. The
-fixed-origin retrieval gateway separately encodes canonical paths when it
-constructs provider requests. The presenter uploads validated numeric geometry
+fixed-origin retrieval gateway separately percent-encodes each segment of the
+candidate's exact raw provider path when it constructs provider requests; the
+canonical NFC path remains the deterministic identity and display value. The
+presenter uploads validated numeric geometry
 and colour data as GPU attributes to fixed trusted shaders.
 |xref:requirements:city-and-failures.adoc[Failure and privacy contract],
 `src/edge/github-source-gateway.ts`, `src/edge/semantic-publication.ts`,
