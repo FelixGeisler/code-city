@@ -108,10 +108,12 @@ publishes the closed interim `REVISION_SELECTED` message containing only its
 generation and revision. The controller retains it without displaying it while
 work continues.
 
-|Source evidence |GitHub gateway → retrieval |Projected primitive tree records
-with complete raw directory ancestry, or one bounded, identity-verified,
-strictly decoded nonexcluded source text value; no provider object, provider
-URL, excluded blob identity, or raw buffer crosses this boundary
+|Source evidence |GitHub gateway → retrieval |Projected primitive provider
+records. They remain untrusted inventory until application/domain preparation
+validates every identity, kind, and ancestry before exclusion or blob reads.
+The gateway also returns one bounded, identity-verified, strictly decoded
+nonexcluded source text value; no provider object, provider URL, excluded blob
+identity, or raw buffer crosses this boundary
 
 |Admitted module |Admission → parser and metrics |Canonical path and normalised
 UTF-8 source
