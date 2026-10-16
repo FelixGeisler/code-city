@@ -1,62 +1,79 @@
-= 9. Architecture Decisions
+= Architecture Decisions
 
-An ADR is used only when a decision is important, durable, and difficult to
-infer from the architecture or source. Smaller choices stay with the relevant
-page, code, or test.
+Decision records own rationale, alternatives, status, and amendment history.
+This page is a reading index, not a replacement decision record.
 
-[cols="2,3,3",options="header"]
+== Current core choices
+
+[cols="1,1,3",options="header"]
 |===
-|Record |Decision |Why it matters
+|Record |Status |Current architectural relevance
 
-|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001]
-|Core rules are independent from external mechanisms
-|Keeps product policy testable and replaceable
+|xref:adr/0001-core-dependency-boundary.adoc[0001]
+|Accepted
+|Dependency direction isolates domain, application, and edge concerns.
 
-|xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
-|Historical browser-only runtime and non-persistence baseline; superseded by
-ADR 0013 for those decisions
-|Records the implemented baseline without governing target ownership
+|xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[0003]
+|Accepted
+|Defines current core responsibilities and capability boundaries.
 
-|xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
-|Explicit core responsibilities and ports
-|Prevents accidental ownership and dependency drift
+|xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[0004]
+|Accepted
+|Defines the static TypeScript browser shell and build approach.
 
-|xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
-|Framework-free TypeScript shell built with Vite
-|Keeps the application surface small
+|xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[0005]
+|Accepted
+|Defines current anonymous default-branch head selection.
 
-|xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005] and
-xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
-|Direct anonymous GitHub resolution and retrieval
-|Provides one immutable input without a backend
+|xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[0006]
+|Accepted
+|Defines current immutable GitHub source retrieval.
 
-|xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
-|Pinned Tree-sitter WebAssembly grammars
-|Provides deterministic static syntax without executing source
+|xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[0007]
+|Accepted
+|Defines pinned static syntax analysis. See its
+xref:adr/0007-static-syntax-evidence-appendix.adoc[evidence appendix].
 
-|xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
-|Browser-native WebGL2 presentation
-|Meets the fixed rendering contract without a renderer package
+|xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[0008]
+|Accepted
+|Defines browser-native WebGL2 city presentation.
 
-|xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009]
-|M1 uses `main`; v1 is archival; only `main` publishes
-|Keeps one integration line and one production publisher
+|xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[0011]
+|Accepted
+|Defines current interactive navigation and inspection behavior.
 
-|xref:adr/0010-canonical-artifact-manifest-and-publication-evidence-contract.adoc[ADR 0010]
-|Canonical artifact manifest and publication evidence
-|Binds one reviewed package to its protected-main publication run
-
-|xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
-|Controller-validated city transaction and presenter-owned interaction
-|Keeps geometry, inspection, semantics, input, rendering, and cleanup aligned
-
-|xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[ADR 0012]
-|Bounded grouped construction and fixed direct-WebGL face shading
-|Makes the current interactive city readable without widening its boundaries
-
-|xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
-|Server ownership of acquisition, analysis, and authoritative saved
-source-result associations; browser ownership of investigation
-|Fixes the target responsibility boundary without choosing server, API,
-storage, access, or deployment mechanics
+|xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[0012]
+|Accepted
+|Defines current bounded grouping, shading, search, and presentation policy.
 |===
+
+== Ownership target
+
+xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
+is **Accepted**. It assigns acquisition, analysis, retained source-result
+association, and saved investigations to a server, with presentation and
+investigation in the browser. It does not select the server, API, storage,
+access, or deployment mechanism. The target remains unimplemented.
+
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+is **Superseded by ADR 0013**. It remains the historical record for the
+browser-only runtime and non-persistence choice that the current implementation
+still exhibits. Supersession does not make the current server target implemented.
+
+== Delivery and publication history
+
+[cols="1,1,3",options="header"]
+|===
+|Record |Status |Scope
+
+|xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[0009]
+|Accepted
+|Records main-line and GitHub Pages cutover policy.
+
+|xref:adr/0010-canonical-artifact-manifest-and-publication-evidence-contract.adoc[0010]
+|Accepted
+|Defines canonical package, publication, and production-evidence bindings.
+|===
+
+All records other than ADR 0002 retain their recorded **Accepted** status.
+Grouping them here neither revokes nor supersedes still-applicable policy.
