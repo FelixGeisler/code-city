@@ -1707,7 +1707,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       }
     };
     const initialCityHeight = await evaluate("document.querySelector('[data-city]').getBoundingClientRect().height");
-    const searchInputPoint = await evaluate(`(() => { const rectangle=document.querySelector('[data-path-search-input]').getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
+    const searchInputPoint = await evaluate(`(() => { const input=document.querySelector('[data-path-search-input]'); input.scrollIntoView({block:'center'}); const rectangle=input.getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
     await nativeClick(searchInputPoint);
     await typeNativeText("/");
     const overflowEvidence = await evaluate(`(() => {
