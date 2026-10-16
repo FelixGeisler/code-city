@@ -1,6 +1,6 @@
 = 3. Context and Scope
 
-== Current implemented context at `9bcf7c8`
+== Current implemented context
 
 The diagram and table in this section describe the current browser-only,
 static-hosted, direct-provider system. They do not describe an implemented
@@ -13,7 +13,8 @@ image::context.svg[Current Code City browser system context]
 |Participant |Sends |Receives
 
 |User
-|Repository URL, submit, cancel, reload, and canvas or keyboard interaction
+|Repository URL, additional exclusions, Analyze, cancel, reload, and canvas or
+keyboard interaction
 |State, selected commit, failure, navigable city, or selected-building inspector
 
 |GitHub Pages
@@ -21,7 +22,8 @@ image::context.svg[Current Code City browser system context]
 |No repository or product data
 
 |Public GitHub
-|Default-branch head identity, immutable tree, and source bytes
+|Default-branch head identity, complete recursive tree, and nonexcluded source
+bytes
 |Anonymous browser requests for one selected revision
 
 |Code City browser
@@ -31,11 +33,16 @@ image::context.svg[Current Code City browser system context]
 
 === Current boundaries
 
-* User input crosses a logical trust boundary into the UI.
+* The repository URL and complete additional-exclusion text cross a logical
+  trust boundary into the UI. Both validate before worker creation; Analyze
+  captures one immutable canonical pair for its generation.
 * Repository data crosses a second logical trust boundary from Public GitHub
   into the processing worker.
 * Same-origin main/worker transport is a lifecycle boundary, not a trust
   crossing or security sandbox.
+* Complete raw and canonical tree identity, kind, and ancestry validate before
+  exclusion or blob reads. Fixed and captured additional exclusions are domain
+  policy in the transitional worker.
 * The worker sends only one bounded, source-free, aligned geometry-and-inspection
   result to the main context.
 * The controller independently reconstructs numeric plate data and aligned

@@ -4,10 +4,15 @@ image::runtime.svg[Successful aligned city validation, staging, commit, and inte
 
 == Successful attempt
 
-. Revoke publication rights, clear semantic state, dispose any previous
-  presenter session, and start one worker generation.
+. On Analyze, validate the repository and complete additional-exclusion text
+  before worker creation; atomically capture the canonical sorted array, revoke
+  publication rights, clear semantic state, dispose any previous presenter
+  session, display this generation's fixed and additional effective exclusions,
+  and start one worker generation.
 . Resolve the default-branch head, retain its closed `REVISION_SELECTED` value,
-  and retrieve one complete admitted source set.
+  validate the complete recursive tree's raw/NFC identities, supported kinds,
+  and explicit raw directory ancestry, then filter exclusions and retrieve one
+  complete admitted source set sequentially.
 . Release every GitHub request, reader, provider object, raw buffer, and hash
   workspace.
 . Initialize the parser once by eagerly loading JavaScript, TypeScript, TSX,
@@ -69,8 +74,11 @@ only a validated numeric index/AABB-centre command to the presenter.
 
 == Worker lifecycle
 
-The main bridge owns one concrete worker handle. New submissions are coalesced
-to the latest while an old generation closes.
+The main bridge owns one concrete worker handle. Each accepted `START` carries
+only the repository and immutable canonical additional-exclusion array;
+`STOP` is unchanged. Textarea edits alone do nothing. New Analyze actions are
+coalesced to the latest captured pair while an old generation closes. Existing
+generation and active-job guards make stale commands and messages inert.
 
 [cols="2,4,4",options="header"]
 |===
@@ -147,8 +155,9 @@ terminates the worker without cancellation semantics.
 |Phase |Reachable application data
 
 |Provider
-|Bounded projected tree evidence, one active request, one raw/hash workspace,
-and the accumulating normalised module set. Parser and WebGL resources do not
+|The captured exclusion array, bounded projected complete-tree evidence, one
+active request, one nonexcluded raw/hash workspace, and the accumulating
+normalised module set. Parser and WebGL resources do not
 exist.
 
 |Static
@@ -178,7 +187,8 @@ and legend, and opaque building visual indices is current. Camera and focus chan
 rewrite building or plate buffers.
 
 |Terminal
-|Owned facts, query/results, search and presenter listeners, inspector content,
+|Owned facts, effective-exclusion display, query/results, search and presenter
+listeners, inspector content,
 capture, frame work, buffers, parser
 handles, WebGL resources, canvas, and worker realm are released at their owning
 boundary.

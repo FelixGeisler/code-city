@@ -6,8 +6,9 @@ image::building-blocks.svg[Main-context controller and presenter with the sole p
 |===
 |Block |Location |Responsibility
 
-|UI attempt controller |Main application |Validate submitted URL shape; own the
-current attempt, the sole city-payload validator, immutable inspection snapshot,
+|UI attempt controller |Main application |Validate the submitted URL and
+complete additional-exclusion text before worker creation; atomically capture
+the canonical exclusion array; own the current attempt, the sole city-payload validator, immutable inspection snapshot,
 semantic hover and selection, exact path matching and result validation,
 traversal, contextual district derivation/precedence and inspector identity,
 generation/token/publication
@@ -18,8 +19,10 @@ validate closed, generation-tagged commands, outcomes, and lifecycle messages;
 reject stale messages
 
 |Semantic publication |Main edge |Own the native current-city path-search input,
-result buttons, their DOM listeners, and inert result-path `bdi.textContent`;
-forward only exact query and numeric canonical-index semantic callbacks
+result buttons, their DOM listeners, inert result-path `bdi.textContent`, and
+the current generation's effective fixed/additional exclusion values as one
+wrapping, bidirectionally isolated `bdi.textContent` per value; forward only
+exact query and numeric canonical-index semantic callbacks
 
 |Interactive presenter |Main edge |Own stage tokens and sessions, canvas and its DOM
 input, immutable scene-centre camera, pointer capture, request epoch, building-only
@@ -36,11 +39,14 @@ immutable head commit of the repository's default branch
 |GitHub gateway |Worker edge |Construct and perform fixed-origin anonymous
 requests; return bounded primitive evidence
 
-|Source retrieval |Worker application |Coordinate immutable tree and blob
-retrieval, verify identities, and return canonically ordered source evidence
+|Source retrieval |Worker application |Coordinate immutable tree and sequential
+blob retrieval; require complete validated tree ancestry before filtering;
+return canonically ordered nonexcluded source evidence
 
-|Admission |Worker domain |Normalise paths and content, select modules, and own
-the published Code City envelope and its limit result
+|Admission |Worker domain |Validate raw/NFC path identities, supported Git kinds,
+and explicit directory ancestry; apply fixed segment and captured exact-or-
+descendant exclusions; normalise content; select modules; and own the published
+Code City envelope and its limit result
 
 |Parser adapter |Worker edge |Validate one syntax tree and translate it into
 grammar-neutral observations
@@ -91,8 +97,10 @@ xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[ADR
 |===
 |Value |From → to |Content
 
-|Repository reference |UI → revision selection |The two non-empty URL path
-segments as inert strings
+|Captured analysis input |UI → worker bridge |The two non-empty repository URL
+path segments and one immutable, NFC, duplicate-free, unsigned-UTF-8-sorted
+additional-exclusion array. Fixed defaults and raw textarea text do not cross
+the worker boundary.
 
 |Selected revision |Revision selection → retrieval and controller |Repository
 reference and GitHub's full immutable commit ID. Before retrieval, the worker
@@ -100,9 +108,12 @@ publishes the closed interim `REVISION_SELECTED` message containing only its
 generation and revision. The controller retains it without displaying it while
 work continues.
 
-|Source evidence |GitHub gateway → retrieval |Projected tree records or one
-bounded, identity-verified, strictly decoded source text value; no provider
-object, provider URL, or raw buffer crosses this boundary
+|Source evidence |GitHub gateway → retrieval |Projected primitive provider
+records. They remain untrusted inventory until application/domain preparation
+validates every identity, kind, and ancestry before exclusion or blob reads.
+The gateway also returns one bounded, identity-verified, strictly decoded
+nonexcluded source text value; no provider object, provider URL, excluded blob
+identity, or raw buffer crosses this boundary
 
 |Admitted module |Admission → parser and metrics |Canonical path and normalised
 UTF-8 source
@@ -133,9 +144,10 @@ generation, exact publication identity, exact query snapshot, and optionally a
 numeric canonical index. Never a DOM event, fact, or browser object; query text
 never enters the presenter.
 
-|Semantic publication |Controller → DOM |One atomically committed native path
-search, reserved normal-flow contextual district row, canvas, selection
-inspector, and persistent noninteractive numeric complexity legend. Matching
+|Semantic publication |Controller → DOM |The current generation's effective
+fixed/additional exclusions plus one atomically committed native path search,
+reserved normal-flow contextual district row, canvas, selection inspector, and
+persistent noninteractive numeric complexity legend. Matching
 returns only canonical ordered numeric indices; semantic publication assigns
 controller-resolved district text and captured paths only to safe
 `bdi.textContent` nodes. Numeric projection does not control the contextual
@@ -154,7 +166,8 @@ pre-selection failures carry none.
 
 Concrete provider, parser, DOM, and WebGL objects remain at their edges.
 Repository paths may be published only as wrapping, bidirectionally isolated
-inspector or search-result `bdi.textContent`; approved grouped directory
+inspector, search-result, or effective-exclusion `bdi.textContent`; each
+effective fixed/additional value has its own node. Approved grouped directory
 identities may additionally be contextual-row and selected-inspector
 `bdi.textContent`. They are never markup, attributes, styles,
 object keys, shader text, URLs, resource locators, logs, or evidence. Evidence observers access geometry only

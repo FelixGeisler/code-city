@@ -121,6 +121,23 @@ test("own-data projectors reject accessors and mixed identities without consulti
   assert.deepEqual(projectTreeEvidence({ sha: ROOT40, truncated: false, tree: excluded }, ROOT40, 40), excluded.map(({ path, mode, type }) => ({ path, mode, type })));
   assert.equal(reads, 0);
 
+  const excludedSupported = accessor({ path: "excluded/a.ts", mode: "100644", type: "blob" }, "sha");
+  assert.deepEqual(projectTreeEvidence({ sha: ROOT40, truncated: false, tree: [
+    { path: "excluded", mode: "040000", type: "tree" }, excludedSupported,
+  ] }, ROOT40, 40, ["excluded"]), [
+    { path: "excluded", mode: "040000", type: "tree" },
+    { path: "excluded/a.ts", mode: "100644", type: "blob" },
+  ]);
+  assert.equal(reads, 0, "additional-excluded supported blob identity must not be inspected");
+  const fixedExcluded = accessor({ path: "node_modules/a.ts", mode: "100644", type: "blob" }, "sha");
+  assert.deepEqual(projectTreeEvidence({ sha: ROOT40, truncated: false, tree: [
+    { path: "node_modules", mode: "040000", type: "tree" }, fixedExcluded,
+  ] }, ROOT40, 40), [
+    { path: "node_modules", mode: "040000", type: "tree" },
+    { path: "node_modules/a.ts", mode: "100644", type: "blob" },
+  ]);
+  assert.equal(reads, 0, "fixed-excluded supported blob identity must not be inspected");
+
   const candidate = accessor({ path: "a.ts", mode: "100644", type: "blob" }, "sha");
   assert.deepEqual(projectTreeEvidence({ sha: ROOT40, truncated: false, tree: [candidate] }, ROOT40, 40), [
     { path: "a.ts", mode: "100644", type: "blob" },

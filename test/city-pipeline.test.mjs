@@ -38,7 +38,10 @@ function fixture(constructCity) {
     async () => ({ kind: "revision", revision: SHA }),
     {
       async loadInventory() {
-        return { kind: "inventory", entries: [{ path: "src/a.ts", mode: "100644", type: "blob", sha: SHA }] };
+        return { kind: "inventory", entries: [
+          { path: "src", mode: "040000", type: "tree" },
+          { path: "src/a.ts", mode: "100644", type: "blob", sha: SHA },
+        ] };
       },
       async readSource() { return { kind: "source", decodedSource: "x" }; },
     },

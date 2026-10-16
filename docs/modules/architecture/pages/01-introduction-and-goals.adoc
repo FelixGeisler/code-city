@@ -19,7 +19,8 @@ server claim.
 |Goal |Meaning
 
 |Deterministic
-|The same selected commit produces the same admitted modules, metrics, and city.
+|The same selected commit and captured canonical additional exclusions produce
+the same admitted modules, metrics, and city.
 
 |Safe
 |Repository content remains untrusted data and is never executed.
@@ -40,10 +41,12 @@ association; the browser remains the investigation interface.
 |Core product rules stay separate from external mechanisms.
 |===
 
-== Current implemented baseline at `9bcf7c8`
+== Current implemented baseline
 
 The current application is a static browser package with no backend,
 credentials, or persistence. It directly acquires and analyzes public GitHub
-source in the browser. Those current implementation facts are retained as
-historical baseline context; ADR 0013 supersedes their browser-only and
+source in the browser. It captures canonical additional exclusions on Analyze,
+validates complete recursive-tree ancestry, and applies fixed and captured
+exclusions before blob reads and source limits. Those current implementation
+facts are transitional context; ADR 0013 supersedes their browser-only and
 non-persistence status for the target.

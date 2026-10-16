@@ -69,6 +69,47 @@ test("provider order permutations produce the same canonical admitted order and 
   assert.deepEqual(outcomes[2], outcomes[0]);
 });
 
+test("complete validation precedes exclusions while valid excluded files are never read or counted", async () => {
+  for (const entries of [
+    [regular("excluded/missing.ts")],
+    [{ path: "excluded", mode: "120000", type: "blob" }, regular("excluded/child.ts")],
+  ]) {
+    const malformed = gateway(entries, async () => { throw new Error("excluded source must not be read"); });
+    assert.deepEqual(await retrieveAdmittedSources(
+      REPOSITORY, SHA40, new AbortController().signal, malformed.value, undefined, ["excluded"],
+    ), { kind: "failure", category: "Source admission failed", code: "M1-ADM-3" });
+    assert.deepEqual(malformed.calls, ["inventory"]);
+  }
+
+  const valid = gateway([
+    { path: "excluded", mode: "040000", type: "tree" },
+    regular("excluded/huge.ts", undefined),
+    regular("kept.ts"),
+  ], async (candidate) => {
+    assert.equal(candidate.canonicalPath, "kept.ts");
+    return { kind: "source", decodedSource: "kept" };
+  });
+  const result = await retrieveAdmittedSources(
+    REPOSITORY, SHA40, new AbortController().signal, valid.value, undefined, ["excluded"],
+  );
+  assert.equal(result.kind, "admitted");
+  assert.deepEqual(result.modules, [{ canonicalPath: "kept.ts", normalizedSource: "kept" }]);
+  assert.deepEqual(valid.calls, ["inventory", "kept.ts"]);
+});
+
+test("an excluded 4,001st supported file is neither fetched nor counted", async () => {
+  const entries = Array.from({ length: 4_001 }, (_, index) => regular(`${String(index).padStart(4, "0")}.ts`));
+  const excluded = entries.at(-1).path;
+  const fixture = gateway(entries);
+  const result = await retrieveAdmittedSources(
+    REPOSITORY, SHA40, new AbortController().signal, fixture.value, undefined, [excluded],
+  );
+  assert.equal(result.kind, "admitted");
+  assert.equal(result.modules.length, 4_000);
+  assert.equal(fixture.calls.length, 4_001);
+  assert.equal(fixture.calls.includes(excluded), false);
+});
+
 test("4,001 valid candidate mocks are read sequentially and only the admitted 4,001st triggers count limit", async () => {
   const entries = Array.from({ length: 4_001 }, (_, index) => regular(`${String(index).padStart(4, "0")}.ts`));
   let reads = 0;

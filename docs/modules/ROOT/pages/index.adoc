@@ -10,16 +10,18 @@ image::overview-flow.svg[Flow from a repository URL to a complete Code City]
 | |Code City
 
 |Input
-|One URL of an anonymously accessible public GitHub repository
+|One URL of an anonymously accessible public GitHub repository and optional
+newline-separated canonical additional exclusions
 
 |Selection
-|The repository's default-branch tip, resolved to one immutable commit
+|The captured URL and exclusions, plus the default-branch tip resolved to one
+immutable commit on Analyze
 
 |Output
 |One complete city, or one failure with no stale or partial city
 
 |Building
-|One admitted source module
+|One nonexcluded admitted source module
 
 |Dimensions
 |Height: source lines; footprint: executable units

@@ -12,8 +12,13 @@ This chapter is an index. Each concept is defined in one owning section.
 |Dependency direction, data boundaries, and inert values
 |xref:05-building-block-view.adoc[Building Block View]
 
-|Provider ingress and immutable retrieval
+|Current-browser provider ingress mechanics
 |xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
+
+|Captured exclusions and complete-tree admission policy
+|xref:requirements:source-and-metrics.adoc#CC-CORE-SRC-05[Path exclusions],
+xref:requirements:source-and-metrics.adoc#CC-CORE-SRC-06[Complete acquisition],
+and xref:05-building-block-view.adoc[Building Block View]
 
 |Deterministic source, metrics, and city rules
 |xref:requirements:source-and-metrics.adoc[Source and Metrics] and
@@ -30,7 +35,7 @@ xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
 |xref:requirements:city-and-failures.adoc[City and Failures] and
 xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
 
-|Aligned geometry and inspection, inert paths, and evidence privacy
+|Aligned geometry and inspection, inert path/exclusion publication, and evidence privacy
 |xref:05-building-block-view.adoc#data-boundaries[Data Boundaries] and
 xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
 

@@ -26,22 +26,43 @@ function accessor(record, key) {
   return copy;
 }
 
-test("command protocol is closed, own-data-only, and generation-tagged", () => {
-  const start = { type: "START", generation: 1, repository: REPOSITORY };
+test("command protocol is closed, own-data-only, generation-tagged, and carries one canonical exclusions value", () => {
+  const start = { type: "START", generation: 1, repository: REPOSITORY, additionalExclusions: ["a", "z"] };
   const stop = { type: "STOP", generation: 1 };
-  assert.deepEqual(parseWorkerCommand(start), start);
+  const parsed = parseWorkerCommand(start);
+  assert.deepEqual(parsed, start);
+  assert.equal(Object.isFrozen(parsed.additionalExclusions), true);
+  assert.deepEqual(parseWorkerCommand({ ...start, generation: 99 }), { ...start, generation: 99 }, "valid older values have no parser-visible age");
   assert.deepEqual(parseWorkerCommand(stop), stop);
+
+  const sparse = new Array(1);
+  const accessorArray = [];
+  Object.defineProperty(accessorArray, "0", { enumerable: true, get: () => "a" });
+  accessorArray.length = 1;
+  const extraArray = ["a"];
+  extraArray.extra = true;
+  const symbolArray = ["a"];
+  symbolArray[Symbol("extra")] = true;
+  const customPrototype = ["a"];
+  Object.setPrototypeOf(customPrototype, Object.create(Array.prototype));
 
   for (const invalid of [
     null, [], { ...start, extra: true }, { type: "UNKNOWN", generation: 1 },
-    { type: "START", generation: 0, repository: REPOSITORY },
-    { type: "START", generation: 1.5, repository: REPOSITORY },
-    { type: "START", generation: 1, repository: { owner: "owner" } },
-    { type: "START", generation: 1, repository: { ...REPOSITORY, extra: true } },
-    inherited(start), accessor(start, "type"), accessor(start, "generation"),
+    { type: "START", generation: 0, repository: REPOSITORY, additionalExclusions: [] },
+    { type: "START", generation: 1.5, repository: REPOSITORY, additionalExclusions: [] },
+    { type: "START", generation: 1, repository: REPOSITORY },
+    { type: "START", generation: 1, repository: { owner: "owner" }, additionalExclusions: [] },
+    { type: "START", generation: 1, repository: { ...REPOSITORY, extra: true }, additionalExclusions: [] },
+    { ...stop, additionalExclusions: [] },
+    inherited(start), accessor(start, "type"), accessor(start, "generation"), accessor(start, "additionalExclusions"),
     new Proxy(start, { getPrototypeOf() { throw new Error("trap"); } }),
     { ...start, repository: inherited(REPOSITORY) },
     { ...start, repository: accessor(REPOSITORY, "owner") },
+    { ...start, additionalExclusions: sparse }, { ...start, additionalExclusions: accessorArray },
+    { ...start, additionalExclusions: extraArray }, { ...start, additionalExclusions: symbolArray },
+    { ...start, additionalExclusions: customPrototype }, { ...start, additionalExclusions: ["a", "a"] },
+    { ...start, additionalExclusions: ["z", "a"] }, { ...start, additionalExclusions: ["/a"] },
+    { ...start, additionalExclusions: ["cafe\u0301"] }, { ...start, additionalExclusions: [1] },
   ]) {
     assert.equal(parseWorkerCommand(invalid), undefined);
   }
@@ -212,7 +233,10 @@ test("complete admission crosses only the closed static barrier and retains no p
     return { kind: "revision", revision: SHA };
   }, {
     async loadInventory() {
-      return { kind: "inventory", entries: [{ path: "src/a.ts", mode: "100644", type: "blob", sha: SHA }] };
+      return { kind: "inventory", entries: [
+        { path: "src", mode: "040000", type: "tree" },
+        { path: "src/a.ts", mode: "100644", type: "blob", sha: SHA },
+      ] };
     },
     async readSource() { return { kind: "source", decodedSource: "const value = 1;" }; },
   }, (message) => messages.push(message));

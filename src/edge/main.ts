@@ -13,8 +13,11 @@ function requiredElement<T extends Element>(selector: string): T {
 
 const form = requiredElement<HTMLFormElement>("form");
 const input = requiredElement<HTMLInputElement>("input[name=repository]");
+const additionalExclusions = requiredElement<HTMLTextAreaElement>("textarea[name=additional-exclusions]");
 const feedback = requiredElement<HTMLElement>("[data-feedback]");
 const status = requiredElement<HTMLElement>("[data-status]");
+const effectiveExclusions = requiredElement<HTMLElement>("[data-effective-exclusions]");
+const effectiveExclusionValues = requiredElement<HTMLUListElement>("[data-effective-exclusion-values]");
 const commit = requiredElement<HTMLOutputElement>("[data-commit]");
 const cityPublication = requiredElement<HTMLElement>("[data-city-publication]");
 const city = requiredElement<HTMLElement>("[data-city]");
@@ -39,10 +42,23 @@ const view: AttemptView = {
   clear() {
     feedback.textContent = "";
     status.replaceChildren();
+    effectiveExclusionValues.replaceChildren();
+    effectiveExclusions.hidden = true;
     commit.textContent = "";
   },
   invalid() {
     feedback.textContent = "Invalid input";
+  },
+  effectiveExclusions(values) {
+    const items = values.map((value) => {
+      const item = document.createElement("li");
+      const isolated = document.createElement("bdi");
+      isolated.textContent = value;
+      item.append(isolated);
+      return item;
+    });
+    effectiveExclusionValues.replaceChildren(...items);
+    effectiveExclusions.hidden = false;
   },
   working(cancel) {
     replaceStatus("Working", cancel);
@@ -134,6 +150,6 @@ const controller = createMainController(createWorkerTransport, view, (hooks) => 
 });
 form.addEventListener("submit", (event) => {
   event.preventDefault();
-  controller.submit(input.value);
+  controller.submit(input.value, additionalExclusions.value);
 });
 window.addEventListener("pagehide", () => controller.dispose(), { once: true });
