@@ -29,7 +29,7 @@ Code City must analyze a selected source revision and support shared saved inves
 
 Choose server computation and retained snapshots. The server owns source acquisition for the selected immutable revision, analysis, and the authoritative association between source, results, and optional saved investigations. The browser owns presentation and investigation, including on-demand viewing of the exact analyzed source.
 
-This supersedes ADR 0002's browser-only runtime and non-persistence decisions. Retain ADR 0002 as the historical decision.
+This supersedes ADR 0002's browser-only runtime and non-persistence decisions. ADR 0002 remains available in Git history.
 
 == Rationale
 

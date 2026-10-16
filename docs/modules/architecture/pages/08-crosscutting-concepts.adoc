@@ -7,8 +7,7 @@
 |Dependency direction
 |Domain is independent; application coordinates domain and capabilities; edge
 adapts GitHub, worker, parser, DOM, and WebGL APIs.
-|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
-`src/domain/`, `src/application/`, `src/edge/`
+|`src/domain/`, `src/application/`, `src/edge/`
 
 |Untrusted source and input
 |Provider projection is not trust. Complete raw ancestry, canonical identity,
@@ -54,8 +53,7 @@ state and clean them up idempotently.
 |The canonical build is rebuilt for reproducibility, audited over HTTP, bound
 to a manifest and publication record, and deployed as one Pages artifact.
 Production observation runs only when workflow eligibility permits it.
-|xref:07-deployment-view.adoc[Deployment View],
-xref:adr/0010-canonical-artifact-manifest-and-publication-evidence-contract.adoc[ADR 0010]
+|xref:07-deployment-view.adoc[Deployment View]
 |===
 
 The accepted target must preserve these concerns while moving analysis authority

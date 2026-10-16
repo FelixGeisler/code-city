@@ -21,10 +21,9 @@ the security audit, and runs `npm run verify`. It does not publish.
 
 On a push to `main`, the `Publish` workflow repeats verification, creates the
 canonical package and publication record, uploads the reviewed Pages artifact,
-and deploys that artifact. The package manifest and
-xref:adr/0010-canonical-artifact-manifest-and-publication-evidence-contract.adoc[ADR 0010]
-own artifact identity and publication evidence; tool versions remain in the
-package and lock files.
+and deploys that artifact. The package manifest and publication tooling own
+artifact identity and publication evidence; tool versions remain in the package
+and lock files.
 
 The workflow's production-evidence job is conditional on its explicit issue-
 state eligibility check. When eligible, the collector verifies deployment and
