@@ -1,52 +1,51 @@
-= 1. Introduction and Goals
+= Introduction and Goals
 
-Code City turns one public GitHub repository into a deterministic 3D city of
-its JavaScript, TypeScript, and C# modules.
+Code City turns source facts from one immutable public GitHub revision into an
+interactive city. This architecture describes two different states and never
+treats one as the other:
 
-== Approved target ownership
+* **Current implementation** is the browser-only application evidenced at
+  commit `38e620c915866394ca4967f418eec9d3f6ec979b`.
+* **Accepted target** is the server-owned analysis and saved-investigation
+  boundary in xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
+  and the xref:requirements:index.adoc[product requirements]. It is not yet
+  implemented.
 
-Accepted xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
-assigns source acquisition, analysis, and the authoritative association of
-source, results, and optional saved investigations to the Code City server. The
-browser owns presentation and investigation, including on-demand viewing of the
-exact analyzed source. This is the approved target boundary, not an implemented
-server claim.
+No server platform, API, storage, access mechanism, or target deployment has
+been selected. Those are **unresolved design** areas.
 
 == Architecture goals
 
 [cols="1,3",options="header"]
 |===
-|Goal |Meaning
+|Goal |Architectural response
 
-|Deterministic
-|The same selected commit and captured canonical additional exclusions produce
-the same admitted modules, metrics, and city.
+|Reliable source identity
+|Select one immutable revision, validate complete source inventory evidence,
+and keep stale attempts from publishing.
 
-|Safe
-|Repository content remains untrusted data and is never executed.
+|Deterministic analysis
+|Keep product algorithms in the domain, isolate provider and browser details at
+the edge, and apply the requirement-owned admission and metric rules.
 
-|Atomic
-|The user sees one complete current city or no city; Save creates a new complete
-snapshot or none.
+|Safe presentation
+|Treat repository content and worker messages as untrusted until validated,
+then publish one aligned, source-free city atomically.
 
-|Bounded
-|Source, processing, and rendering stay within the published envelope and
-finite provider safeguards.
+|Understandable evolution
+|Describe the running browser system directly and show the accepted target as a
+separate responsibility boundary, not as an amendment sequence.
 
-|Authoritative association
-|The target server owns acquisition, analysis, and the retained source-result
-association; the browser remains the investigation interface.
-
-|Understandable
-|Core product rules stay separate from external mechanisms.
+|Verifiable delivery
+|Build one reproducible static package and bind publication evidence to that
+package and commit.
 |===
 
-== Current implemented baseline
+== Reading guide
 
-The current application is a static browser package with no backend,
-credentials, or persistence. It directly acquires and analyzes public GitHub
-source in the browser. It captures canonical additional exclusions on Analyze,
-validates complete recursive-tree ancestry, and applies fixed and captured
-exclusions before blob reads and source limits. Those current implementation
-facts are transitional context; ADR 0013 supersedes their browser-only and
-non-persistence status for the target.
+Chapters 3 through 7 explain context, components, runtime, and deployment.
+Chapter 8 indexes policies that cross those views. Chapter 9 links the decision
+records; the records remain the authority for rationale and history. Product
+algorithms, limits, controls, failures, and saved-investigation behavior remain
+in xref:requirements:source-and-metrics.adoc[Source and Metrics] and
+xref:requirements:city-and-failures.adoc[City and Failures].

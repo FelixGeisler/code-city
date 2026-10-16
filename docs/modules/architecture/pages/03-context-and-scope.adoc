@@ -1,76 +1,57 @@
-= 3. Context and Scope
+= Context and Scope
 
-== Current implemented context
+== Current system context
 
-The diagram and table in this section describe the current browser-only,
-static-hosted, direct-provider system. They do not describe an implemented
-server.
+image::context.svg[Code City current context and accepted unimplemented target boundary]
 
-image::context.svg[Current Code City browser system context]
+A user supplies a public GitHub repository URL and optional exact path
+exclusions to a static application served by GitHub Pages. The browser obtains
+package assets from Pages and repository metadata and source from GitHub. No
+Code City server participates in the current analysis.
 
 [cols="1,2,2",options="header"]
 |===
-|Participant |Sends |Receives
+|Party |Sends to Code City |Receives from Code City
 
 |User
-|Repository URL, additional exclusions, Analyze, cancel, reload, and canvas or
-keyboard interaction
-|State, selected commit, failure, navigable city, or selected-building inspector
+|Repository URL, additional exclusions, explicit Analyze/Cancel and interaction
+commands
+|Status, selected commit, effective exclusions, city, path search, metric
+inspection, and browser-session interaction
 
 |GitHub Pages
-|Static application assets
-|No repository or product data
+|Static package bytes
+|Package requests made by the browser
 
 |Public GitHub
-|Default-branch head identity, complete recursive tree, and nonexcluded source
-bytes
-|Anonymous browser requests for one selected revision
-
-|Code City browser
-|Anonymous GitHub requests
-|Untrusted provider data and source bytes
+|Provider responses to anonymous reads; no credentials or repository writes
+|Fixed-route requests for revision, commit, recursive tree, and encoded raw-file
+retrieval
 |===
 
-=== Current boundaries
+=== Current trust boundaries
 
-* The repository URL and complete additional-exclusion text cross a logical
-  trust boundary into the UI. Both validate before worker creation; Analyze
-  captures one immutable canonical pair for its generation.
-* Repository data crosses a second logical trust boundary from Public GitHub
-  into the processing worker.
-* Same-origin main/worker transport is a lifecycle boundary, not a trust
-  crossing or security sandbox.
-* Complete raw and canonical tree identity, kind, and ancestry validate before
-  exclusion or blob reads. Fixed and captured additional exclusions are domain
-  policy in the transitional worker.
-* The worker sends only one bounded, source-free, aligned geometry-and-inspection
-  result to the main context.
-* The controller independently reconstructs numeric plate data and aligned
-  semantic district descriptors from validated facts and geometry. Only plate
-  cells, plate-inclusive scene bounds, and centre cross to the presenter;
-  directory identities and paths do not.
-* The controller owns semantic hover, selection, district-name derivation and
-  precedence, inert contextual-row text, and inert inspector text. The presenter
-  owns browser input, WebGL, and the retained numeric district projection. It
-  sends generation-tagged building events and one closed numeric projection
-  snapshot through the captured-token gate; that snapshot does not control
-  contextual label visibility or layout. Plates and the contextual row have no
-  picking identity.
-* No product data is sent to GitHub Pages after the static application loads.
-* The current baseline has no backend, database, relay, telemetry service, or
-  second provider.
+The shipped package is trusted only after build and package verification.
+GitHub responses, repository paths, source bytes, worker messages, and browser
+input cross validation boundaries. Provider projection in `src/edge/` removes
+unneeded response shape but does not make data trusted. The application and
+domain layers still validate immutable identities, complete raw ancestry,
+canonical paths, kinds, content, and the source-free city payload before
+publication.
 
-== Approved target context
+Repository text reaches parsers as data. Canonical paths reach only inert UI
+text and validated controller facts; source does not cross back from the worker
+in the current result. The exact current failure and privacy rules are owned by
+xref:requirements:city-and-failures.adoc[City and Failures].
 
-Accepted xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
-introduces a Code City server boundary. The server receives an explicit public-
-repository analysis request, acquires the selected immutable revision, analyzes
-the complete eligible dataset, and owns the authoritative source-result
-association and optional immutable saved investigations. The browser receives
-presentation and investigation data and requests exact analyzed source on
-demand.
+== Accepted target context
 
-Repository and user inputs remain untrusted at every boundary. Server platform,
-API, storage, admission mechanism, deployment, and recursive presentation
-mechanics remain unresolved. This target context does not claim that those
-components exist today.
+The accepted target inserts a Code City server as the authority for acquisition,
+analysis, retained source-result association, and saved investigations. The
+browser becomes the presentation and investigation client, including exact
+analyzed-source viewing. This is a responsibility boundary only: there is no
+implemented server and no selected transport, API, storage, access mechanism,
+or deployment topology.
+
+The target trust boundaries for retained source, users, and server operations
+cannot be drawn until those unresolved choices are approved.

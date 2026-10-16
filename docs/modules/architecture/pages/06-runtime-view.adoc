@@ -1,199 +1,59 @@
-= 6. Runtime View
+= Runtime View
 
-image::runtime.svg[Successful aligned city validation, staging, commit, and interaction flow]
+== Current Analyze attempt
 
-== Successful attempt
+image::runtime.svg[Current browser analysis and atomic publication sequence]
 
-. On Analyze, validate the repository and complete additional-exclusion text
-  before worker creation; atomically capture the canonical sorted array, revoke
-  publication rights, clear semantic state, dispose any previous presenter
-  session, display this generation's fixed and additional effective exclusions,
-  and start one worker generation.
-. Resolve the default-branch head, retain its closed `REVISION_SELECTED` value,
-  validate the complete recursive tree's raw/NFC identities, supported kinds,
-  and explicit raw directory ancestry, then filter exclusions and retrieve one
-  complete admitted source set sequentially.
-. Release every GitHub request, reader, provider object, raw buffer, and hash
-  workspace.
-. Initialize the parser once by eagerly loading JavaScript, TypeScript, TSX,
-  and C# in that order; parse and measure one module at a time; then build one
-  aligned `{geometry,inspection}` city.
-. Return one generation-tagged, source-free success.
-. The controller's sole validator creates non-aliasing geometry, inspection, and
-  immutable numeric-presentation snapshots--ordered plate cells,
-  plate-inclusive `sceneBounds`, and centre--plus aligned semantic district
-  descriptors.
-. Stage an interactive presenter token with a direct numeric projection
-  snapshot and detached semantic publication, recheck current-generation
-  eligibility, commit the token and its latest snapshot, apply null visual
-  state, and atomically publish the native empty search controls, reserved
-  contextual district row, and city viewport with its ordered canvas,
-  inspector, and legend. Set contextual width from the actual canvas CSS width
-  before assigning current ownership.
+. **Capture.** Analyze causes the controller to parse the repository and all
+  additional exclusions as one input snapshot. Invalid input creates no worker
+  or provider request. A valid replacement clears the old city and retires the
+  older generation.
+. **Select.** The one worker resolves the repository's then-current default-
+  branch head and publishes its full immutable commit identity.
+. **Acquire completely.** The worker requests commit and non-truncated recursive
+  tree evidence. Edge projection is provisional. Domain admission validates
+  every record's raw and canonical identity, kind, uniqueness, and every raw
+  ancestor before exclusions, suffix filtering, or content reads.
+. **Read sequentially.** Eligible blobs are fetched in canonical order, checked
+  against expected object identities, decoded, normalized, and admitted one at
+  a time. Any current content or provider failure aborts the complete attempt.
+. **Process sequentially.** After all admitted source is available, the worker
+  initializes syntax processing and derives metrics file by file, releasing
+  source and parser projections as it proceeds. Any current syntax or metric
+  failure aborts the complete attempt.
+. **Construct and transfer.** The domain builds one deterministic city. The
+  worker transfers aligned geometry and inspection facts, but no source.
+. **Publish atomically.** The controller validates the entire payload, stages
+  presenter resources and detached semantic content, rechecks generation
+  eligibility, and commits one city. A staging, commit, or current presentation
+  failure rolls the city back rather than exposing a partial result.
 
-Geometry, facts, revision, native search nodes/listeners, canvas,
-contextual district row, inspector container, persistent numeric complexity
-legend, direct projection snapshot, and empty initial query, results, hover, and
-selection publish as one
-transaction. Each stage receives one complete
-predecessor result or does not run. A failure suppresses later stages and
-publishes no partial city.
+The exact product failure mapping belongs to
+xref:requirements:city-and-failures.adoc[City and Failures].
 
-== Presenter transaction
+== Current interaction and lifetime
 
-[source,text]
-----
-presenter.stage(generation, validatedGeometry, numericPresentation, eventSink)
-  -> staged(token, canvas, snapshot) | stale | M1-PRES-1
-presenter.commit(token) -> committed(snapshot) | stale
-presenter.rollback(token) -> idempotent
-presenter.setVisualState(generation, hover, selection)
-  -> applied | stale | M1-PRES-1
-presenter.revealSelection(generation, {index, target})
-  -> applied(snapshot) | stale | M1-PRES-1
-presenter.focusCanvas(generation) -> applied | stale | M1-PRES-1
-----
+The presenter converts keyboard, pointer, wheel, resize, and context-loss input
+to generation-scoped semantic events. The controller owns search matching,
+hover and selection state, inspection facts, and safe semantic text. Current
+path-search activation selects and automatically reveals a building by moving
+the camera; ordinary canvas selection does not. There is no source view.
 
-Stage eligibility is the active, unterminated generation after
-`PROVIDER_DRAINED_STATIC_ENTERED` with an unused success slot. It is not a
-preassigned publication flag. Callback eligibility requires both the committed
-generation and presenter token. The numeric-only
-`districtProjection(generation,snapshot)` callback is gated by the same
-captured token and cannot publish during staging. Exceptions after validation
-roll back candidate and current semantic and visual state and produce
-`M1-PRES-1`; stale tokens,
-sessions, generations, callbacks, and request epochs perform cleanup only.
+Cancel aborts provider work while that work is abortable. Replacement and stale
+callbacks cannot publish. Worker completion drains provider and source
+ownership. Rollback, context loss, `pagehide`, or controller disposal removes
+listeners, semantic nodes, canvas state, worker ownership, and WebGL resources
+through idempotent cleanup.
 
-The presenter owns canvas DOM input and sends only generation-tagged semantic
-events. Semantic publication owns the native path-search controls/listeners and
-sends exact query and numeric-index callbacks through generation and publication
-identity. The controller owns matching, result validation, traversal, facts,
-inspector publication, and authoritative indices. It rejects stale generation,
-publication, query, or result values before updating semantics. Reveal sends
-only a validated numeric index/AABB-centre command to the presenter.
+== Accepted, unimplemented runtime outcomes
 
-== Worker lifecycle
+The target continues after eligible per-file text, syntax, or metric failures
+and reports each sanitized failed-file outcome. It recursively represents the
+successful hierarchy and provides a complete sortable successful-file inventory.
+Selection is shared between city and list and does not move the camera. Explicit
+unit drill-down shows exact analyzed source and owned contributions.
 
-The main bridge owns one concrete worker handle. Each accepted `START` carries
-only the repository and immutable canonical additional-exclusion array;
-`STOP` is unchanged. Textarea edits alone do nothing. New Analyze actions are
-coalesced to the latest captured pair while an old generation closes. Existing
-generation and active-job guards make stale commands and messages inert.
-
-[cols="2,4,4",options="header"]
-|===
-|Observed phase |Cancellation or replacement |Completion
-
-|Provider active
-|Revoke publication, send Stop, abort and settle GitHub work, release provider
-resources, receive `ATTEMPT_DRAINED`, then terminate and clear the worker
-|After complete admission and provider cleanup, the worker sends
-`PROVIDER_DRAINED_STATIC_ENTERED`
-
-|Static analysis
-|After receipt of `PROVIDER_DRAINED_STATIC_ENTERED`, revoke publication,
-terminate the worker immediately, and clear its handle
-|Send one terminal outcome followed by `ATTEMPT_DRAINED`; then terminate and
-clear the worker
-
-|No worker
-|Create one worker only for the latest pending submission
-|Remain idle until another submission
-|===
-
-A provider-phase terminal failure releases provider resources before sending
-its outcome and drain. A replacement starts only after the prior handle clears.
-Every message carries the bridge-generated generation. A post-selection failure
-retains the validated revision; a pre-selection failure shows none. Synchronous
-and asynchronous presentation failure retain the successful revision. Malformed
-current transport, startup failure, crash, or `messageerror` fails closed.
-Listener, transport, semantic, and presentation cleanup is exactly once.
-
-== Interaction and disposal lifecycle
-
-The complete observable lifecycle matrix is owned by
-xref:requirements:city-and-failures.adoc#_atomic_lifecycle[City and Failures].
-Camera action, resize, and Reset preserve facts, current query/results,
-selection, and selected district context; invalidate hover work and retained
-pointer coordinates; draw and project all districts from the same matrix/CSS
-dimensions; and atomically accept state before forwarding the numeric snapshot.
-The snapshot remains numeric-only and does not control contextual text or
-layout. Empty activation and Escape clear selection and inspector, exposing the
-current eligible hover context or the empty row. New or invalid submission, cancellation, current
-attempt/city/provider failure, candidate publication failure, context loss, and
-controller disposal clear facts and semantic/visual state before rollback or
-disposal. Replacement does not alter the current committed city.
-
-A current search activation synchronously invalidates hover, ends gesture and
-capture, validates and commits the reveal camera/projection and selection,
-publishes selected inspector and district context, clears search, and focuses
-the canvas. Any
-failure uses complete `M1-PRES-1` rollback; stale search callbacks are inert.
-
-The presenter uses one request epoch for frame-coalesced hover. Camera changes,
-wheel, resize, Reset, search reveal, gesture start, pointer leave, replacement,
-and disposal invalidate pending work. Navigation and gesture end/cancel never
-queue retained-coordinate hover; only fresh eligible pointer movement can use
-the existing single animation frame. Activation picks synchronously. No old
-frame, gesture, callback, or token can mutate or fail a newer generation.
-
-Presenter disposal is exactly-once and idempotent: increment the request epoch,
-cancel frame work, release pointer capture, remove pointer, wheel, keyboard,
-context-menu, context-loss, Reset, blur, visibility, `pagehide`, and resize
-listeners, delete the single trusted program, two VAOs, and four immutable
-buffers, clear building/plate staging, numeric projection state/callbacks, semantic
-label nodes and caches, camera, and visual indices, and remove the canvas. If the WebGL context is actually lost,
-the same cleanup skips all driver deletion/restoration calls while releasing
-every JavaScript owner. On `pagehide`, the controller clears
-its state first, revokes publication, terminally disposes the presenter, and
-terminates the worker without cancellation semantics.
-
-== Resource lifetime
-
-[cols="2,5",options="header"]
-|===
-|Phase |Reachable application data
-
-|Provider
-|The captured exclusion array, bounded projected complete-tree evidence, one
-active request, one nonexcluded raw/hash workspace, and the accumulating
-normalised module set. Parser and WebGL resources do not
-exist.
-
-|Static
-|No provider resource remains. The fixed parser runtime and four eagerly loaded
-grammar modules may remain for the worker lifetime; one source module, parser, tree, cursor, and
-observation stream is active at a time.
-
-|Handoff
-|Source and parser values are gone. Only selected commit and one bounded,
-source-free aligned city or terminal failure cross to the main context.
-
-|Validation
-|Only controller-owned geometry, inspection, immutable numeric presentation,
-and aligned semantic district snapshots remain. Inspection and district
-identity never enter the presenter.
-
-|Staging
-|One detached presenter candidate and detached semantic publication, including
-empty search controls and listeners, exist. They have no mutation or
-publication rights outside current identity gates.
-
-|Presentation
-|One committed presenter session with one program, two VAOs, four immutable
-buffers, two fixed instanced draws, current numeric projection snapshot,
-controller search query/results/listeners, semantic label/inspector snapshot
-and legend, and opaque building visual indices is current. Camera and focus changes never
-rewrite building or plate buffers.
-
-|Terminal
-|Owned facts, effective-exclusion display, query/results, search and presenter
-listeners, inspector content,
-capture, frame work, buffers, parser
-handles, WebGL resources, canvas, and worker realm are released at their owning
-boundary.
-|===
-
-There is no automatic retry, fallback parser or renderer, restoration, partial
-city, timeout outcome, second worker/context/canvas, or retained cross-attempt
-interaction state.
+A completed analysis remains temporary until explicit Save. Save creates a new
+immutable server-owned snapshot; reopen uses retained source and results without
+GitHub acquisition or reanalysis. These outcomes are accepted, but no request,
+transport, persistence, or cleanup flow has been designed or implemented.
