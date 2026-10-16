@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 900" role="img" aria-labelledby="title desc">
   <title id="title">Code City building blocks</title>
-  <desc id="desc">The browser main context contains the worker bridge, semantic UI attempt controller, and interactive WebGL presenter. The controller validates one aligned city, keeps district names in controller-owned semantic DOM, supplies the presenter only NumericPresentation data, consumes direct staged and committed numeric projection snapshots, and accepts current generation-and-token-gated numeric projection callbacks. One processing worker runs a vertical pipeline from revision selection through aligned city construction.</desc>
+  <desc id="desc">The browser main context captures repository and additional exclusions, publishes their effective values, and contains the worker bridge, semantic UI attempt controller, and interactive WebGL presenter. The controller validates one aligned city, keeps district names in controller-owned semantic DOM, supplies the presenter only NumericPresentation data, consumes direct staged and committed numeric projection snapshots, and accepts current generation-and-token-gated numeric projection callbacks. One processing worker runs a vertical pipeline from revision selection through aligned city construction.</desc>
   <defs>
     <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 Z" fill="#475569"/></marker>
   </defs>
@@ -45,16 +45,16 @@
   <text class="text" x="260" y="332">coordinator</text>
 
   <line class="both" x1="260" y1="160" x2="260" y2="275"/>
-  <text class="small" x="340" y="218">commands / outcomes</text>
+  <text class="small" x="340" y="208">START(repository, exclusions)</text><text class="small" x="340" y="228">outcomes / STOP</text>
 
   <rect class="app" x="80" y="380" width="360" height="60" rx="8"/>
   <text class="text" x="260" y="417">1 · Revision selection</text>
 
   <rect class="app" x="80" y="460" width="360" height="60" rx="8"/>
-  <text class="text" x="260" y="497">2 · Source retrieval</text>
+  <text class="text" x="260" y="487">2 · Complete tree</text><text class="text" x="260" y="508">+ source retrieval</text>
 
   <rect class="domain" x="80" y="540" width="360" height="60" rx="8"/>
-  <text class="text" x="260" y="577">3 · Admission</text>
+  <text class="text" x="260" y="567">3 · Exclusions</text><text class="text" x="260" y="588">+ admission</text>
 
   <rect class="edge" x="80" y="620" width="360" height="60" rx="8"/>
   <text class="text" x="260" y="657">4 · Parser adapter</text>

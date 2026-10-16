@@ -5,13 +5,24 @@
 |Term |Meaning
 
 |Attempt
-|Work started by one submitted repository URL.
+|Work started by one Analyze action for an atomically captured repository and
+canonical additional-exclusion array.
+
+|Effective exclusions
+|The fixed case-sensitive segment rules, in policy order, followed by the
+captured canonical additional paths in unsigned UTF-8 order.
+
+|Complete tree
+|Projected recursive inventory in which every record has valid unique raw and
+NFC-canonical identity and supported kind, and every proper raw ancestor exists
+as its own directory-tree record.
 
 |Selected revision
 |The immutable commit at the head of GitHub's default branch when submitted.
 
 |Admitted module
-|One supported, valid source file included in the selected revision's complete source set.
+|One supported, valid, nonexcluded source file included in the selected
+revision's complete source set.
 
 |Core
 |Product policy and application coordination independent from external mechanisms.

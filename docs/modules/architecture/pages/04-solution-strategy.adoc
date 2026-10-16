@@ -7,8 +7,9 @@
 |Strategy |Approach
 
 |Stable input
-|Resolve the repository's default branch only on Analyze or Reanalyze and bind
-one complete analysis to its immutable commit.
+|Capture the repository and validated canonical additional exclusions only on
+Analyze or Reanalyze, resolve the default branch then, and bind one complete
+analysis to that captured pair and immutable commit.
 
 |Server authority
 |The server owns source acquisition, analysis, and the authoritative association
@@ -24,8 +25,10 @@ investigation in the browser.
 of external mechanism APIs.
 
 |Bounded processing
-|Apply fixed exclusions and published limits, require complete acquisition, and
-then continue across individually unsupported or unanalyzable files.
+|Validate complete recursive-tree raw/canonical identity, kind, and ancestry;
+then apply fixed and captured additional exclusions before blob reads and the
+published source limits; then continue across individually unsupported or
+unanalyzable files.
 
 |Fixed syntax and mapping
 |Retain pinned Tree-sitter grammars and the fixed globally bounded visual
@@ -40,15 +43,16 @@ Runtime, API, storage, access, deletion, backup, ingress, deployment, recursive
 presentation, and portable-interchange mechanics remain unresolved. The target
 strategy does not claim an implemented or deployed server.
 
-== Current implemented strategy at `9bcf7c8`
+== Current implemented strategy
 
-The current static browser package resolves the default branch on submit, uses
+The current static browser package validates and captures the repository and
+additional exclusions on Analyze, resolves the default branch, uses
 one ordered worker pipeline with explicit limits, accesses anonymous GitHub REST
 and raw content directly, uses pinned Tree-sitter WebAssembly grammars, builds a
 renderer-neutral city, presents it with browser-native WebGL2, and atomically
 publishes only the current complete attempt. Direct provider access,
 browser-owned analysis, two-segment grouping, and session-only results are
-current implementation details rather than the approved target ownership and
+current transitional implementation details rather than the approved target ownership and
 persistence strategy.
 
 The architecture prefers explicit, single-purpose parts over speculative

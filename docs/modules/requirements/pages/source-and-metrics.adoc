@@ -5,8 +5,8 @@
 The requirements in this section are the approved target. The detailed language
 and metric rules later on this page are the single authoritative algorithms for
 both the current implementation and the initial server-owned target. Current
-browser acquisition and whole-attempt parser behavior remain implementation
-facts at `9bcf7c8`; they are not the approved ownership or failure target.
+browser acquisition and whole-attempt parser behavior remain transitional
+implementation facts; they are not the approved ownership or failure target.
 
 [[CC-CORE-SRC-01]]
 === Public repository input
@@ -45,16 +45,26 @@ generators, or hooks.
 Before analysis, exclude these case-sensitive directory segments at any depth:
 `node_modules`, `dist`, `build`, `bin`, and `obj`. Additional exclusions are
 newline-separated canonical repository-relative paths without glob or regular-
-expression syntax; each excludes itself and descendants. Reject duplicate or
-invalid entries before provider work and retain and display the effective set.
+expression syntax; each excludes an exact match and descendants on a `/`
+boundary. LF, CRLF, and CR separate lines; empty lines are ignored, but a
+nonempty line is neither trimmed nor normalized. Require well-formed NFC and
+the canonical path rules, preserve case and ordinary spaces, and reject exact
+case-sensitive duplicates before worker creation or provider work. The Analyze
+action captures and unsigned-UTF-8-sorts this array. Retain and display the
+fixed rules in the order above followed by the captured additional paths.
 Do not infer generated or third-party status from content, and do not exclude
 `packages` by name.
 
 [[CC-CORE-SRC-06]]
 === Complete acquisition
 
-Failure to establish the immutable revision or acquire its complete eligible
-dataset publishes no partial city. Individual supported files may fail only
+Before exclusions, suffix filtering, or blob reads, validate every recursive-
+tree record's raw and NFC-canonical identity, uniqueness, supported Git kind,
+and complete raw ancestry. Every slash-delimited proper raw ancestor must be a
+separate directory (`040000`/`tree`) record; never synthesize one. A missing or
+non-directory ancestor fails complete acquisition. Failure to establish the
+immutable revision or acquire its complete eligible dataset publishes no
+partial city. Individual supported files may fail only
 after complete acquisition under the per-file policy in
 xref:city-and-failures.adoc#target-failures[Target failures].
 
@@ -141,10 +151,15 @@ by unsigned UTF-8 bytes.
 |Compare the final suffix ASCII case-insensitively with `.js`, `.jsx`, `.mjs`,
 `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, or `.cs`.
 
-|Kind
-|After the approved path exclusions, admit regular files. Skip directories,
-links, submodules and their descendants, and unsupported suffixes. Apply no
-additional inferred vendor or generated-content exclusion.
+|Kind and ancestry
+|Before filtering, accept only regular blob, directory tree, symbolic-link
+blob, and submodule commit records, and require every proper raw ancestor as an
+explicit directory-tree record. Missing ancestors and regular files, links,
+submodules, or other kinds in an ancestor position fail complete admission.
+After complete validation, apply fixed and additional exclusions, then admit
+supported regular files and skip directories, links, submodules, and
+unsupported suffixes. Apply no additional inferred vendor or generated-content
+exclusion.
 
 |Content
 |Decode strict UTF-8, remove one leading BOM, reject NUL, convert CRLF and CR
@@ -155,7 +170,8 @@ to LF, and perform no other transformation. Empty content is valid.
 == Supported processing envelope
 
 These are Code City limits, not copies of GitHub limits. All maxima are
-inclusive.
+inclusive and apply only to nonexcluded supported regular files. Directory
+records have no product count limit.
 
 [cols="2,1",options="header"]
 |===

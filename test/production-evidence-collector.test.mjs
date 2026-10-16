@@ -160,6 +160,18 @@ function commitUrl(repository, revision) { return `https://api.github.com/repos/
 function treeUrl(repository, root) { return `https://api.github.com/repos/${repository}/git/trees/${root}?recursive=1`; }
 function rawUrl(repository, revision, sourcePath) { return `https://raw.githubusercontent.com/${repository}/${revision}/${sourcePath}`; }
 
+function completePositiveTree(entries) {
+  const paths = new Set(entries.map(({ path: entryPath }) => entryPath));
+  const parents = new Map();
+  for (const { path: entryPath } of entries) {
+    for (let slash = entryPath.lastIndexOf("/"); slash >= 0; slash = entryPath.lastIndexOf("/", slash - 1)) {
+      const parent = entryPath.slice(0, slash);
+      if (!paths.has(parent)) parents.set(parent, { path: parent, mode: "040000", type: "tree" });
+    }
+  }
+  return [...parents.values(), ...entries];
+}
+
 function candidates() {
   let runningAggregate = 0;
   return Array.from({ length: 4001 }, (_, offset) => {
@@ -295,21 +307,28 @@ test("bounded response reader accepts its boundary and rejects boundary plus one
   await assert.rejects(readBoundedResponseBody(response(Uint8Array.of(1, 2, 3, 4)), 3), /exceeds cap/u);
 });
 
-test("independent candidate projection applies regular-kind, boundary, suffix, NFC, and unsigned UTF-8 order", () => {
-  const entries = [
+test("independent candidate projection applies complete ancestry, fixed exclusions, suffix, NFC, and unsigned UTF-8 order", () => {
+  const entries = completePositiveTree([
     { path: "z.TS", mode: "100644", type: "blob", sha: BLOB },
-    { path: "vendor", mode: "160000", type: "commit", sha: BLOB },
-    { path: "vendor/ignored.ts", mode: "nonsense", type: "nonsense" },
+    { path: "node_modules/ignored.ts", mode: "100644", type: "blob", sha: BLOB },
+    { path: "src/nested.ts", mode: "100644", type: "blob", sha: BLOB },
     { path: "a.jsx", mode: "100755", type: "blob", sha: BLOB },
     { path: "readme.md", mode: "100644", type: "blob", sha: BLOB },
     { path: "é.mjs", mode: "100644", type: "blob", sha: BLOB },
-  ];
-  assert.deepEqual(projectSourceCandidates(entries, 40).map(({ canonicalPath }) => canonicalPath), ["a.jsx", "z.TS", "é.mjs"]);
+  ]);
+  assert.deepEqual(projectSourceCandidates(entries, 40).map(({ canonicalPath }) => canonicalPath), ["a.jsx", "src/nested.ts", "z.TS", "é.mjs"]);
   assert.throws(() => projectSourceCandidates([], 40), /no supported/u);
   assert.throws(() => projectSourceCandidates([
     { path: "café.ts", mode: "100644", type: "blob", sha: BLOB },
     { path: "café.ts", mode: "100644", type: "blob", sha: BLOB },
   ], 40), /invalid tree entry/u);
+  assert.throws(() => projectSourceCandidates([
+    { path: "missing/a.ts", mode: "100644", type: "blob", sha: BLOB },
+  ], 40), /ancestry is incomplete/u);
+  assert.throws(() => projectSourceCandidates([
+    { path: "link", mode: "120000", type: "blob" },
+    { path: "link/a.ts", mode: "100644", type: "blob", sha: BLOB },
+  ], 40), /ancestry is incomplete/u);
 });
 
 test("Git blob and strict normalization facts are exact and bounded-view model digest includes count", () => {
@@ -1117,7 +1136,7 @@ test("tree projection closes provider records, rejects proxies, and retains no p
     path: "src/a.ts", mode: "100644", type: "blob", sha: BLOB,
     get url() { unrelatedReads += 1; throw new Error("provider locator must not be read"); },
   };
-  const [candidate] = projectSourceCandidates([provider], 40, Infinity);
+  const [candidate] = projectSourceCandidates(completePositiveTree([provider]), 40, Infinity);
   assert.deepEqual(Object.keys(candidate), ["rawPath", "canonicalPath", "mode", "type", "blobId"]);
   assert(Object.isFrozen(candidate));
   assert.equal(unrelatedReads, 0);
@@ -1126,7 +1145,7 @@ test("tree projection closes provider records, rejects proxies, and retains no p
   assert.deepEqual(candidate, {
     rawPath: "src/a.ts", canonicalPath: "src/a.ts", mode: "100644", type: "blob", blobId: BLOB,
   });
-  assert.throws(() => projectSourceCandidates([new Proxy(provider, {})], 40), /invalid tree entry/u);
+  assert.throws(() => projectSourceCandidates(completePositiveTree([new Proxy(provider, {})]), 40), /invalid tree entry/u);
   assert(!Object.values(candidate).includes(provider));
 });
 
@@ -1587,7 +1606,7 @@ function browserStageRequest(stage) {
   };
   return {
     url: treeUrl("FelixGeisler/code-city", ROOT),
-    body: JSON.stringify({ sha: ROOT, truncated: false, tree: [{ path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB }] }),
+    body: JSON.stringify({ sha: ROOT, truncated: false, tree: completePositiveTree([{ path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB }]) }),
   };
 }
 
@@ -1629,9 +1648,9 @@ function generatedStageFixture(stage) {
   };
   if (stage === "tree") return {
     url: treeUrl("FelixGeisler/code-city", ROOT),
-    body: JSON.stringify({ sha: ROOT, truncated: false, tree: [
+    body: JSON.stringify({ sha: ROOT, truncated: false, tree: completePositiveTree([
       { path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB },
-    ] }),
+    ]) }),
   };
   return { url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), body: "x" };
 }
@@ -4790,7 +4809,7 @@ test("each native CDP revision, commit, tree, and raw route rejects boundary plu
         if (overflowStage === "tree") overflow("overflow-tree", treeUrl("FelixGeisler/code-city", ROOT), RESPONSE_CAPS.tree);
         else {
           await complete("tree", "ok-tree", treeUrl("FelixGeisler/code-city", ROOT), JSON.stringify({
-            sha: ROOT, truncated: false, tree: [{ path: "src/a.ts", mode: "100644", type: "blob", sha: blob }],
+            sha: ROOT, truncated: false, tree: completePositiveTree([{ path: "src/a.ts", mode: "100644", type: "blob", sha: blob }]),
           }));
           overflow("overflow-raw", rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), RESPONSE_CAPS.raw);
         }
@@ -6420,9 +6439,9 @@ test("full collector orchestration correlates page preflight and GET ExtraInfo w
       await waitForBodyCalls(harness, 2);
       await emitBrowserGet(harness, {
         requestId: "orchestration-tree", url: treeUrl("FelixGeisler/code-city", ROOT),
-        body: JSON.stringify({ sha: ROOT, truncated: false, tree: [
+        body: JSON.stringify({ sha: ROOT, truncated: false, tree: completePositiveTree([
           { path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB },
-        ] }),
+        ]) }),
       });
       await waitForBodyCalls(harness, 3);
       const raw = rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts");
@@ -7202,7 +7221,7 @@ test("native smoke tree, zero-candidate, identity, hash, UTF-8, NUL, and content
           : JSON.stringify({
             sha: kind === "identity" ? "9".repeat(40) : ROOT,
             truncated: kind === "truncated",
-            tree: kind === "zero" ? [] : rawEntries,
+            tree: kind === "zero" ? [] : completePositiveTree(rawEntries),
           });
         await emitBrowserGet(harness, {
           requestId: `${kind}-tree`, url: treeUrl("FelixGeisler/code-city", ROOT), body: treeBody,
@@ -7427,9 +7446,9 @@ test("a mismatched smoke SUCCESS revision becomes a schema-valid handled smoke f
   });
   await emitBrowserGet(harness, {
     requestId: "smoke-tree", url: treeUrl("FelixGeisler/code-city", ROOT),
-    body: JSON.stringify({ sha: ROOT, truncated: false, tree: [{
+    body: JSON.stringify({ sha: ROOT, truncated: false, tree: completePositiveTree([{
       path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB,
-    }] }),
+    }]) }),
   });
   await emitBrowserGet(harness, {
     requestId: "smoke-raw", url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), body: "x",
@@ -7510,7 +7529,7 @@ test("controlled smoke enables page and worker Network and correlates split GET 
   const blob = computeGitBlobId(source, 40);
   await emitBrowserGet(opened.harness, {
     requestId: "smoke-tree", url: treeUrl("FelixGeisler/code-city", ROOT),
-    body: `${JSON.stringify({ sha: ROOT, truncated: false, tree: [{ path: "src/a.ts", mode: "100644", type: "blob", sha: blob }] })}\n`,
+    body: `${JSON.stringify({ sha: ROOT, truncated: false, tree: completePositiveTree([{ path: "src/a.ts", mode: "100644", type: "blob", sha: blob }]) })}\n`,
   });
   await emitBrowserGet(opened.harness, {
     requestId: "smoke-raw", url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), body: "x",

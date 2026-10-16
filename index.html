@@ -85,9 +85,15 @@ SOFTWARE.
         <label for="repository">GitHub repository URL</label>
         <p data-supported-languages>Supported languages: JavaScript, TypeScript, and C#.</p>
         <input id="repository" name="repository" type="text" inputmode="url" autocomplete="off" spellcheck="false">
-        <button type="submit">Submit</button>
+        <label for="additional-exclusions">Additional exclusions</label>
+        <textarea id="additional-exclusions" name="additional-exclusions" rows="4" autocomplete="off" spellcheck="false"></textarea>
+        <button type="submit">Analyze</button>
         <p data-feedback role="alert" aria-live="polite"></p>
       </form>
+    </section>
+    <section data-effective-exclusions aria-live="polite" hidden>
+      <h2>Effective exclusions</h2>
+      <ul data-effective-exclusion-values></ul>
     </section>
     <section data-status aria-live="polite"></section>
     <output data-commit aria-live="polite"></output>

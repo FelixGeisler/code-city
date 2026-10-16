@@ -336,6 +336,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.equal((indexHtml.match(/<form\b/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/<input\b/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/<button\b/gi) ?? []).length, 2);
+  assert.equal((indexHtml.match(/<textarea\b/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/\sdata-form(?:\s|>)/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/\sdata-status(?:\s|>)/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/\sdata-commit(?:\s|>)/gi) ?? []).length, 1);
@@ -343,7 +344,9 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.equal((indexHtml.match(/\sdata-city-reset(?:\s|>)/gi) ?? []).length, 1);
   assert.match(indexHtml, /<p id="city-navigation-instructions">[^<]+<\/p>/i);
   assert.match(indexHtml, /<button data-city-reset type="button">Reset view<\/button>/i);
-  assert.doesNotMatch(indexHtml, /<(?:select|textarea|canvas)\b/i);
+  assert.doesNotMatch(indexHtml, /<(?:select|canvas)\b/i);
+  assert.match(indexHtml, /<label\s+for="additional-exclusions">Additional exclusions<\/label>/);
+  assert.match(indexHtml, /<button type="submit">Analyze<\/button>/);
 
   const formTag = indexHtml.match(/<form\b[^>]*>/i)?.[0];
   const inputTag = indexHtml.match(/<input\b[^>]*>/i)?.[0];
@@ -362,7 +365,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   const workerSource = await readText("src/edge/processing-worker.ts");
   assert.match(mainSource, /from "\.\/processing-worker\.ts\?worker&url"/);
   assert.match(mainSource, /new Worker\(processingWorkerUrl, \{ type: "module" \}\)/);
-  assert.match(mainSource, /form\.addEventListener\("submit", \(event\) => \{\s*event\.preventDefault\(\);\s*controller\.submit\(input\.value\);\s*\}\);/);
+  assert.match(mainSource, /form\.addEventListener\("submit", \(event\) => \{\s*event\.preventDefault\(\);\s*controller\.submit\(input\.value, additionalExclusions\.value\);\s*\}\);/);
   assert.match(mainSource, /replaceStatus\("Working", cancel\)/);
   assert.match(mainSource, /commit\.textContent = revision/);
   assert.match(mainSource, /window\.addEventListener\("pagehide", \(\) => controller\.dispose\(\), \{ once: true \}\)/);

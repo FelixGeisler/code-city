@@ -12,6 +12,7 @@ import {
 } from "./source-retrieval";
 
 type ActiveAttempt = {
+  additionalExclusions: readonly string[];
   city?: City;
   controller?: AbortController;
   drained: boolean;
@@ -38,7 +39,7 @@ export type CityConstructionCapability = (facts: readonly ModuleComplexityFact[]
 type SuccessfulPreparation = Readonly<{ revision: string; city: City }>;
 
 export type WorkerAttemptPipeline = Readonly<{
-  start(repository: RepositoryReference, generation: number): void;
+  start(repository: RepositoryReference, generation: number, additionalExclusions?: readonly string[]): void;
   stop(generation: number): void;
   ownership(): AttemptOwnership;
 }>;
@@ -137,6 +138,7 @@ export function createWorkerAttemptPipeline(
       controller.signal,
       sourceGateway,
       observeRetrieval,
+      attempt.additionalExclusions,
     );
     if (attempt.stopped || retrieval.kind === "cancelled") {
       drain(attempt);
@@ -166,6 +168,7 @@ export function createWorkerAttemptPipeline(
 
     const revision = retrieval.selected;
     attempt.phase = "static";
+    attempt.additionalExclusions = Object.freeze([]);
     attempt.repository = undefined;
     attempt.controller = undefined;
     attempt.selectedRevision = revision;
@@ -179,6 +182,7 @@ export function createWorkerAttemptPipeline(
     }
     attempt.drained = true;
     attempt.controller = undefined;
+    attempt.additionalExclusions = Object.freeze([]);
     attempt.repository = undefined;
     attempt.city = undefined;
     attempt.selectedRevision = undefined;
@@ -213,11 +217,16 @@ export function createWorkerAttemptPipeline(
     }
   }
 
-  function start(repository: RepositoryReference, generation: number): void {
+  function start(
+    repository: RepositoryReference,
+    generation: number,
+    additionalExclusions: readonly string[] = Object.freeze([]),
+  ): void {
     if (active) {
       return;
     }
     const attempt: ActiveAttempt = {
+      additionalExclusions: Object.freeze([...additionalExclusions]),
       controller: new AbortController(),
       drained: false,
       generation,

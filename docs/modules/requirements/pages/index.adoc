@@ -4,8 +4,8 @@
 
 The `CC-CORE-*` references in this module define the approved whole-core target.
 They do not claim that the whole target is implemented. Features without
-repository and test evidence remain unimplemented. The current application at
-commit `9bcf7c8` is the browser-only baseline described below.
+repository and test evidence remain unimplemented. The current application is the transitional browser-only baseline described
+below.
 
 The target accepts one public GitHub repository, records one immutable default-
 branch commit on an explicit analysis action, and produces a deterministic city
@@ -21,7 +21,7 @@ Accepted xref:architecture:adr/0013-ownership-of-source-acquisition-analysis-and
 fixes the ownership boundary. It does not select a server platform, API, storage
 technology, access mechanism, or deployment topology.
 
-== Current implemented baseline at `9bcf7c8`
+== Current implemented baseline
 
 The currently implemented product is a static browser application with no
 server runtime or persistence. The following describes current behavior, not
@@ -52,26 +52,38 @@ Failures]
 
 === Current input
 
-Accepted form: `https://github.com/<owner>/<repository>`
+Repository form: `https://github.com/<owner>/<repository>`
 
-* Ignore surrounding spaces, tabs, and line breaks.
+* Ignore surrounding spaces, tabs, and line breaks around the repository URL.
 * Require HTTPS, the `github.com` host, and exactly two non-empty path segments.
 * Reject credentials, a port, query, fragment, trailing slash, encoded path, or
   extra path segment.
+* Additional exclusions are optional newline-separated canonical
+  repository-relative paths. LF, CRLF, and CR separate lines; empty lines are
+  ignored; nonempty lines are neither trimmed nor normalized. Paths must be
+  well-formed NFC, preserve ordinary spaces, contain no control characters,
+  and satisfy the canonical path rules in xref:source-and-metrics.adoc[Source
+  and Metrics]. Exact case-sensitive duplicates are invalid. Accepted paths
+  sort by unsigned UTF-8 for the captured attempt.
 
-Invalid input starts no GitHub request.
+Only Analyze starts work. Invalid repository or exclusion input starts no
+worker and no GitHub request. Editing either field without Analyze starts
+nothing and cannot change an active, queued, or completed attempt.
 
 === Current selected revision
 
-On submit, the browser resolves the current head commit of GitHub's default
+On Analyze, the browser atomically captures the repository and validated
+additional exclusions, then resolves the current head commit of GitHub's default
 branch and processes only that immutable commit. It shows the full commit ID
 with the result. Movement of the branch after selection does not change the
 current attempt. A new submission resolves the head again.
 
 === Current user-visible behavior
 
-. Before submission, the page shows the repository URL input.
-. After submission, any previous result disappears. The page shows that Code
+. Before Analyze, the page shows the repository URL and Additional exclusions
+  inputs.
+. After Analyze, any previous result disappears. The page shows the captured
+  fixed and additional effective exclusions as exact inert text, shows that Code
   City is working and offers Cancel.
 . On success, the page shows the selected commit ID and one complete city.
   Users can navigate it, identify a hovered building's district in one stable
@@ -83,7 +95,7 @@ current attempt. A new submission resolves the head again.
   commit ID when one was selected.
 . After cancellation, the page shows a cancellation message and no city.
 
-Submitting another repository starts over. Results from an older or cancelled
+Analyzing another captured repository/exclusion pair starts over. Results from an older or cancelled
 submission must never appear. The current implementation has no timeout,
 automatic retry, or fallback.
 

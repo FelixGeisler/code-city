@@ -43,6 +43,18 @@ function invariant(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function completePositiveTree(entries) {
+  const paths = new Set(entries.map(({ path: entryPath }) => entryPath));
+  const parents = new Map();
+  for (const { path: entryPath } of entries) {
+    for (let slash = entryPath.lastIndexOf("/"); slash >= 0; slash = entryPath.lastIndexOf("/", slash - 1)) {
+      const parent = entryPath.slice(0, slash);
+      if (!paths.has(parent)) parents.set(parent, { path: parent, mode: "040000", type: "tree" });
+    }
+  }
+  return [...parents.values(), ...entries];
+}
+
 function exactKeys(value, keys, label) {
   invariant(value && typeof value === "object" && !Array.isArray(value), `${label} is not an object`);
   assert.deepEqual(Object.keys(value), keys, `${label} key order/shape changed`);
@@ -465,7 +477,12 @@ function pageObservationSource() {
         });
       }
       postMessage(command, transfer) {
-        this.__codeCityWorkerRecord.posts.push({ type: command?.type, generation: command?.generation });
+        this.__codeCityWorkerRecord.posts.push({
+          type: command?.type,
+          generation: command?.generation,
+          keys: command && typeof command === "object" ? Object.keys(command) : [],
+          additionalExclusions: Array.isArray(command?.additionalExclusions) ? [...command.additionalExclusions] : null,
+        });
         return transfer === undefined ? nativePost.call(this, command) : nativePost.call(this, command, transfer);
       }
       addEventListener(type, listener, options) {
@@ -651,7 +668,9 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
   const bodies = new Map([
     [revisionUrl, JSON.stringify([{ sha: fixture.selected }])],
     [commitUrl, JSON.stringify({ sha: fixture.selected, tree: { sha: fixture.root } })],
-    [treeUrl, JSON.stringify({ sha: fixture.root, truncated: false, tree: [{ path: fixture.path, mode: "100644", type: "blob", sha: fixture.blob }] })],
+    [treeUrl, JSON.stringify({ sha: fixture.root, truncated: false, tree: completePositiveTree([
+      { path: fixture.path, mode: "100644", type: "blob", sha: fixture.blob },
+    ]) })],
     [rawUrl, rawSourceBytes],
   ]);
   const gets = [];
@@ -798,12 +817,17 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await cdp.send("Page.navigate", { url: `${origin}/code-city/index.html` }, sessionId);
     await waitFor("document.readyState==='complete'&&document.querySelector('form')&&globalThis.__codeCitySuccessEvidence", "canonical package startup");
 
-    const submit = `document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();true`;
+    const exclusionFixture = ["node_modules", "dist", "build", "bin", "obj", "<img src=x>", "\u202Eadverse"];
+    const additionalExclusionText = "\u202Eadverse\n<img src=x>";
+    const submit = `document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('textarea[name=additional-exclusions]').value=${JSON.stringify(additionalExclusionText)};document.querySelector('form').requestSubmit();true`;
     await evaluate(submit);
     const first = await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===1`, "first successful city");
     invariant(first === true, "First successful package run did not publish");
 
-    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,labels:document.querySelectorAll('[data-district-context]').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,legends:document.querySelectorAll('[data-city] [data-palette-legend]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
+    const editOnly = await evaluate(`document.querySelector('textarea[name=additional-exclusions]').value='edited-only';({workers:globalThis.__codeCitySuccessEvidence.workers.length,messages:globalThis.__codeCitySuccessEvidence.messages.length,commit:document.querySelector('[data-commit]').textContent,effective:[...document.querySelectorAll('[data-effective-exclusion-values] bdi')].map(node=>node.textContent)})`);
+    assert.deepEqual(editOnly, { workers: 1, messages: 1, commit: fixture.selected, effective: exclusionFixture });
+
+    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('textarea[name=additional-exclusions]').value=${JSON.stringify(additionalExclusionText)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,labels:document.querySelectorAll('[data-district-context]').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,legends:document.querySelectorAll('[data-city] [data-palette-legend]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
     assert.equal(cleared.commit, "");
     assert.equal(cleared.canvases, 0);
     assert.equal(cleared.labels, 0);
@@ -1005,7 +1029,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {draws:context.draws.length-${navigationStart.draws},selectionFocusDraws:context.selectionFocusDraws.length-${navigationStart.selectionFocusDraws},hoverFocusDraws:context.hoverFocusDraws.length-${navigationStart.hoverFocusDraws},matrices:context.matrices.slice(${navigationStart.matrices}),selectionFocusMatrices:context.selectionFocusMatrices.slice(${navigationStart.selectionFocusMatrices}),hoverFocusMatrices:context.hoverFocusMatrices.slice(${navigationStart.hoverFocusMatrices}),subUploads:context.subUploads.length-${navigationStart.subUploads},uploads:context.uploads.map(bytes=>bytes.length),events:Object.fromEntries(Object.entries(globalThis.__navigationEvidence).map(([key,value])=>[key,value.slice(${JSON.stringify(navigationStart.eventCounts)}[key])])),canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,selectionAfterCameraResizeReset:{hidden:inspector.hidden,path:inspector.querySelector('[data-canonical-path]').textContent,sourceLines:inspector.querySelector('[data-source-lines]').textContent,range:inspector.querySelector('[data-selected-range]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent}}; })()`);
 
     const observed = await evaluate("globalThis.__codeCitySuccessEvidence");
-    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,contextRows:document.querySelectorAll('[data-district-context]').length,contextLabels:document.querySelectorAll('[data-district-context-label]').length,contextTextSafe:[...document.querySelectorAll('[data-district-context-label] bdi')].length===1&&document.querySelector('[data-district-context-label] bdi').textContent==='src',inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorHidden:document.querySelector('[data-inspector]')?.hidden,pathTag:document.querySelector('[data-canonical-path]')?.tagName,legendItems:document.querySelectorAll('[data-palette-legend] li').length,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName),publicationOrder:[...document.querySelector('[data-city-publication]').children].map(node=>node.matches('[data-path-search]')?'search':node.matches('[data-district-context]')?'context':node.matches('[data-city]')?'city':'other')})");
+    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,textareas:document.querySelectorAll('textarea[name=additional-exclusions]').length,submit:document.querySelector('form button[type=submit]').textContent,effectiveHidden:document.querySelector('[data-effective-exclusions]').hidden,effectiveValues:[...document.querySelectorAll('[data-effective-exclusion-values] bdi')].map(node=>node.textContent),effectiveTags:[...document.querySelectorAll('[data-effective-exclusion-values] bdi')].map(node=>node.tagName),effectiveMarkupChildren:document.querySelector('[data-effective-exclusion-values]').querySelectorAll('img').length,effectiveStyles:[...document.querySelectorAll('[data-effective-exclusion-values] bdi')].map(node=>({overflowWrap:getComputedStyle(node).overflowWrap,unicodeBidi:getComputedStyle(node).unicodeBidi})),commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,contextRows:document.querySelectorAll('[data-district-context]').length,contextLabels:document.querySelectorAll('[data-district-context-label]').length,contextTextSafe:[...document.querySelectorAll('[data-district-context-label] bdi')].length===1&&document.querySelector('[data-district-context-label] bdi').textContent==='src',inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorHidden:document.querySelector('[data-inspector]')?.hidden,pathTag:document.querySelector('[data-canonical-path]')?.tagName,legendItems:document.querySelectorAll('[data-palette-legend] li').length,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName),publicationOrder:[...document.querySelector('[data-city-publication]').children].map(node=>node.matches('[data-path-search]')?'search':node.matches('[data-district-context]')?'context':node.matches('[data-city]')?'city':'other')})");
 
     invariant(failures.length === 0, `Production success instrumentation failed: ${failures.map(String).join("; ")}`);
     invariant(browserExceptions.length === 0, `Production browser exceptions: ${browserExceptions.join("; ")}`);
@@ -1021,7 +1045,12 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(observed.liveWorkers, 0);
     assert.equal(observed.workers.length, 2);
     for (const [index, worker] of observed.workers.entries()) {
-      assert.deepEqual(worker.posts, [{ type: "START", generation: index + 1 }]);
+      assert.deepEqual(worker.posts, [{
+        type: "START",
+        generation: index + 1,
+        keys: ["type", "generation", "repository", "additionalExclusions"],
+        additionalExclusions: ["<img src=x>", "\u202Eadverse"],
+      }]);
       assert.deepEqual(worker.listenerAdds, ["message", "error", "messageerror"]);
       assert.deepEqual(worker.listenerRemoves, ["message", "error", "messageerror"]);
       assert.equal(worker.terminateCalls, 1);
@@ -1189,7 +1218,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert(navigation.events.pointers.some(({ type, target, defaultPrevented }) => type === "pointerdown" && target !== "CANVAS" && !defaultPrevented));
     assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target === "CANVAS" && defaultPrevented));
     assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target !== "CANVAS" && !defaultPrevented));
-    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, contextRows: 1, contextLabels: 1, contextTextSafe: true, inspectors: 1, inspectorHidden: false, pathTag: "BDI", legendItems: 6, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview. Use the arrow keys to traverse buildings, Home or End to select the first or last building, and Escape to clear selection.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION", "SECTION"], publicationOrder: ["search", "context", "city"] });
+    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, textareas: 1, submit: "Analyze", effectiveHidden: false, effectiveValues: exclusionFixture, effectiveTags: exclusionFixture.map(() => "BDI"), effectiveMarkupChildren: 0, effectiveStyles: exclusionFixture.map(() => ({ overflowWrap: "anywhere", unicodeBidi: "isolate" })), commit: fixture.selected, canvases: 1, contextRows: 1, contextLabels: 1, contextTextSafe: true, inspectors: 1, inspectorHidden: false, pathTag: "BDI", legendItems: 6, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview. Use the arrow keys to traverse buildings, Home or End to select the first or last building, and Escape to clear selection.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION", "SECTION"], publicationOrder: ["search", "context", "city"] });
 
     const layouts = [];
     for (const expected of [
@@ -1291,7 +1320,12 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(pagehide.canvases, 0);
     assert.equal(pagehide.workers.length, 3);
     assert.deepEqual(pagehide.workers[2], {
-      posts: [{ type: "START", generation: 3 }],
+      posts: [{
+        type: "START",
+        generation: 3,
+        keys: ["type", "generation", "repository", "additionalExclusions"],
+        additionalExclusions: ["<img src=x>", "\u202Eadverse"],
+      }],
       listenerAdds: ["message", "error", "messageerror"],
       listenerRemoves: ["message", "error", "messageerror"],
       terminateCalls: 1,
@@ -1355,7 +1389,7 @@ async function checkCSharpAdmissionPath({ cdp, sessionId, origin, manifest, requ
     const routes = [
       { identity: `${label}:revision`, url: revisionUrl, contentType: "application/json; charset=utf-8", body: Buffer.from(JSON.stringify([{ sha: attempt.selected }]), "utf8") },
       { identity: `${label}:commit`, url: commitUrl, contentType: "application/json; charset=utf-8", body: Buffer.from(JSON.stringify({ sha: attempt.selected, tree: { sha: attempt.root } }), "utf8") },
-      { identity: `${label}:tree`, url: treeUrl, contentType: "application/json; charset=utf-8", body: Buffer.from(JSON.stringify({ sha: attempt.root, truncated: false, tree: attempt.modules.map((module, index) => ({ path: module.path, mode: "100644", type: "blob", sha: sources[index].sha })) }), "utf8") },
+      { identity: `${label}:tree`, url: treeUrl, contentType: "application/json; charset=utf-8", body: Buffer.from(JSON.stringify({ sha: attempt.root, truncated: false, tree: completePositiveTree(attempt.modules.map((module, index) => ({ path: module.path, mode: "100644", type: "blob", sha: sources[index].sha }))) }), "utf8") },
       ...sources.map(({ identity, url, rawBytes }) => ({ identity, url, contentType: "text/plain; charset=utf-8", body: rawBytes })),
     ];
     for (const route of routes) {
@@ -1539,7 +1573,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
   const bodies = new Map([
     [revisionUrl, JSON.stringify([{ sha: selected }])],
     [commitUrl, JSON.stringify({ sha: selected, tree: { sha: root } })],
-    [treeUrl, JSON.stringify({ sha: root, truncated: false, tree: rawRecords.map(({ path: sourcePath, sha }) => ({ path: sourcePath, mode: "100644", type: "blob", sha })) })],
+    [treeUrl, JSON.stringify({ sha: root, truncated: false, tree: completePositiveTree(rawRecords.map(({ path: sourcePath, sha }) => ({ path: sourcePath, mode: "100644", type: "blob", sha }))) })],
     ...rawRecords.map(({ url, content }) => [url, content]),
   ]);
   const gets = [];
