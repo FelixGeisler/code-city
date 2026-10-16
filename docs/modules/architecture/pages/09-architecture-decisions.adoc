@@ -1,79 +1,125 @@
 = Architecture Decisions
 
 Decision records own rationale, alternatives, status, and amendment history.
-This page is a reading index, not a replacement decision record.
+This page presents the architecture by theme, then preserves a complete history
+index. It does not replace or change any decision record.
 
-== Current core choices
+== Current architecture by theme
 
-[cols="1,1,3",options="header"]
-|===
-|Record |Status |Current architectural relevance
+=== Dependency and policy ownership
 
-|xref:adr/0001-core-dependency-boundary.adoc[0001]
-|Accepted
-|Dependency direction isolates domain, application, and edge concerns.
+Domain policy remains independent from provider and browser mechanisms;
+application code coordinates capabilities; edge code adapts GitHub, worker,
+parser, DOM, and WebGL APIs. xref:adr/0001-core-dependency-boundary.adoc[ADR 0001]
+and xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+own these boundaries.
 
-|xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[0003]
-|Accepted
-|Defines current core responsibilities and capability boundaries.
+=== Static application and source analysis
 
-|xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[0004]
-|Accepted
-|Defines the static TypeScript browser shell and build approach.
+The current system is a framework-free TypeScript browser application. One
+worker resolves an immutable public GitHub revision, validates bounded source
+evidence, and performs static syntax analysis with pinned WebAssembly grammars.
+The related records are xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005],
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006],
+and xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
+ADR 0007's xref:adr/0007-static-syntax-evidence-appendix.adoc[evidence appendix]
+records its qualification evidence.
 
-|xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[0005]
-|Accepted
-|Defines current anonymous default-branch head selection.
+=== Numeric city presentation and interaction
 
-|xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[0006]
-|Accepted
-|Defines current immutable GitHub source retrieval.
+The browser constructs and validates bounded numeric city geometry, then uses a
+direct WebGL2 presenter with fixed trusted shaders. Controller-owned state keeps
+geometry, semantic inspection, search, interaction, and cleanup aligned. This
+theme is governed by xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008],
+xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011], and
+xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[ADR 0012].
 
-|xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[0007]
-|Accepted
-|Defines pinned static syntax analysis. See its
-xref:adr/0007-static-syntax-evidence-appendix.adoc[evidence appendix].
+=== Release authority and evidence
 
-|xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[0008]
-|Accepted
-|Defines browser-native WebGL2 city presentation.
+Protected `main` is the only publishing line. A canonical package, manifest,
+publication record, and eligible production observation bind reviewed content
+to release evidence. xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009]
+and xref:adr/0010-canonical-artifact-manifest-and-publication-evidence-contract.adoc[ADR 0010]
+own these choices.
 
-|xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[0011]
-|Accepted
-|Defines current interactive navigation and inspection behavior.
-
-|xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[0012]
-|Accepted
-|Defines current bounded grouping, shading, search, and presentation policy.
-|===
-
-== Ownership target
+=== Accepted server authority
 
 xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
-is **Accepted**. It assigns acquisition, analysis, retained source-result
-association, and saved investigations to a server, with presentation and
-investigation in the browser. It does not select the server, API, storage,
-access, or deployment mechanism. The target remains unimplemented.
+assigns acquisition, analysis, retained source-result association, and saved
+investigations to a server, while the browser owns presentation and
+investigation. This accepted target is unimplemented and does not select the
+server, API, storage, access, security, or deployment mechanism.
 
-xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
-is **Superseded by ADR 0013**. It remains the historical record for the
-browser-only runtime and non-persistence choice that the current implementation
-still exhibits. Supersession does not make the current server target implemented.
+ADR 0013 supersedes only the browser-only runtime and non-persistence decisions
+in xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
+The current implementation still exhibits that historical browser-only shape.
 
-== Delivery and publication history
+== Original decision record history
 
-[cols="1,1,3",options="header"]
+The records remain independently authoritative and retain the statuses shown in
+their source files.
+
+[cols="1,2,2",options="header"]
 |===
-|Record |Status |Scope
+|Record |Recorded status |Historical subject
 
-|xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[0009]
+|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001]
 |Accepted
-|Records main-line and GitHub Pages cutover policy.
+|Core dependency boundary
 
-|xref:adr/0010-canonical-artifact-manifest-and-publication-evidence-contract.adoc[0010]
+|xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+|Superseded by ADR 0013
+|Browser-only runtime and non-persistence baseline
+
+|xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
 |Accepted
-|Defines canonical package, publication, and production-evidence bindings.
+|Core responsibilities and conceptual ports
+
+|xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+|Accepted
+|Framework-free TypeScript shell and Vite build
+
+|xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005]
+|Accepted
+|Anonymous default-branch head resolution
+
+|xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
+|Accepted
+|Bounded immutable source retrieval
+
+|xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+|Accepted
+|Pinned Tree-sitter static syntax
+
+|xref:adr/0007-static-syntax-evidence-appendix.adoc[ADR 0007 evidence appendix]
+|Evidence appendix; not a separate decision
+|Qualification evidence for ADR 0007
+
+|xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+|Accepted
+|Browser-native WebGL2 presentation
+
+|xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009]
+|Accepted
+|Main-line and GitHub Pages cutover
+
+|xref:adr/0010-canonical-artifact-manifest-and-publication-evidence-contract.adoc[ADR 0010]
+|Accepted
+|Artifact and publication evidence contract
+
+|xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
+|Accepted
+|Interactive navigation and inspection
+
+|xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[ADR 0012]
+|Accepted
+|Bounded grouped and shaded city presentation
+
+|xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
+|Accepted
+|Server authority and saved-investigation ownership target
 |===
 
-All records other than ADR 0002 retain their recorded **Accepted** status.
-Grouping them here neither revokes nor supersedes still-applicable policy.
+Grouping the records by theme does not revoke, demote, renumber, or supersede
+any still-applicable decision.

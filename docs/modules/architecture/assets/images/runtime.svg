@@ -1,55 +1,62 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 820" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 1510" role="img" aria-labelledby="title desc">
   <title id="title">Current Code City analysis and publication runtime</title>
-  <desc id="desc">A left-to-right flow shows Analyze capture in the browser main context, immutable revision and complete tree acquisition in one worker, sequential source reads and normalization, sequential parsing and metrics, source-free city transfer, validation, and atomic publication. Failure, cancellation, or replacement leads to no partial city.</desc>
+  <desc id="desc">A top-to-bottom flow shows Analyze capture in the browser main context, immutable revision and complete tree acquisition in one worker, sequential source reads, parsing and metrics, source-free city transfer, controller validation and staging, and atomic publication. A separate failure box states that failure, cancellation, replacement, or a stale generation produces no partial city.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#334155"/></marker>
-    <style>.main{fill:#e0f2fe;stroke:#0369a1;stroke-width:2}.worker{fill:#ecfdf5;stroke:#047857;stroke-width:2}.guard{fill:#f5f3ff;stroke:#6d28d9;stroke-width:2}.fail{fill:#fef2f2;stroke:#b91c1c;stroke-width:2}.line{stroke:#334155;stroke-width:2.4;fill:none;marker-end:url(#arrow)}.failLine{stroke:#b91c1c;stroke-width:2;fill:none;marker-end:url(#arrow)}.label{font:600 19px system-ui,sans-serif;fill:#0f172a}.text{font:15px system-ui,sans-serif;fill:#334155}.small{font:14px system-ui,sans-serif;fill:#475569}</style>
+    <style>
+      .main{fill:#e0f2fe;stroke:#0369a1;stroke-width:2}.worker{fill:#ecfdf5;stroke:#047857;stroke-width:2}.guard{fill:#f5f3ff;stroke:#6d28d9;stroke-width:2}.fail{fill:#fef2f2;stroke:#b91c1c;stroke-width:2}.target{fill:#fff7ed;stroke:#c2410c;stroke-width:2;stroke-dasharray:9 6}.line{stroke:#334155;stroke-width:2.5;fill:none;marker-end:url(#arrow)}.label{font:600 22px system-ui,sans-serif;fill:#0f172a}.text{font:18px system-ui,sans-serif;fill:#334155}.small{font:16px system-ui,sans-serif;fill:#475569}.targetText{fill:#9a3412}
+    </style>
   </defs>
-  <rect width="1500" height="820" fill="#fff"/>
-  <text x="45" y="42" class="label">Current runtime — one generation-scoped attempt</text>
-  <rect x="45" y="85" width="190" height="125" rx="12" class="main"/>
-  <text x="140" y="125" text-anchor="middle" class="label">1. Capture</text>
-  <text x="140" y="157" text-anchor="middle" class="text">Validate repository +</text>
-  <text x="140" y="181" text-anchor="middle" class="text">all exclusions atomically</text>
-  <rect x="285" y="85" width="190" height="125" rx="12" class="worker"/>
-  <text x="380" y="125" text-anchor="middle" class="label">2. Select</text>
-  <text x="380" y="157" text-anchor="middle" class="text">Resolve default head</text>
-  <text x="380" y="181" text-anchor="middle" class="text">to immutable commit</text>
-  <rect x="525" y="85" width="220" height="125" rx="12" class="worker"/>
-  <text x="635" y="125" text-anchor="middle" class="label">3. Validate tree</text>
-  <text x="635" y="157" text-anchor="middle" class="text">Identity, kind, uniqueness,</text>
-  <text x="635" y="181" text-anchor="middle" class="text">complete raw ancestry</text>
-  <rect x="795" y="85" width="220" height="125" rx="12" class="worker"/>
-  <text x="905" y="125" text-anchor="middle" class="label">4. Read sources</text>
-  <text x="905" y="157" text-anchor="middle" class="text">Filter after tree validation</text>
-  <text x="905" y="181" text-anchor="middle" class="text">Fetch + normalize sequentially</text>
-  <rect x="1065" y="85" width="190" height="125" rx="12" class="worker"/>
-  <text x="1160" y="125" text-anchor="middle" class="label">5. Process</text>
-  <text x="1160" y="157" text-anchor="middle" class="text">Parse + metrics</text>
-  <text x="1160" y="181" text-anchor="middle" class="text">then build city</text>
-  <rect x="1305" y="85" width="150" height="125" rx="12" class="main"/>
-  <text x="1380" y="125" text-anchor="middle" class="label">6. Transfer</text>
-  <text x="1380" y="157" text-anchor="middle" class="text">Aligned city</text>
-  <text x="1380" y="181" text-anchor="middle" class="text">No source</text>
-  <path d="M235 148 H277" class="line"/><path d="M475 148 H517" class="line"/><path d="M745 148 H787" class="line"/><path d="M1015 148 H1057" class="line"/><path d="M1255 148 H1297" class="line"/>
-  <rect x="1010" y="310" width="445" height="150" rx="12" class="guard"/>
-  <text x="1232" y="352" text-anchor="middle" class="label">7. Validate and stage</text>
-  <text x="1232" y="384" text-anchor="middle" class="text">Protocol, geometry, facts, presentation projection</text>
-  <text x="1232" y="414" text-anchor="middle" class="text">WebGL resources + detached semantic content</text>
-  <text x="1232" y="440" text-anchor="middle" class="small">Recheck current generation before each commit boundary</text>
-  <path d="M1380 210 V302" class="line"/>
-  <rect x="1010" y="535" width="445" height="145" rx="12" class="main"/>
-  <text x="1232" y="578" text-anchor="middle" class="label">8. Publish one current city</text>
-  <text x="1232" y="610" text-anchor="middle" class="text">Commit canvas, semantic UI, commit ID, search,</text>
-  <text x="1232" y="638" text-anchor="middle" class="text">interaction state, inspector, and legend together</text>
-  <path d="M1232 460 V527" class="line"/>
-  <rect x="45" y="535" width="650" height="145" rx="12" class="fail"/>
-  <text x="370" y="578" text-anchor="middle" class="label">Failure, cancellation, replacement, or stale generation</text>
-  <text x="370" y="611" text-anchor="middle" class="text">Release owned work and roll back candidate/current publication</text>
-  <text x="370" y="640" text-anchor="middle" class="text">Current file failures abort the whole attempt; no partial city</text>
-  <path d="M635 210 V500 H370 V527" class="failLine"/>
-  <path d="M905 210 V490 H405 V527" class="failLine"/>
-  <path d="M1160 210 V480 H440 V527" class="failLine"/>
-  <path d="M1010 385 H730 V607 H703" class="failLine"/>
-  <text x="45" y="755" class="small">Accepted target, not shown as a current flow: per-file continuation, source/unit drill-down, recursive hierarchy, and explicit Save/reopen.</text>
+  <rect width="820" height="1510" fill="#fff"/>
+  <text x="410" y="42" text-anchor="middle" class="label">Current runtime — one generation-scoped attempt</text>
+
+  <rect x="130" y="75" width="560" height="100" rx="12" class="main"/>
+  <text x="410" y="112" text-anchor="middle" class="label">1. Capture in main context</text>
+  <text x="410" y="143" text-anchor="middle" class="text">Validate repository and all exclusions as one snapshot</text>
+
+  <path d="M410 175 V210" class="line"/>
+  <rect x="130" y="220" width="560" height="100" rx="12" class="worker"/>
+  <text x="410" y="257" text-anchor="middle" class="label">2. Select immutable revision</text>
+  <text x="410" y="288" text-anchor="middle" class="text">Resolve the default head to a complete commit identity</text>
+
+  <path d="M410 320 V355" class="line"/>
+  <rect x="130" y="365" width="560" height="100" rx="12" class="worker"/>
+  <text x="410" y="402" text-anchor="middle" class="label">3. Validate the complete tree</text>
+  <text x="410" y="433" text-anchor="middle" class="text">Check identity, kind, uniqueness, and raw ancestry</text>
+
+  <path d="M410 465 V500" class="line"/>
+  <rect x="130" y="510" width="560" height="100" rx="12" class="worker"/>
+  <text x="410" y="547" text-anchor="middle" class="label">4. Read sources sequentially</text>
+  <text x="410" y="578" text-anchor="middle" class="text">Filter after validation; fetch, decode, normalize, admit</text>
+
+  <path d="M410 610 V645" class="line"/>
+  <rect x="130" y="655" width="560" height="100" rx="12" class="worker"/>
+  <text x="410" y="692" text-anchor="middle" class="label">5. Process sequentially</text>
+  <text x="410" y="723" text-anchor="middle" class="text">Parse, derive metrics, release source, then build the city</text>
+
+  <path d="M410 755 V790" class="line"/>
+  <rect x="130" y="800" width="560" height="100" rx="12" class="worker"/>
+  <text x="410" y="837" text-anchor="middle" class="label">6. Transfer one source-free city</text>
+  <text x="410" y="868" text-anchor="middle" class="text">Aligned geometry and inspection facts; no source text</text>
+
+  <path d="M410 900 V935" class="line"/>
+  <rect x="130" y="945" width="560" height="115" rx="12" class="guard"/>
+  <text x="410" y="982" text-anchor="middle" class="label">7. Validate and stage in main context</text>
+  <text x="410" y="1013" text-anchor="middle" class="text">Protocol, geometry, facts, WebGL resources, semantic content</text>
+  <text x="410" y="1038" text-anchor="middle" class="small">Recheck the current generation at each commit boundary</text>
+
+  <path d="M410 1060 V1095" class="line"/>
+  <rect x="130" y="1105" width="560" height="115" rx="12" class="main"/>
+  <text x="410" y="1142" text-anchor="middle" class="label">8. Publish one current city atomically</text>
+  <text x="410" y="1173" text-anchor="middle" class="text">Canvas, semantic UI, commit, search, interaction, inspector</text>
+  <text x="410" y="1198" text-anchor="middle" class="small">Presenter and semantic publication commit together</text>
+
+  <rect x="90" y="1260" width="640" height="115" rx="12" class="fail"/>
+  <text x="410" y="1297" text-anchor="middle" class="label">Any failure, cancellation, replacement, or stale generation</text>
+  <text x="410" y="1328" text-anchor="middle" class="text">Release owned work and roll back candidate/current publication</text>
+  <text x="410" y="1353" text-anchor="middle" class="small">Current file failures abort the attempt; no partial city is shown</text>
+
+  <rect x="90" y="1415" width="640" height="70" rx="10" class="target"/>
+  <text x="410" y="1444" text-anchor="middle" class="small targetText">Accepted target, not a current flow: per-file continuation, source and unit</text>
+  <text x="410" y="1469" text-anchor="middle" class="small targetText">drill-down, recursive hierarchy, and explicit Save/reopen.</text>
 </svg>

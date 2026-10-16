@@ -29,12 +29,17 @@ xref:requirements:city-and-failures.adoc[City and Failures]
 before one current publication; failure removes the complete city.
 |xref:06-runtime-view.adoc[Runtime View], `src/application/main-controller.ts`
 
-|Inert publication
-|Repository-derived values enter the UI only through validated facts and text
-nodes. They do not become markup, styles, URLs, shader input, logs, or release
-evidence.
+|Controlled publication
+|Repository source text is parsed as data inside the worker and never returns
+for presentation. A canonical path can reach validated controller facts and
+inert text nodes. In UI and rendering publication, neither source nor path text
+becomes active HTML or CSS, shader source, or a resource locator. The
+fixed-origin retrieval gateway separately encodes canonical paths when it
+constructs provider requests. The presenter uploads validated numeric geometry
+and colour data as GPU attributes to fixed trusted shaders.
 |xref:requirements:city-and-failures.adoc[Failure and privacy contract],
-`src/edge/semantic-publication.ts`
+`src/edge/github-source-gateway.ts`, `src/edge/semantic-publication.ts`,
+`src/edge/city-presenter.ts`
 
 |Resource ownership
 |The worker releases provider/source/parser ownership by phase. Presenter

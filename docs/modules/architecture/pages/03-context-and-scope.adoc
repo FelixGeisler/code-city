@@ -24,9 +24,9 @@ inspection, and browser-session interaction
 |Package requests made by the browser
 
 |Public GitHub
-|Anonymous fixed-route requests for revision, commit, recursive tree, and raw
-file content
-|Provider responses; no credentials or repository writes
+|Provider responses to anonymous reads; no credentials or repository writes
+|Fixed-route requests for revision, commit, recursive tree, and encoded raw-file
+retrieval
 |===
 
 === Current trust boundaries

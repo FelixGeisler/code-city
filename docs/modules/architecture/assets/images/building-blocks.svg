@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 860" role="img" aria-labelledby="title desc">
   <title id="title">Current Code City building blocks and accepted target responsibility boundary</title>
-  <desc id="desc">The browser main context contains semantic publication, the controller, and the WebGL presenter. One worker contains GitHub gateways, attempt orchestration, admission, parsing, metrics, and city construction. Domain policy supports both contexts. A dashed target note moves acquisition and analysis authority to an unimplemented server without choosing its design.</desc>
+  <desc id="desc">The browser main context contains semantic publication, the controller, and the WebGL presenter. Semantic and presenter interactions pass through the controller. One worker contains GitHub gateways, attempt orchestration, admission, parsing, metrics, and city construction. Domain policy supports both contexts. A dashed target note moves acquisition and analysis authority to an unimplemented server without choosing its design.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#334155"/></marker>
     <style>.frame{fill:#f8fafc;stroke:#334155;stroke-width:2}.block{fill:#e0f2fe;stroke:#0369a1;stroke-width:2}.worker{fill:#ecfdf5;stroke:#047857;stroke-width:2}.domain{fill:#f5f3ff;stroke:#6d28d9;stroke-width:2}.target{fill:#fff7ed;stroke:#c2410c;stroke-width:2;stroke-dasharray:10 7}.line{stroke:#334155;stroke-width:2.5;fill:none;marker-end:url(#arrow)}.label{font:600 21px system-ui,sans-serif;fill:#0f172a}.text{font:17px system-ui,sans-serif;fill:#334155}.small{font:15px system-ui,sans-serif;fill:#475569}.targetText{fill:#9a3412}</style>
@@ -19,7 +19,10 @@
   <text x="350" y="372" text-anchor="middle" class="label">WebGL2 presenter</text>
   <text x="350" y="404" text-anchor="middle" class="text">Camera, input, resources</text>
   <text x="350" y="432" text-anchor="middle" class="small">Staged atomic commit</text>
-  <path d="M300 202 H347" class="line"/><path d="M455 258 L390 324" class="line"/><path d="M350 330 L255 260" class="line"/>
+  <path d="M300 190 H347" class="line"/>
+  <path d="M355 220 H308" class="line"/>
+  <path d="M430 258 L375 324" class="line"/>
+  <path d="M405 324 L460 262" class="line"/>
   <rect x="760" y="75" width="595" height="485" rx="14" class="frame"/>
   <text x="790" y="115" class="label">One module worker</text>
   <rect x="810" y="150" width="225" height="120" rx="10" class="worker"/>
