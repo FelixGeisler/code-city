@@ -71,11 +71,14 @@ export function validRevision(value: unknown): value is string {
 }
 
 function repositoryReference(value: unknown): RepositoryReference | undefined {
-  const record = ownDataRecord(value, ["owner", "repository"]);
-  if (!record || typeof record.owner !== "string" || typeof record.repository !== "string") {
+  const record = ownDataRecord(value, ["owner", "repository", "branch"]);
+  if (!record
+    || typeof record.owner !== "string"
+    || typeof record.repository !== "string"
+    || (typeof record.branch !== "string" && record.branch !== null)) {
     return undefined;
   }
-  return { owner: record.owner, repository: record.repository };
+  return { owner: record.owner, repository: record.repository, branch: record.branch };
 }
 
 export function readGeneration(value: unknown): number | undefined {

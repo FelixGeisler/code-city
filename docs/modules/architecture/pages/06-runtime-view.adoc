@@ -8,15 +8,21 @@ image::runtime.svg[Current browser analysis and atomic publication sequence]
   additional exclusions as one input snapshot. Invalid input creates no worker
   or provider request. A valid replacement clears the old city and retires the
   older generation.
-. **Select.** The one worker resolves the repository's then-current default-
-  branch head and publishes its full immutable commit identity.
-. **Acquire completely.** The worker requests commit and non-truncated recursive
-  tree evidence. Edge projection is provisional. Domain admission validates
-  every record's raw and canonical identity, kind, uniqueness, and every raw
-  ancestor before exclusions, suffix filtering, or content reads.
-. **Read sequentially.** Eligible blobs are fetched in canonical order, checked
-  against expected object identities, decoded, normalized, and admitted one at
-  a time. Any current content or provider failure aborts the complete attempt.
+. **Select.** The one worker resolves the repository's then-current explicit
+  branch head, or its default-branch head when no branch was supplied, and
+  publishes the full immutable commit identity. An unavailable explicit branch
+  fails without fallback.
+. **Acquire completely.** The worker requests commit evidence by the selected
+  commit ID, validates the matching commit and same-width root tree ID, then
+  requests non-truncated recursive-tree evidence by that root tree ID. Edge
+  projection is provisional. Domain admission validates every record's raw and
+  canonical identity, kind, uniqueness, and every raw ancestor before
+  exclusions, suffix filtering, or content reads.
+. **Read sequentially.** Eligible blobs are fetched in canonical order by the
+  selected commit ID, checked against expected object identities, decoded,
+  normalized, and admitted one at a time. Branch text is not used in commit,
+  tree, or raw-source routes. Any current content or provider failure aborts the
+  complete attempt.
 . **Process sequentially.** After all admitted source is available, the worker
   initializes syntax processing and derives metrics file by file, releasing
   source and parser projections as it proceeds. Any current syntax or metric

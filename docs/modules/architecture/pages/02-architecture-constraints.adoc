@@ -6,7 +6,9 @@
   browser main context plus one module worker. It has no application server or
   persistence runtime.
 * The current provider is anonymous public GitHub. The browser resolves the
-  default-branch head and retrieves source for that immutable commit.
+  explicit branch head, or the default-branch head when no branch was supplied,
+  and retrieves source through validated immutable commit and root tree
+  identities.
 * Repository content is untrusted data. It is decoded and parsed but never
   imported, executed, built, or tested. The static package applies its manifest-
   owned content security and connection policy.

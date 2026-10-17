@@ -39,9 +39,12 @@ validation and policy to application/domain code.
 [[data-boundaries]]
 == Current data boundaries
 
-`START` carries a validated repository reference, a generation, and the
-atomically captured, sorted additional exclusions into the worker. GitHub edge
-adapters project bounded provider evidence, but application/domain preparation
+`START` carries a validated repository reference with an optional explicit
+branch, a generation, and the atomically captured, sorted additional exclusions
+into the worker. GitHub edge adapters project bounded provider evidence. After
+branch or default-head selection, commit and raw-source requests use the
+selected immutable commit ID. Commit evidence supplies a validated same-width
+root tree ID for the recursive-tree request. Application and domain preparation
 must validate the complete inventory before it is trusted or used for filtering
 and reads.
 

@@ -23,7 +23,8 @@ import {
 
 const WATCHDOG_MS = 600_000;
 const SUCCESS_FIXTURE = Object.freeze({
-  repositoryUrl: "https://github.com/code-city/evidence-fixture",
+  repositoryUrl: "https://github.com/code-city/evidence-fixture/tree/release%2Fevidence-encoded",
+  branch: "release/evidence-encoded",
   selected: "0123456789abcdef0123456789abcdef01234567",
   root: "89abcdef89abcdef89abcdef89abcdef89abcdef",
   path: "src/answer.js",
@@ -481,6 +482,7 @@ function pageObservationSource() {
           type: command?.type,
           generation: command?.generation,
           keys: command && typeof command === "object" ? Object.keys(command) : [],
+          repository: command?.repository && typeof command.repository === "object" ? { ...command.repository } : null,
           additionalExclusions: Array.isArray(command?.additionalExclusions) ? [...command.additionalExclusions] : null,
         });
         return transfer === undefined ? nativePost.call(this, command) : nativePost.call(this, command, transfer);
@@ -657,7 +659,7 @@ const WORKER_OBSERVATION_SOURCE = `(() => {
 async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests }) {
   checkStrictSourceNormalization();
   const fixture = SUCCESS_FIXTURE;
-  const revisionUrl = "https://api.github.com/repos/code-city/evidence-fixture/commits?per_page=1&page=1";
+  const revisionUrl = "https://api.github.com/repos/code-city/evidence-fixture/branches/release%2Fevidence-encoded";
   const commitUrl = `https://api.github.com/repos/code-city/evidence-fixture/git/commits/${fixture.selected}`;
   const treeUrl = `https://api.github.com/repos/code-city/evidence-fixture/git/trees/${fixture.root}?recursive=1`;
   const rawUrl = `https://raw.githubusercontent.com/code-city/evidence-fixture/${fixture.selected}/${fixture.path}`;
@@ -666,7 +668,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
   const computedNormalizedSourceSha256 = normalizedSourceDigest(rawSourceBytes);
   assert.equal(computedNormalizedSourceSha256, fixture.expectedNormalizedSourceSha256);
   const bodies = new Map([
-    [revisionUrl, JSON.stringify([{ sha: fixture.selected }])],
+    [revisionUrl, JSON.stringify({ name: fixture.branch, commit: { sha: fixture.selected } })],
     [commitUrl, JSON.stringify({ sha: fixture.selected, tree: { sha: fixture.root } })],
     [treeUrl, JSON.stringify({ sha: fixture.root, truncated: false, tree: completePositiveTree([
       { path: fixture.path, mode: "100644", type: "blob", sha: fixture.blob },
@@ -1035,6 +1037,9 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     invariant(browserExceptions.length === 0, `Production browser exceptions: ${browserExceptions.join("; ")}`);
     invariant(failedRequests.length === 0, `Production failed requests: ${failedRequests.join("; ")}`);
     assert.deepEqual(gets.map(({ url }) => url), [...urls, ...urls]);
+    assert.equal(gets.filter(({ url }) => url === revisionUrl).length, 2);
+    assert.equal(gets.some(({ url }) => url.endsWith("/commits?per_page=1&page=1")), false);
+    assert.equal(urls.slice(1).some((url) => url.includes(encodeURIComponent(fixture.branch))), false);
     assert.equal(maximumGetConcurrency, 1);
     invariant(options.length >= 3, "Native CORS preflights were not intercepted on the parent session");
     for (const apiUrl of urls.slice(0, 3)) invariant(options.some((entry) => entry.url === apiUrl), `No preflight was intercepted for ${apiUrl}`);
@@ -1049,6 +1054,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
         type: "START",
         generation: index + 1,
         keys: ["type", "generation", "repository", "additionalExclusions"],
+        repository: { owner: "code-city", repository: "evidence-fixture", branch: fixture.branch },
         additionalExclusions: ["<img src=x>", "\u202Eadverse"],
       }]);
       assert.deepEqual(worker.listenerAdds, ["message", "error", "messageerror"]);
@@ -1309,6 +1315,9 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     invariant(heldRequests.length === 1, "Page-lifecycle fixture did not hold exactly one provider request");
+    assert.equal(heldRequests[0].url, revisionUrl);
+    assert.equal(gets.filter(({ url }) => url === revisionUrl).length, 2);
+    assert.equal(gets.length, urls.length * 2);
     const beforePagehide = await evaluate("({workers:globalThis.__codeCitySuccessEvidence.workers.length,live:globalThis.__codeCitySuccessEvidence.liveWorkers,messages:globalThis.__codeCitySuccessEvidence.messages.length,canvases:document.querySelectorAll('[data-city] canvas').length,commit:document.querySelector('[data-commit]').textContent})");
     assert.deepEqual(beforePagehide, { workers: 3, live: 1, messages: 2, canvases: 0, commit: "" });
 
@@ -1324,6 +1333,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
         type: "START",
         generation: 3,
         keys: ["type", "generation", "repository", "additionalExclusions"],
+        repository: { owner: "code-city", repository: "evidence-fixture", branch: fixture.branch },
         additionalExclusions: ["<img src=x>", "\u202Eadverse"],
       }],
       listenerAdds: ["message", "error", "messageerror"],

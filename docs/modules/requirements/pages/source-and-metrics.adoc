@@ -11,18 +11,19 @@ implementation facts; they are not the approved ownership or failure target.
 [[CC-CORE-SRC-01]]
 === Public repository input
 
-Accept one anonymously accessible public GitHub repository URL. The initial
-acceptance repository is `https://github.com/FelixGeisler/code-city`. Private
-repositories, uploads, archives, local folders, other providers, and arbitrary
-refs are excluded.
+Accept one anonymously accessible public GitHub repository root URL or explicit
+`/tree/<branch-suffix>` branch link. The initial acceptance repository is
+`https://github.com/FelixGeisler/code-city`. Private repositories, uploads,
+archives, local folders, other providers, tags, commit links, and generic
+arbitrary refs are excluded.
 
 [[CC-CORE-SRC-02]]
 === Explicit immutable-revision analysis
 
 Only an explicit Analyze or Reanalyze action resolves the then-current tip of
-the default branch and records its full immutable commit ID. No selection
-event, watch, or schedule starts analysis. Later runs do not alter earlier
-results.
+the supplied branch, or the default branch when no branch was supplied, and
+records its full immutable commit ID. No selection event, watch, or schedule
+starts analysis. Later runs do not alter earlier results.
 
 [[CC-CORE-SRC-03]]
 === Server-owned acquisition and analysis

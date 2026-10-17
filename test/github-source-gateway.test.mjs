@@ -19,7 +19,7 @@ const {
   projectTreeEvidence,
 } = await import("../src/edge/github-source-gateway.ts");
 
-const REPOSITORY = { owner: "owner", repository: "repo" };
+const REPOSITORY = { owner: "owner", repository: "repo", branch: "moving/branch?ignored" };
 const SHA40 = "a".repeat(40);
 const SHA64 = "b".repeat(64);
 const ROOT40 = "c".repeat(40);
@@ -54,7 +54,7 @@ function treeApiUrl(root = ROOT40) {
   return `https://api.github.com/repos/owner/repo/git/trees/${root}?recursive=1`;
 }
 
-test("commit and tree requests are exact, sequential, identity-consistent, and primitive-projected", async () => {
+test("branch text is ignored while commit and validated root tree identities drive sequential acquisition", async () => {
   const calls = [];
   let active = 0;
   let maximumActive = 0;
@@ -198,7 +198,7 @@ test("REST evidence caps accept exact 4/8 MiB and reject the next byte independe
 });
 
 test("raw URL and request options use only local immutable values and independently encoded segments", async () => {
-  const repository = { owner: "a:b @c", repository: "repo!'()*~" };
+  const repository = { owner: "a:b @c", repository: "repo!'()*~", branch: "never/in/downstream" };
   const path = "space here/uni／code.TS";
   const bytes = encoder.encode("export {};");
   const expected = await blobId(bytes);

@@ -924,7 +924,7 @@ The approved whole core excludes:
 
 * automatic camera movement after initialization;
 * favorites, bookmarks, catalog, or account features added for them;
-* history, arbitrary refs, watching, or scheduling;
+* history, tags, commit links, generic arbitrary refs, watching, or scheduling.
 * private repositories, non-GitHub providers, uploads, archives, or local
   folders;
 * source editing or automated fixes;

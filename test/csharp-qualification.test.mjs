@@ -473,7 +473,7 @@ test("qualified error, missing, and recovery fixtures map to one complete applic
       undefined,
       parser,
     );
-    pipeline.start({ owner: "owner", repository: "repo" }, index + 1);
+    pipeline.start({ owner: "owner", repository: "repo", branch: null }, index + 1);
     const deadline = Date.now() + 10_000;
     while (!messages.some(({ type }) => type === "ATTEMPT_DRAINED") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
     assert.deepEqual(messages, [

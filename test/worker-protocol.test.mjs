@@ -12,7 +12,7 @@ const { createWorkerAttemptPipeline } = await import("../src/application/worker-
 const { createTreeSitterAdapter } = await import("../src/edge/tree-sitter-adapter.ts");
 const { buildCity } = await import("../src/domain/city-model.ts");
 
-const REPOSITORY = { owner: "owner", repository: "repo" };
+const REPOSITORY = { owner: "owner", repository: "repo", branch: null };
 const SHA = "a".repeat(40);
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -34,6 +34,8 @@ test("command protocol is closed, own-data-only, generation-tagged, and carries 
   assert.equal(Object.isFrozen(parsed.additionalExclusions), true);
   assert.deepEqual(parseWorkerCommand({ ...start, generation: 99 }), { ...start, generation: 99 }, "valid older values have no parser-visible age");
   assert.deepEqual(parseWorkerCommand(stop), stop);
+  const branchStart = { ...start, repository: { ...REPOSITORY, branch: "feature/x?#\\" } };
+  assert.deepEqual(parseWorkerCommand(branchStart), branchStart);
 
   const sparse = new Array(1);
   const accessorArray = [];
@@ -51,13 +53,15 @@ test("command protocol is closed, own-data-only, generation-tagged, and carries 
     { type: "START", generation: 0, repository: REPOSITORY, additionalExclusions: [] },
     { type: "START", generation: 1.5, repository: REPOSITORY, additionalExclusions: [] },
     { type: "START", generation: 1, repository: REPOSITORY },
-    { type: "START", generation: 1, repository: { owner: "owner" }, additionalExclusions: [] },
+    { type: "START", generation: 1, repository: { owner: "owner", repository: "repo" }, additionalExclusions: [] },
+    { type: "START", generation: 1, repository: { ...REPOSITORY, branch: 1 }, additionalExclusions: [] },
     { type: "START", generation: 1, repository: { ...REPOSITORY, extra: true }, additionalExclusions: [] },
+    { type: "START", generation: 1, repository: Object.assign({ ...REPOSITORY }, { [Symbol("extra")]: true }), additionalExclusions: [] },
     { ...stop, additionalExclusions: [] },
     inherited(start), accessor(start, "type"), accessor(start, "generation"), accessor(start, "additionalExclusions"),
     new Proxy(start, { getPrototypeOf() { throw new Error("trap"); } }),
     { ...start, repository: inherited(REPOSITORY) },
-    { ...start, repository: accessor(REPOSITORY, "owner") },
+    { ...start, repository: accessor(REPOSITORY, "owner") }, { ...start, repository: accessor(REPOSITORY, "branch") },
     { ...start, additionalExclusions: sparse }, { ...start, additionalExclusions: accessorArray },
     { ...start, additionalExclusions: extraArray }, { ...start, additionalExclusions: symbolArray },
     { ...start, additionalExclusions: customPrototype }, { ...start, additionalExclusions: ["a", "a"] },

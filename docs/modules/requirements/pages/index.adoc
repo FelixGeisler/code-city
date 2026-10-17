@@ -7,9 +7,9 @@ They do not claim that the whole target is implemented. Features without
 repository and test evidence remain unimplemented. The current application is the transitional browser-only baseline described
 below.
 
-The target accepts one public GitHub repository, records one immutable default-
-branch commit on an explicit analysis action, and produces a deterministic city
-and investigation for that commit. The Code City server owns source acquisition,
+The target accepts one public GitHub repository root or explicit branch link,
+records one immutable commit on an explicit analysis action, and produces a
+deterministic city and investigation for that commit. The Code City server owns source acquisition,
 analysis, and the authoritative association of source and results. The browser
 owns presentation and investigation. Explicit Save creates an immutable shared
 server snapshot; temporary work is not silently saved.
@@ -35,7 +35,8 @@ the complete approved target.
 |One anonymously accessible public GitHub repository
 
 |Revision
-|The current head commit of the repository's default branch
+|The current head commit of the explicit branch, or of the repository's default
+branch when no branch was supplied
 
 |Files
 |`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, and `.cs`
@@ -52,12 +53,19 @@ Failures]
 
 === Current input
 
-Repository form: `https://github.com/<owner>/<repository>`
+Repository forms:
 
-* Ignore surrounding spaces, tabs, and line breaks around the repository URL.
-* Require HTTPS, the `github.com` host, and exactly two non-empty path segments.
-* Reject credentials, a port, query, fragment, trailing slash, encoded path, or
-  extra path segment.
+* `https://github.com/<owner>/<repository>`
+* `https://github.com/<owner>/<repository>/tree/<branch-suffix>`
+
+Ignore surrounding spaces, tabs, and line breaks around the repository URL.
+Require HTTPS, the literal `github.com` host, valid owner and repository
+segments, and exactly one of the forms above. A branch link decodes its complete
+nonempty suffix once as one branch name. Reject credentials, a port, query,
+fragment, raw backslash, trailing slash, malformed encoding, empty raw or
+decoded branch components, and decoded components equal to `.` or `..`. Root
+links still reject encoded owner or repository segments and any extra path.
+Tags, commit links, blob links, and generic arbitrary refs are not accepted.
 * Additional exclusions are optional newline-separated canonical
   repository-relative paths. LF, CRLF, and CR separate lines; empty lines are
   ignored; nonempty lines are neither trimmed nor normalized. Paths must be
@@ -72,11 +80,15 @@ nothing and cannot change an active, queued, or completed attempt.
 
 === Current selected revision
 
-On Analyze, the browser atomically captures the repository and validated
-additional exclusions, then resolves the current head commit of GitHub's default
-branch and processes only that immutable commit. It shows the full commit ID
-with the result. Movement of the branch after selection does not change the
-current attempt. A new submission resolves the head again.
+On Analyze, the browser atomically captures the repository, optional explicit
+branch, and validated additional exclusions. It resolves the supplied branch
+through GitHub's branch namespace or resolves the default-branch head when no
+branch was supplied, then processes only the selected immutable commit. It shows
+the full commit ID with the result. Commit and raw-source requests use that
+commit ID. The recursive-tree request uses the root tree ID validated from
+commit evidence. Movement of the branch after selection does not change the
+current attempt. A new submission resolves the head again. An unavailable
+explicit branch fails without default-branch fallback.
 
 === Current user-visible behavior
 

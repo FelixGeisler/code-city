@@ -138,6 +138,7 @@ export async function auditCanonicalPackage() {
     invariant(remoteLiterals.includes("https://github.com/"), "Repository input policy lost its fixed literal GitHub origin");
     const fixedGatewayPatterns = [
       /^https:\/\/api\.github\.com\/repos\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/commits\?per_page=1&page=1$/,
+      /^https:\/\/api\.github\.com\/repos\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/branches\/\$\{[^{}]+\}$/,
       /^https:\/\/api\.github\.com\/repos\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/git\/commits\/\$\{[^{}]+\}$/,
       /^https:\/\/api\.github\.com\/repos\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/git\/trees\/\$\{[^{}]+\}\?recursive=1$/,
       /^https:\/\/raw\.githubusercontent\.com\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/\$\{[^{}]+\}$/,
@@ -148,7 +149,7 @@ export async function auditCanonicalPackage() {
         `Production must contain exactly one fixed gateway URL matching ${pattern}`,
       );
     }
-    invariant(remoteLiterals.length === 5, "Production contains an untracked remote URL literal");
+    invariant(remoteLiterals.length === 6, "Production contains an untracked remote URL literal");
 
     const entryHtmlBytes = await readFile(path.join(distDirectory, "index.html"));
     await assertEntryNotices(entryHtmlBytes, "Built");

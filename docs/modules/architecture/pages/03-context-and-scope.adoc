@@ -25,8 +25,8 @@ inspection, and browser-session interaction
 
 |Public GitHub
 |Provider responses to anonymous reads; no credentials or repository writes
-|Fixed-route requests for revision, commit, recursive tree, and encoded raw-file
-retrieval
+|Fixed-route requests for default or explicit branch resolution, commit,
+recursive tree, and encoded raw-file retrieval
 |===
 
 === Current trust boundaries

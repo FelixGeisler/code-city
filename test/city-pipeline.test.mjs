@@ -13,7 +13,7 @@ const { createWorkerAttemptPipeline } = await import("../src/application/worker-
 const { createSyntaxObservationWriter } = await import("../src/domain/base-metrics.ts");
 const { buildCity } = await import("../src/domain/city-model.ts");
 
-const REPOSITORY = { owner: "owner", repository: "repo" };
+const REPOSITORY = { owner: "owner", repository: "repo", branch: null };
 const SHA = "c".repeat(40);
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
