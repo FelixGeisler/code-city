@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title description">
+  <title id="title">Code City</title>
+  <desc id="description">Three isometric buildings of different heights on a shared directory plate.</desc>
+  <rect width="64" height="64" rx="12" fill="#0f172a"/>
+  <path d="M6 46 30 34 58 48 34 60Z" fill="#334155"/>
+  <path d="M26 16 36 21 36 47 26 42Z" fill="#2563eb"/>
+  <path d="M36 21 46 16 46 42 36 47Z" fill="#3b82f6"/>
+  <path d="M26 16 36 11 46 16 36 21Z" fill="#60a5fa"/>
+  <path d="M10 32 20 37 20 53 10 48Z" fill="#16a34a"/>
+  <path d="M20 37 30 32 30 48 20 53Z" fill="#22c55e"/>
+  <path d="M10 32 20 27 30 32 20 37Z" fill="#4ade80"/>
+  <path d="M34 29 44 34 44 54 34 49Z" fill="#d97706"/>
+  <path d="M44 34 54 29 54 49 44 54Z" fill="#f59e0b"/>
+  <path d="M34 29 44 24 54 29 44 34Z" fill="#fbbf24"/>
+</svg>

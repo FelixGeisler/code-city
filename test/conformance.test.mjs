@@ -211,6 +211,7 @@ test("the declared byte-fidelity attributes remain exact and effective", async (
     "test/fixtures/csharp-admission-browser.json text eol=lf",
     "package.json text eol=lf",
     "package-lock.json text eol=lf",
+    "docs/ui/img/code-city.svg text eol=lf",
     "src/domain/source-admission.ts text eol=lf",
     "src/domain/base-metrics.ts text eol=lf",
     "src/edge/tree-sitter-assets.ts text eol=lf",
