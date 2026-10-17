@@ -14,8 +14,9 @@ image::overview-flow.svg[Flow from a repository URL to a complete Code City]
 newline-separated canonical additional exclusions
 
 |Selection
-|The captured URL and exclusions, plus the default-branch tip resolved to one
-immutable commit on Analyze
+|The captured URL and exclusions, plus the explicit branch tip or, when no
+branch is supplied, the default-branch tip resolved to one immutable commit on
+Analyze
 
 |Output
 |One complete city, or one failure with no stale or partial city

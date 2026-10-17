@@ -6,11 +6,13 @@ The current implementation uses one explicit, generation-scoped pipeline:
 
 . The main controller atomically captures and validates repository input and
   additional exclusions.
-. One worker resolves the default-branch head to an immutable commit.
-. The worker obtains commit and recursive-tree evidence. Edge projection checks
-  provider response shape and completeness; domain admission then validates all
-  raw and canonical identities, kinds, uniqueness, and complete raw ancestry
-  before exclusions, suffix filtering, or blob reads.
+. One worker resolves the explicit branch head, or the default-branch head when
+  no branch was supplied, to an immutable commit.
+. The worker obtains commit evidence for that selected commit, validates its root
+  tree ID, and requests recursive-tree evidence by that root tree ID. Edge
+  projection checks provider response shape and completeness. Domain admission
+  then validates all raw and canonical identities, kinds, uniqueness, and
+  complete raw ancestry before exclusions, suffix filtering, or blob reads.
 . Eligible contents are fetched, integrity-checked, decoded, normalized, and
   admitted sequentially. Only after complete source retrieval does static
   syntax and metric processing proceed sequentially.

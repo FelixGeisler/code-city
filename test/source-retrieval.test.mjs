@@ -10,7 +10,7 @@ registerHooks({
 
 const { retrieveAdmittedSources } = await import("../src/application/source-retrieval.ts");
 
-const REPOSITORY = { owner: "owner", repository: "repo" };
+const REPOSITORY = { owner: "owner", repository: "repo", branch: null };
 const SHA40 = "a".repeat(40);
 const SHA64 = "b".repeat(64);
 const BLOB40 = "c".repeat(40);

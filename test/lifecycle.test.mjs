@@ -237,7 +237,7 @@ test("additional exclusions validate before worker creation and each Analyze cap
   assert.equal(f.transports.length, 1, "queued Analyze waits for the active provider drain");
   f.transports[0].handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
   assert.deepEqual(f.transports[1].sent[0], {
-    type: "START", generation: 2, repository: { owner: "owner", repository: "latest" }, additionalExclusions: ["latest"],
+    type: "START", generation: 2, repository: { owner: "owner", repository: "latest", branch: null }, additionalExclusions: ["latest"],
   });
   assert.deepEqual(f.presentation.exclusions.at(-1), ["node_modules", "dist", "build", "bin", "obj", "latest"]);
 });
@@ -251,9 +251,15 @@ test("one worker receives accepted unusual segments unchanged", () => {
   assert.deepEqual(f.transports[0].sent, [{
     type: "START",
     generation: 1,
-    repository: { owner: "ow\fner", repository: "re po!" },
+    repository: { owner: "ow\fner", repository: "re po!", branch: null },
     additionalExclusions: [],
   }]);
+});
+
+test("an encoded slash branch is captured once and carried unchanged to the worker", () => {
+  const f = fixture();
+  assert.equal(f.controller.submit("https://github.com/owner/repo/tree/feature%2Fx"), true);
+  assert.deepEqual(f.transports[0].sent[0].repository, { owner: "owner", repository: "repo", branch: "feature/x" });
 });
 
 test("mapped FAILURE is shown, then matching drain performs normal cleanup exactly once", () => {
@@ -863,7 +869,7 @@ test("provider-active replacement sends STOP, suppresses old failure, and starts
   assert.deepEqual(f.transports[1].sent[0], {
     type: "START",
     generation: 2,
-    repository: { owner: "owner", repository: "replacement" },
+    repository: { owner: "owner", repository: "replacement", branch: null },
     additionalExclusions: [],
   });
   assert.equal(f.maximumLiveWorkers(), 1);
@@ -896,7 +902,7 @@ test("provider replacements coalesce to only the latest repository and send STOP
   assert.equal(f.transports.length, 1);
   old.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
   assert.equal(f.transports.length, 2);
-  assert.deepEqual(f.transports[1].sent[0].repository, { owner: "owner", repository: "latest" });
+  assert.deepEqual(f.transports[1].sent[0].repository, { owner: "owner", repository: "latest", branch: null });
 });
 
 test("a raced static barrier after provider STOP clears the old worker before replacement", () => {
