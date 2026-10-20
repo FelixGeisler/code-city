@@ -1,4 +1,5 @@
 .Requirements
 * xref:index.adoc[Product]
+* xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating Policy]
 * xref:source-and-metrics.adoc[Source and Metrics]
 * xref:city-and-failures.adoc[City and Failures]
