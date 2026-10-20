@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -21,9 +22,21 @@ const files = {
   city: path.join(requirementsRoot, "pages", "city-and-failures.adoc"),
 };
 
+const adrRelativePath = "docs/modules/architecture/pages/adr/0014-standalone-server-owned-analysis-runtime.adoc";
 const adrTarget = "adr/0014-standalone-server-owned-analysis-runtime.adoc";
+const acceptedAdrSha256 = "8b475a4b9556f15d623101f1e543c43fb1112b38f910a78bc3afd2d290c2e7d3";
 const policyTarget = "standalone-m5-operating-policy.adoc";
 const compact = (value) => value.replace(/\s+/gu, " ").trim();
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+function normalizeCheckoutLineEndings(bytes) {
+  const canonical = [];
+  for (let index = 0; index < bytes.length; index += 1) {
+    if (bytes[index] === 0x0d && bytes[index + 1] === 0x0a) index += 1;
+    canonical.push(bytes[index]);
+  }
+  return Buffer.from(canonical);
+}
 
 function count(value, expected) {
   return value.split(expected).length - 1;
@@ -33,18 +46,26 @@ function assertExactlyOnce(value, expected, description) {
   assert.equal(count(value, expected), 1, description);
 }
 
-test("ADR 0014 retains the exact accepted bytes and both architecture links", async () => {
-  const [adrBytes, architectureNav, decisions] = await Promise.all([
+test("ADR 0014 retains the canonical accepted content and both architecture links", async () => {
+  const [checkoutAdrBytes, architectureNav, decisions] = await Promise.all([
     readFile(files.adr),
     readFile(files.architectureNav, "utf8"),
     readFile(files.decisions, "utf8"),
   ]);
-  const adr = adrBytes.toString("utf8");
+  const committedAdrBytes = execFileSync("git", ["show", `HEAD:${adrRelativePath}`], { cwd: projectRoot });
+  const canonicalCheckoutAdrBytes = normalizeCheckoutLineEndings(checkoutAdrBytes);
+  const adr = canonicalCheckoutAdrBytes.toString("utf8");
 
-  assert.equal(
-    createHash("sha256").update(adrBytes).digest("hex"),
-    "8b475a4b9556f15d623101f1e543c43fb1112b38f910a78bc3afd2d290c2e7d3",
-  );
+  assert.equal(sha256(committedAdrBytes), acceptedAdrSha256, "committed ADR blob");
+  assert.equal(sha256(canonicalCheckoutAdrBytes), acceptedAdrSha256, "canonical checkout ADR content");
+  assert.deepEqual(canonicalCheckoutAdrBytes, committedAdrBytes, "checkout differs beyond CRLF representation");
+
+  const mutatedAdrBytes = Buffer.from(canonicalCheckoutAdrBytes);
+  const decisionOffset = mutatedAdrBytes.indexOf("Use the package-supported Node.js runtime");
+  assert.notEqual(decisionOffset, -1, "accepted runtime decision prose");
+  mutatedAdrBytes[decisionOffset] = 0x58;
+  assert.notEqual(sha256(mutatedAdrBytes), acceptedAdrSha256, "ADR prose mutation must fail the content pin");
+
   assertExactlyOnce(adr, "Status:: Accepted", "ADR status");
   assert.ok(adr.endsWith("\n"), "ADR must retain its accepted final LF");
   assertExactlyOnce(architectureNav, adrTarget, "architecture navigation link");
@@ -130,6 +151,11 @@ test("requirements distinguish current browser, standalone M5, and whole-core Sa
   assert.match(compactCity, /Save and reopen remain approved whole-core outcomes/u);
   assert.match(compactCity, /Standalone M5 retains temporary source and results only in process memory and discards them on explicit discard, replacement, detected session loss, or graceful shutdown/u);
   assert.match(compactCity, /Save and reopen are deferred from M5, not revoked/u);
+  assert.match(compactCity, /whole-core target beyond standalone M5[\s\S]*any runtime selection for that later target remain unselected/u);
+  assert.match(city, /xref:architecture:adr\/0014-standalone-server-owned-analysis-runtime\.adoc\[accepted\s+ADR 0014\]/u);
+  assert.match(city, /xref:standalone-m5-operating-policy\.adoc\[accepted standalone M5 operating policy\]/u);
+  assert.match(compactCity, /ADR 0014\] selects package-supported Node\.js, native same-origin `node:http`, and dedicated `worker_threads`[\s\S]*operating policy\] governs custody, exposure, capacity, and cleanup/u);
+  assert.doesNotMatch(compactCity, /Server runtime, API, storage, access, deletion, backup, ingress,[\s\S]*remain unselected/u);
   assert.match(compactCity, /storage technology remains unresolved/u);
   assert.match(compactCity, /representation, format, and I\/O contract remain unresolved/u);
 });
