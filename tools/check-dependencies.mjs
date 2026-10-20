@@ -46,7 +46,7 @@ export async function inspectDependencyClosure(rootDirectory) {
     "@antora/cli": "3.2.0",
     "@antora/site-generator": "3.2.0",
     typescript: "7.0.2",
-    vite: "8.3.1",
+    vite: "8.3.4",
   };
   invariant(
     JSON.stringify(packageManifest.devDependencies) === JSON.stringify(expectedDevDependencies),
@@ -110,9 +110,9 @@ export async function inspectDependencyClosure(rootDirectory) {
       license: "MPL-2.0",
     },
     vite: {
-      version: "8.3.1",
-      resolved: "https://registry.npmjs.org/vite/-/vite-8.3.1.tgz",
-      integrity: "sha512-/bvH9E9tmCXRGp2uXY3WbOldqpTwFkbha/8ANaEQ6VkxhH60KyqLwgZq6lG2y+4uT55x9+9eUHMpQ7uGnOCKjA==",
+      version: "8.3.4",
+      resolved: "https://registry.npmjs.org/vite/-/vite-8.3.4.tgz",
+      integrity: "sha512-IftLE8phJhdNRIGNEV4JCCvfNScoZQVfcXaN8TQropWGJtOHcu+iAB9pHcuGvmEb/kddw0LBe/jS8ztdC6xdiQ==",
       license: "MIT",
     },
     "js-yaml": {
