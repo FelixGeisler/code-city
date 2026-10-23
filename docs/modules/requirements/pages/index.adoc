@@ -21,6 +21,18 @@ Accepted xref:architecture:adr/0013-ownership-of-source-acquisition-analysis-and
 fixes the ownership boundary. It does not select a server platform, API, storage
 technology, access mechanism, or deployment topology.
 
+== Accepted standalone M5 slice
+
+The standalone M5 slice is accepted but not implemented. Its exact custody,
+lifetime, cleanup, exposure, admission-capacity, and no-Save rules are defined
+once in the xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating
+Policy]. Accepted
+xref:architecture:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR
+0014] selects its Node.js, native same-origin HTTP, and worker execution
+boundary. Neither source claims deployment or Raspberry Pi qualification.
+
+The whole-core Save target above remains approved. Standalone M5 defers it.
+
 == Current implemented baseline
 
 The currently implemented product is a static browser application with no

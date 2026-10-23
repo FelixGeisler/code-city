@@ -103,9 +103,16 @@ Analyze and Reanalyze neither silently save nor overwrite.
 [[CC-CORE-SAVE-02]]
 === Unsaved lifetime
 
-An unsaved analysis has no reopening identifier after explicit discard,
-replacement by a new analysis, page reload, navigation away, or close.
-Technical cleanup and recovery remain later design work.
+In the whole-core target, an unsaved analysis has no reopening identifier after
+explicit discard, replacement by a new analysis, page reload, navigation away,
+or close. Save and reopen remain approved whole-core outcomes.
+
+Standalone M5 retains temporary source and results only in process memory and
+discards them on explicit discard, replacement, detected session loss, or
+graceful shutdown. Its complete cleanup policy is defined in the
+xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating Policy]. Save
+and reopen are deferred from M5, not revoked. Application persistence and
+recovery remain outside M5.
 
 [[CC-CORE-SAVE-03]]
 === Immutable saved snapshot
@@ -129,11 +136,11 @@ saved-analysis inventory and retained source. This requirement does not select
 admission or authentication, action authorization, deletion, backup, quotas,
 ingress, deployment, API, or storage technology.
 
-Server persistence is the initial Save and reopen implementation. Portable
-source-bearing export and import is not permanently excluded: whether it is
-added, whether it shares the server representation, and its JSON-or-similar
-format and I/O contract remain unresolved. A downstream API is outside the
-whole core.
+Server persistence is the initial Save and reopen implementation. Its storage
+technology remains unresolved. Portable source-bearing export and import is not
+permanently excluded. Whether it is added, whether it shares the server
+representation, and its representation, format, and I/O contract remain
+unresolved. A downstream API is outside the whole core.
 
 [[authoritative-visual-mapping]]
 == Authoritative visual mapping
@@ -939,14 +946,20 @@ Portable source-bearing export and import is deliberately absent from this
 non-goal list because its representation, format, and I/O contract remain
 unresolved.
 
-== Unresolved target design
+== Unresolved target design beyond standalone M5
 
-Recursive city geometry, ordering, spacing, labels, and picking remain
-unselected. Server runtime, API, storage, access, deletion, backup, ingress,
-deployment technologies, and production resource values also remain
-unselected. This baseline records the accepted server ownership and persistence
-boundary without claiming that a server is implemented or deployed and without
-creating a functional-code handoff.
+The following choices concern the whole-core target beyond standalone M5.
+Recursive city geometry, ordering, spacing, labels, picking, and any runtime
+selection for that later target remain unselected. For standalone M5,
+xref:architecture:adr/0014-standalone-server-owned-analysis-runtime.adoc[accepted
+ADR 0014] selects package-supported Node.js, native same-origin `node:http`, and
+dedicated `worker_threads`; the
+xref:standalone-m5-operating-policy.adoc[accepted standalone M5 operating policy]
+governs custody, exposure, capacity, and cleanup. Whole-core API, storage,
+access, deletion, backup, ingress, deployment technologies, and production
+resource values remain unselected. This baseline records the accepted server
+ownership and persistence boundary without claiming that a server is
+implemented or deployed and without creating a functional-code handoff.
 
 == Current baseline boundaries
 

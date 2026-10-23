@@ -14,6 +14,7 @@ import {
 import { canonicalDistDirectory, canonicalManifestPath, projectRoot } from "./build-package.mjs";
 import { createBrowserHarnessSource } from "./browser-evidence-harness.mjs";
 import { SELECTED_ASSETS } from "./check-parser-assets.mjs";
+import { captureNativeScrollEvidence } from "./native-scroll-evidence.mjs";
 import {
   connectCdp,
   discoverInstalledChrome,
@@ -1736,18 +1737,33 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     assert.equal(overflowEvidence.normalFlow, true);
     assert.equal(overflowEvidence.cityHeight, initialCityHeight);
     assert.equal(overflowEvidence.safe, true);
-    const resultPoint = await evaluate(`(() => { const rectangle=document.querySelector('[data-path-search-results]').getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
-    await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...resultPoint, deltaX: 0, deltaY: overflowEvidence.scrollHeight }, sessionId);
+    const downwardScroll = await captureNativeScrollEvidence({
+      cdp,
+      sessionId,
+      selector: "[data-path-search-results]",
+      deltaY: overflowEvidence.scrollHeight,
+      deadline: Date.now() + 120_000,
+    });
+    const downwardDiagnostic = `before=${downwardScroll.before}; after=${downwardScroll.after}; geometry=${JSON.stringify(downwardScroll.geometry)}`;
+    const scrolledDown = downwardScroll.after > downwardScroll.before;
+    assert(scrolledDown, `Native search-results downward scroll did not move down; ${downwardDiagnostic}`);
     await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
     assert.equal(await evaluate("document.activeElement===document.querySelector('[data-path-search-buttons] button')"), true);
     for (let index = 1; index < overflowEvidence.count; index += 1) await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
     assert.equal(await evaluate("document.activeElement===document.querySelector('[data-path-search-buttons] button:last-child' )"), true);
-    const scrolledDown = await evaluate("document.querySelector('[data-path-search-results]').scrollTop>0");
-    await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...resultPoint, deltaX: 0, deltaY: -overflowEvidence.scrollHeight }, sessionId);
+    const upwardScroll = await captureNativeScrollEvidence({
+      cdp,
+      sessionId,
+      selector: "[data-path-search-results]",
+      deltaY: -overflowEvidence.scrollHeight,
+      deadline: Date.now() + 120_000,
+    });
+    const upwardDiagnostic = `before=${upwardScroll.before}; after=${upwardScroll.after}; geometry=${JSON.stringify(upwardScroll.geometry)}`;
+    const scrolledUp = upwardScroll.after < upwardScroll.before;
+    assert(scrolledUp, `Native search-results upward scroll did not move up; ${upwardDiagnostic}`);
+    assert.equal(upwardScroll.after, 0, `Native search-results upward scroll did not return to the exact origin; ${upwardDiagnostic}`);
     for (let index = 1; index < overflowEvidence.count; index += 1) await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9, modifiers: 8 });
     assert.equal(await evaluate("document.activeElement===document.querySelector('[data-path-search-buttons] button')"), true);
-    const scrolledUp = await evaluate("document.querySelector('[data-path-search-results]').scrollTop===0");
-    assert.equal(scrolledDown && scrolledUp, true);
     await dispatchKey({ key: "Enter", code: "Enter", virtualKey: 13, text: "\r" });
     const firstActivation = await evaluate("({focused:document.activeElement===document.querySelector('[data-city] canvas'),activeTag:document.activeElement?.tagName,queryCleared:document.querySelector('[data-path-search-input]').value==='',resultsHidden:document.querySelector('[data-path-search-results]').hidden,status:document.querySelector('[data-status]').textContent,buttons:document.querySelectorAll('[data-path-search-buttons] button').length})");
     assert.deepEqual(firstActivation, { focused: true, activeTag: "CANVAS", queryCleared: true, resultsHidden: true, status: "", buttons: 0 });

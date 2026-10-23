@@ -1,0 +1,61 @@
+= Standalone M5 Operating Policy
+
+Status:: Accepted
+Human acceptance:: `SGTM`, receipt SHA-256 `bdf36f348863d90df01bf6795381e1e3a02daf217dd19a827f8f60292ef065bc`
+Accepted policy:: SHA-256 `a40e6c97c4dab3ef65e79a97ae4d2acef6863b1dcdfafd7e60e0ced980ac2565`
+
+This policy applies to the accepted, unimplemented standalone M5 slice. It does
+not describe the current browser-only implementation.
+
+== Operating policy
+
+* *Temporary custody:* Keep acquired and normalized source, its analysis facts,
+  and their association only in application process memory. Create no
+  application-managed source file, cache, snapshot, or database copy. This does
+  not promise protection from OS swap, core dumps, host inspection, or
+  unexpected process failure.
+* *Unsaved lifetime:* A successful current result retains its exact analyzed
+  source association until explicit discard, replacement, or loss of its
+  browser-owned temporary session. Starting a replacement analysis discards the
+  previous temporary investigation, matching the current interaction. Success
+  does not release source while its result remains current.
+* *Terminal and orphan cleanup policy:* Failure or cancellation publishes no
+  partial replacement and releases attempt-only source/results after its worker
+  has terminated and exited. Session loss permits no detached continuation or
+  reconnect. Stop and join active workers, then discard that session's
+  temporary source/results. Graceful server shutdown stops admission,
+  terminates and joins active workers, and discards all temporary state. Stale
+  worker messages never restore discarded state. The accepted implementation
+  issue must define observable session-loss detection and every terminal
+  transition. The Developer must not invent them. No transport protocol is
+  selected here.
+* *Network exposure:* Listen on loopback by default. An operator may deliberately
+  enable unauthenticated trusted-LAN exposure for public GitHub source only.
+  This is not approval for Internet exposure, company authentication, private
+  repositories, FLOW, or ADO.
+* *Capacity:* Require a finite operator-set admission capacity. Do not encode an
+  uncalibrated default or resource promise. When capacity is unavailable,
+  visibly reject a new analysis before source acquisition or worker creation.
+  Do not silently lower the accepted per-source envelope, evict another
+  session, or hide work in an unapproved queue.
+* *No Save:* Standalone M5 provides no Save, reopen, persistence, or recovery of
+  a temporary investigation. The accepted whole-core Save target is deferred
+  rather than revoked.
+
+== Rationale and trade-off
+
+This policy keeps the first standalone slice within public-source,
+temporary-session scope and bounds unattended memory ownership without
+inventing a persistence or identity system. It favors predictable cancellation
+and cleanup over reconnect recovery. Page/session loss discards work.
+Loopback-first operation reduces accidental exposure, while deliberate
+trusted-LAN mode remains usable without pretending that same-origin HTTP is
+authentication. Explicit admission rejection is less convenient than silent
+queuing or eviction but is observable and does not alter accepted analysis
+limits.
+
+Rejected for M5: application disk custody, Save/reopen, anonymous Internet
+service, company/private-source authentication, silent eviction, hidden lower
+limits, unbounded admission, and detached orphan continuation. Child-process
+isolation remains a future architecture escalation if evidence requires it. It
+is not implied by these policies.
