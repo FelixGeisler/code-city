@@ -44,7 +44,7 @@ export async function inspectDependencyClosure(rootDirectory) {
 
   const expectedDevDependencies = {
     "@antora/cli": "3.2.0",
-    "@antora/site-generator": "3.2.0",
+    "@antora/site-generator": "3.2.1",
     typescript: "7.0.2",
     vite: "8.3.4",
   };
@@ -104,9 +104,9 @@ export async function inspectDependencyClosure(rootDirectory) {
       license: "MPL-2.0",
     },
     "@antora/site-generator": {
-      version: "3.2.0",
-      resolved: "https://registry.npmjs.org/@antora/site-generator/-/site-generator-3.2.0.tgz",
-      integrity: "sha512-bgShOpARuO+1MF50HUsv25C7msyZk6GpaP2EBcjqD3s0Dj51amQL5KMqAbwfKLjTCiAUTGpC/Yb8rGeogUnmYw==",
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/site-generator/-/site-generator-3.2.1.tgz",
+      integrity: "sha512-tm+rRrxyXQtUhSIHHPn9iGLaJ10tPiHOti8CvWvWMSV48RneuW5SQclp+/stqdVlfpKmwvFek4sE1kHlm3cRzQ==",
       license: "MPL-2.0",
     },
     vite: {
@@ -147,21 +147,21 @@ export async function inspectDependencyClosure(rootDirectory) {
 
   const expectedHighClosure = {
     "@antora/content-aggregator": {
-      version: "3.2.0",
-      resolved: "https://registry.npmjs.org/@antora/content-aggregator/-/content-aggregator-3.2.0.tgz",
-      integrity: "sha512-Q7lTjNFlpQx3SWW8QbNv5P4f1DhiKhYY3PyMifRHc4npuILOU0q4+kmlO1W1swSDDCg5pDjmgwitwAi9VQgvhg==",
-      dependencies: { "@antora/expand-path-helper": "~3.0", "@antora/logger": "3.2.0", "@antora/user-require-helper": "~3.0", braces: "~3.0", "cache-directory": "~2.0", "fast-glob": "~3.3", hpagent: "~1.2", "isomorphic-git": "~1.38", "js-yaml": "~5.4", "multi-progress": "~4.0", picomatch: "~4.0", progress: "~2.0", "should-proxy": "~1.0", "simple-get": "~4.0", vinyl: "~3.0" },
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/content-aggregator/-/content-aggregator-3.2.1.tgz",
+      integrity: "sha512-PjA/06nRj1Netv8S6f4wtziwu7B6tzwiskFrAwYzaWxphT1sumQs91UmYJTd1NpX42w8iTHekqVdqIGMDTQAqQ==",
+      dependencies: { "@antora/expand-path-helper": "~3.0", "@antora/logger": "3.2.1", "@antora/user-require-helper": "~3.0", braces: "~3.0", "cache-directory": "~2.0", "fast-glob": "~3.3", hpagent: "~1.2", "isomorphic-git": "~1.38", "js-yaml": "~5.4", "multi-progress": "~4.0", picomatch: "~4.0", progress: "~2.0", "should-proxy": "~1.0", "simple-get": "~4.0", vinyl: "~3.0" },
     },
     "@antora/site-generator": {
-      version: "3.2.0",
-      resolved: "https://registry.npmjs.org/@antora/site-generator/-/site-generator-3.2.0.tgz",
-      integrity: "sha512-bgShOpARuO+1MF50HUsv25C7msyZk6GpaP2EBcjqD3s0Dj51amQL5KMqAbwfKLjTCiAUTGpC/Yb8rGeogUnmYw==",
-      dependencies: { "@antora/asciidoc-loader": "3.2.0", "@antora/content-aggregator": "3.2.0", "@antora/content-classifier": "3.2.0", "@antora/document-converter": "3.2.0", "@antora/file-publisher": "3.2.0", "@antora/logger": "3.2.0", "@antora/navigation-builder": "3.2.0", "@antora/page-composer": "3.2.0", "@antora/playbook-builder": "3.2.0", "@antora/redirect-producer": "3.2.0", "@antora/site-mapper": "3.2.0", "@antora/site-publisher": "3.2.0", "@antora/ui-loader": "3.2.0", "@antora/user-require-helper": "~3.0" },
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/site-generator/-/site-generator-3.2.1.tgz",
+      integrity: "sha512-tm+rRrxyXQtUhSIHHPn9iGLaJ10tPiHOti8CvWvWMSV48RneuW5SQclp+/stqdVlfpKmwvFek4sE1kHlm3cRzQ==",
+      dependencies: { "@antora/asciidoc-loader": "3.2.1", "@antora/content-aggregator": "3.2.1", "@antora/content-classifier": "3.2.1", "@antora/document-converter": "3.2.1", "@antora/file-publisher": "3.2.1", "@antora/logger": "3.2.1", "@antora/navigation-builder": "3.2.1", "@antora/page-composer": "3.2.1", "@antora/playbook-builder": "3.2.1", "@antora/redirect-producer": "3.2.1", "@antora/site-mapper": "3.2.1", "@antora/site-publisher": "3.2.1", "@antora/ui-loader": "3.2.1", "@antora/user-require-helper": "~3.0" },
     },
     "@antora/ui-loader": {
-      version: "3.2.0",
-      resolved: "https://registry.npmjs.org/@antora/ui-loader/-/ui-loader-3.2.0.tgz",
-      integrity: "sha512-EYagiuG2Tk5QtnG/rwTzu/8mxDtL8J2oqZc74g0h4h3iatJeD8yNrDc8iDhNaycEZNaxPRfIK73tpKuIFZw+Iw==",
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/ui-loader/-/ui-loader-3.2.1.tgz",
+      integrity: "sha512-RqOyJ6cmisf49dDDavoBbI5w5pDdL0JVJVe8G8o8B1O3Uo/Sz7rJECQPKZEpM6iTz+aaR62IG+29iRXqoyJVAA==",
       dependencies: { "@antora/expand-path-helper": "~3.0", braces: "~3.0", "cache-directory": "~2.0", "fast-glob": "~3.3", hpagent: "~1.2", "js-yaml": "~5.4", picomatch: "~4.0", "should-proxy": "~1.0", "simple-get": "~4.0", vinyl: "~3.0", yauzl: "~3.4" },
     },
     "@asciidoctor/core": {
@@ -206,7 +206,7 @@ export async function inspectDependencyClosure(rootDirectory) {
     "handlebars transitive declarations differ from 4.7.10",
   );
   invariant(!lock.packages["node_modules/source-map-js"].dependencies, "source-map-js 1.2.2 unexpectedly adds a dependency");
-  invariant(registryPackageCount === 206, "The lockfile package inventory changed");
+  invariant(registryPackageCount === 212, "The lockfile package inventory changed");
 
   const parserRuntime = lock.packages["node_modules/web-tree-sitter"];
   invariant(

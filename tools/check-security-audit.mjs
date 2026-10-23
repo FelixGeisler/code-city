@@ -133,7 +133,7 @@ export function validateLockExposure(lock, highRecords) {
   invariant(isRecord(lock) && lock.lockfileVersion === 3 && isRecord(lock.packages) && isRecord(lock.packages[""]), "package-lock.json shape changed");
   const packages = lock.packages;
   const root = packages[""];
-  invariant(root.devDependencies?.["@antora/site-generator"] === "3.2.0", "Antora root pin changed");
+  invariant(root.devDependencies?.["@antora/site-generator"] === "3.2.1", "Antora root pin changed");
   invariant(root.dependencies?.["@vscode/tree-sitter-wasm"] === "0.3.1" && root.dependencies?.["web-tree-sitter"] === "0.27.0", "Production parser pins changed");
   const production = productionClosure(lock);
   for (const [key, record] of Object.entries(highRecords)) {
