@@ -1,9 +1,15 @@
 import { FAILURE_CATEGORIES, FAILURE_CODES, type FailureCode } from "./resolution";
 import { validateCityPayload, type CityPayload, type ValidatedCity } from "./city-payload";
 import type { RepositoryReference } from "../domain/repository-reference";
+import { isCanonicalAdditionalExclusions } from "../domain/source-admission";
 
 export type WorkerCommand =
-  | Readonly<{ type: "START"; generation: number; repository: RepositoryReference }>
+  | Readonly<{
+      type: "START";
+      generation: number;
+      repository: RepositoryReference;
+      additionalExclusions: readonly string[];
+    }>
   | Readonly<{ type: "STOP"; generation: number }>;
 
 type PreSelectionCategory =
@@ -65,11 +71,14 @@ export function validRevision(value: unknown): value is string {
 }
 
 function repositoryReference(value: unknown): RepositoryReference | undefined {
-  const record = ownDataRecord(value, ["owner", "repository"]);
-  if (!record || typeof record.owner !== "string" || typeof record.repository !== "string") {
+  const record = ownDataRecord(value, ["owner", "repository", "branch"]);
+  if (!record
+    || typeof record.owner !== "string"
+    || typeof record.repository !== "string"
+    || (typeof record.branch !== "string" && record.branch !== null)) {
     return undefined;
   }
-  return { owner: record.owner, repository: record.repository };
+  return { owner: record.owner, repository: record.repository, branch: record.branch };
 }
 
 export function readGeneration(value: unknown): number | undefined {
@@ -86,11 +95,34 @@ export function readGeneration(value: unknown): number | undefined {
   }
 }
 
+function additionalExclusions(value: unknown): readonly string[] | undefined {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    if (keys.some((key) => typeof key !== "string") || keys.length !== value.length + 1
+      || !Object.hasOwn(descriptors, "length")) return undefined;
+    const paths: string[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = descriptors[String(index)];
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable
+        || typeof descriptor.value !== "string") return undefined;
+      paths.push(descriptor.value);
+    }
+    return isCanonicalAdditionalExclusions(paths) ? Object.freeze(paths) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function parseWorkerCommand(value: unknown): WorkerCommand | undefined {
-  const start = ownDataRecord(value, ["type", "generation", "repository"]);
+  const start = ownDataRecord(value, ["type", "generation", "repository", "additionalExclusions"]);
   if (start?.type === "START" && validGeneration(start.generation)) {
     const repository = repositoryReference(start.repository);
-    return repository ? { type: "START", generation: start.generation, repository } : undefined;
+    const exclusions = additionalExclusions(start.additionalExclusions);
+    return repository && exclusions
+      ? { type: "START", generation: start.generation, repository, additionalExclusions: exclusions }
+      : undefined;
   }
 
   const stop = ownDataRecord(value, ["type", "generation"]);

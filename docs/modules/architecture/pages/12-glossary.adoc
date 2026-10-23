@@ -1,75 +1,67 @@
-= 12. Glossary
+= Glossary
 
 [cols="1,3",options="header"]
 |===
-|Term |Meaning
+|Term |Meaning in this architecture
 
-|Attempt
-|Work started by one submitted repository URL.
+|Accepted target
+|Approved product behavior and responsibility boundary that is not necessarily
+implemented. The complete contract is in xref:requirements:index.adoc[Product].
 
-|Selected revision
-|The immutable commit at the head of GitHub's default branch when submitted.
+|Additional exclusion
+|A user-supplied exact canonical repository-relative path captured with an
+Analyze attempt. Rules are owned by
+xref:requirements:source-and-metrics.adoc#CC-CORE-SRC-05[Path exclusions].
 
-|Admitted module
-|One supported, valid source file included in the selected revision's complete source set.
+|Aligned city
+|One current worker result whose canonical-order geometry and inspection facts
+have equal identity and count. It contains no source.
 
-|Core
-|Product policy and application coordination independent from external mechanisms.
+|Canonical path
+|The validated repository-relative identity used for ordering and inspection.
+Its normative rules are in
+xref:requirements:source-and-metrics.adoc#authoritative-admission[Admission].
 
-|Edge
-|Code that translates browser, GitHub, Worker, parser, renderer, or build mechanisms.
+|Complete acquisition
+|Validation of the entire recursive tree, including every raw ancestor, before
+exclusion, suffix filtering, or blob reads. See
+xref:requirements:source-and-metrics.adoc#CC-CORE-SRC-06[Complete acquisition].
 
-|Complete city
-|One aligned renderer-neutral geometry and inspection result produced by a
-successful current attempt.
+|Current implementation
+|The browser-only system evidenced at commit
+`38e620c915866394ca4967f418eec9d3f6ec979b`.
 
-|Validated city
-|Controller-owned, non-aliasing geometry, inspection, numeric presentation,
-and aligned semantic district snapshots produced by the sole city-payload
-validator.
+|Generation
+|A controller-assigned attempt identity used to prevent replaced, cancelled, or
+stale work from mutating the current city.
 
-|Numeric presentation
-|An internal immutable value containing ordered district plate minima and
-dimensions, plate-inclusive `sceneBounds`, and their centre. It contains no
-path, group identity, label, projection, callback, or observer field.
+|Immutable revision
+|The full commit identity selected only by explicit analysis. See
+xref:requirements:source-and-metrics.adoc#CC-CORE-SRC-02[Explicit immutable-revision analysis].
 
-|District plate
-|One opaque, noninteractive prism under an existing packed virtual group cell.
-It is rendered before buildings and is never a pick or focus candidate.
+|Investigation
+|The city, file selection, metrics, units, source evidence, and saved state
+covered by xref:requirements:city-and-failures.adoc[City and Failures]. Current
+implementation supports only the documented browser-session subset.
 
-|District projection snapshot
-|A closed immutable presenter result containing positive CSS dimensions and one
-ordered numeric `{screenX,screenY,area,lateral}` row per plate. It contains no
-identity, token, path, or DOM value.
+|Main context
+|The browser execution context containing the controller, semantic publication,
+and WebGL presenter.
 
-|Contextual district row
-|One reserved `20px` normal-flow row immediately after path search and before
-the city viewport. Its single inert, clipped label publishes the
-controller-resolved selected-over-hover district name through an isolated
-`bdi.textContent`, and hides and clears that text when neither context exists.
-Numeric projection does not control its visibility or layout. The row is hidden
-from accessibility APIs, unfocusable, pointer-transparent, and never a pick
-candidate.
+|Saved investigation
+|The accepted immutable server-owned snapshot created only by explicit Save. It
+is not implemented. Its contract is in
+xref:requirements:city-and-failures.adoc#CC-CORE-SAVE-03[Immutable saved snapshot].
 
-|Semantic state
-|The controller's current-generation inspection facts, resolved district
-context, hover, selection, one contextual-row publication, and inspector
-publication.
+|Source-free
+|Containing geometry and inspection facts but no source text, parser tree,
+provider response, or raw diagnostic.
 
-|Visual replica
-|A presenter-owned opaque hover or selection index used only by the trusted
-fill shader's surface-focus uniforms; the controller remains authoritative.
+|Worker
+|The single current browser module worker that performs provider acquisition,
+admission, parsing, metrics, and city construction.
 
-|Complexity legend
-|The persistent, noninteractive six-band numeric `M` key atomically published
-below every committed city.
-
-|Presenter token
-|An opaque staged-session identity that gains input and callback eligibility
-only after the controller commits the current city transaction.
-
-|Request epoch
-|A presenter-local counter that invalidates queued hover work after camera,
-gesture, lifecycle, or session changes. Navigation forgets retained pointer
-coordinates; only fresh eligible movement can schedule replacement work.
+|Unresolved design
+|A target mechanism that has not been selected and must not be inferred from an
+accepted outcome.
 |===

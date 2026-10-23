@@ -1,0 +1,918 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "empty-file-zero-units",
+      "source": "",
+      "coverage": [
+        "empty-file-zero-units"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 1,
+        "S": 0,
+        "U": 0,
+        "M": 0,
+        "units": [],
+        "decisions": [],
+        "shapeDigest": "41e198da231af7cd6489d8d70d972f69b1612b90bb918925595a6b1b04b4db6b"
+      }
+    },
+    {
+      "id": "comment-only-zero-units",
+      "source": "// line comment\n/* block\n   comment */\n",
+      "coverage": [
+        "comment-only-zero-units"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 3,
+        "S": 0,
+        "U": 0,
+        "M": 0,
+        "units": [],
+        "decisions": [],
+        "shapeDigest": "06fbb6dc23d3c78a12086796e16dd52a9c1341b1e673250136e0512eb07b0659"
+      }
+    },
+    {
+      "id": "declaration-only-zero-units",
+      "source": "[A(true ? 1 : 0)]\nabstract class Declarations(int p = true ? 1 : 0) {\n  const int C = true ? 1 : 0;\n  enum E { A = 1 }\n  public abstract void Abstract();\n  [DllImport(\"x\")] public static extern void External();\n  int Auto { get; set; }\n}\ninterface I { void Signature(); }\n",
+      "coverage": [
+        "declaration-only-zero-units"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 127,
+        "S": 9,
+        "U": 0,
+        "M": 0,
+        "units": [],
+        "decisions": [],
+        "shapeDigest": "ad398d6a893715bee60f440d5c280463b56b90f1527dd1293323889a624cb717"
+      }
+    },
+    {
+      "id": "lexical-directives-and-branches",
+      "source": "#define A\n#if A\nvar branchA = @\"// source\"; // trailing\n#else\nvar branchB = \"\"\"/* source */\"\"\";\n#endif\nclass Lexical {\n  /* block\n     only */\n  [Obsolete(\"/* metadata */\")]\n  string M() => $\"// {1}\";\n}\n",
+      "coverage": [
+        "comments",
+        "regular-string",
+        "verbatim-string",
+        "interpolated-string",
+        "raw-string",
+        "directives-source",
+        "preprocessor-all-branches"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 70,
+        "S": 10,
+        "U": 2,
+        "M": 1,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "b5ea72c9a132ad4ac52883bae6054cfe1f4092fb16756906b04abaf89a415806"
+      }
+    },
+    {
+      "id": "all-explicit-and-zero-unit-forms",
+      "source": "abstract class Units {\n  public abstract void Abstract();\n  [DllImport(\"x\")] public static extern void External();\n  int Auto { get; set; }\n  int Q => 1;\n  int this[int i] => i;\n  int R { get { return 1; } set => Use(value); init { Use(value); } }\n  event Action E { add => Use(value); remove { Use(value); } }\n  Units() : base() {}\n  ~Units() {}\n  void M(int p = 1) { void Local() {} Func<int,int> a = x => x; var b = delegate(int y) { return y; }; }\n  public static Units operator +(Units a, Units b) => a;\n  public static explicit operator int(Units a) => 1;\n}\ninterface I { void Signature(); }\n",
+      "coverage": [
+        "method",
+        "local-function",
+        "constructor",
+        "destructor",
+        "operator",
+        "conversion",
+        "accessor-get",
+        "accessor-set",
+        "accessor-init",
+        "accessor-add",
+        "accessor-remove",
+        "lambda",
+        "anonymous-method",
+        "expression-property",
+        "expression-indexer",
+        "auto-accessor-zero",
+        "bodyless-zero",
+        "abstract-zero",
+        "extern-zero",
+        "signature-zero",
+        "parameter-default-zero",
+        "attribute-zero"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 292,
+        "S": 15,
+        "U": 15,
+        "M": 1,
+        "units": [
+          {
+            "id": "property-getter#1",
+            "kind": "property-getter",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "indexer-getter#2",
+            "kind": "indexer-getter",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "get#3",
+            "kind": "get",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "set#4",
+            "kind": "set",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "init#5",
+            "kind": "init",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "add#6",
+            "kind": "add",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "remove#7",
+            "kind": "remove",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "constructor#8",
+            "kind": "constructor",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "destructor#9",
+            "kind": "destructor",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "method#10",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "local-function#11",
+            "kind": "local-function",
+            "form": "block",
+            "parent": "method#10",
+            "complexity": 1
+          },
+          {
+            "id": "lambda#12",
+            "kind": "lambda",
+            "form": "expression",
+            "parent": "method#10",
+            "complexity": 1
+          },
+          {
+            "id": "anonymous-method#13",
+            "kind": "anonymous-method",
+            "form": "block",
+            "parent": "method#10",
+            "complexity": 1
+          },
+          {
+            "id": "operator#14",
+            "kind": "operator",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "conversion#15",
+            "kind": "conversion",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "f7b1f634134181bc4d6bc088fa718e61df591efa14befbb3e9465703455e42cf"
+      }
+    },
+    {
+      "id": "initialization-and-nested-ownership",
+      "source": "Use(0);\nclass Init(int p) : Base(p > 0 ? p : 0) {\n  int field = p ?? 0;\n  event Action E = Handler;\n  int Property { get; } = F();\n  Func<int,int> nested = x => x > 0 ? x : 0;\n  const int Constant = true ? 1 : 0;\n  Init() : base(F() ?? G()) {}\n}\n",
+      "coverage": [
+        "runtime-field-initializer",
+        "runtime-property-initializer",
+        "runtime-event-initializer",
+        "top-level",
+        "primary-base",
+        "constructor-base",
+        "nested-callable",
+        "primary-header-zero",
+        "const-zero"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 144,
+        "S": 9,
+        "U": 3,
+        "M": 3,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 3
+          },
+          {
+            "id": "lambda#1",
+            "kind": "lambda",
+            "form": "expression",
+            "parent": "initialization/top-level",
+            "complexity": 2
+          },
+          {
+            "id": "constructor#2",
+            "kind": "constructor",
+            "form": "block",
+            "parent": "file",
+            "complexity": 2
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "??",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "conditional",
+            "owner": "lambda#1"
+          },
+          {
+            "kind": "??",
+            "owner": "constructor#2"
+          }
+        ],
+        "shapeDigest": "59cbf5a49e25e84b8722c5d4c71ae60dba2a09a591c0b3145a5fbda37ef58dd3"
+      }
+    },
+    {
+      "id": "excluded-syntax-in-callables",
+      "source": "class CallableExclusions {\n  void Method() {\n    [A((System.Func<int,int>)(attributeLambda => attributeLambda > 0 ? 1 : 0))]\n    void Local(int value = ((System.Func<int,int>)(defaultLambda => defaultLambda > 0 ? 1 : 0))(0)) {}\n    const int Constant = ((System.Func<int,int>)(constLambda => constLambda > 0 ? 1 : 0))(0);\n  }\n}\n",
+      "coverage": [
+        "excluded-attribute-nesting",
+        "excluded-parameter-default-nesting",
+        "excluded-const-in-callable"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 152,
+        "S": 7,
+        "U": 2,
+        "M": 1,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "local-function#2",
+            "kind": "local-function",
+            "form": "block",
+            "parent": "method#1",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "36d5df0ea662335dbf5d4f0263df410a4f8b7b6caa355fed09b21ee3fac765ac"
+      }
+    },
+    {
+      "id": "excluded-syntax-in-initialization",
+      "source": "[assembly: A((System.Func<int,int>)(attributeLambda => attributeLambda > 0 ? 1 : 0))]\nclass InitializationExclusions {\n  System.Func<int,int> Runtime = [A(true ? 1 : 0)] (int value = ((System.Func<int,int>)(defaultLambda => defaultLambda > 0 ? 1 : 0))(0)) => value;\n  const System.Func<int,int> Constant = (constLambda => constLambda > 0 ? 1 : 0);\n  enum E { Value = ((System.Func<int,int>)(enumLambda => enumLambda > 0 ? 1 : 0))(0) }\n}\n",
+      "coverage": [
+        "excluded-attribute-nesting",
+        "excluded-parameter-default-nesting",
+        "excluded-const-in-initialization",
+        "excluded-enum-value-nesting"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 209,
+        "S": 6,
+        "U": 2,
+        "M": 1,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "lambda#1",
+            "kind": "lambda",
+            "form": "expression",
+            "parent": "initialization/top-level",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "d6f5c029bf5fb1aecd822d712f7b275305699d0f0868125ee607c5cf393d27fc"
+      }
+    },
+    {
+      "id": "initializer-range-ownership",
+      "source": "{\n  const int Ignored = true ? 1 : 0;\n  Use(true ? 1 : 0);\n}\nclass InitializerOwnership {\n  System.Func<int> Field = () => { const int ignored = true ? 1 : 0; int kept = true ? 1 : 0; return kept; };\n  int Property { get { int kept = true ? 1 : 0; return kept; } } = true ? 1 : 0;\n  event System.Action Event = true ? A : B;\n}\n",
+      "coverage": [
+        "initializer-body-ownership",
+        "top-level-block-const-exclusion",
+        "runtime-property-initializer-decision"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 155,
+        "S": 9,
+        "U": 3,
+        "M": 4,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 4
+          },
+          {
+            "id": "lambda#1",
+            "kind": "lambda",
+            "form": "block",
+            "parent": "initialization/top-level",
+            "complexity": 2
+          },
+          {
+            "id": "get#2",
+            "kind": "get",
+            "form": "block",
+            "parent": "file",
+            "complexity": 2
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "conditional",
+            "owner": "lambda#1"
+          },
+          {
+            "kind": "conditional",
+            "owner": "get#2"
+          },
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          }
+        ],
+        "shapeDigest": "5e3dfc89465bddab22143a7e7b59399ce6047d00f413b424e243486d6039f874"
+      }
+    },
+    {
+      "id": "preprocessor-condition-and-branch-ownership",
+      "source": "#if TOP && OTHER\nUse(true ? 1 : 0);\n#else\nUse(false ? 1 : 0);\n#endif\nclass PreprocessorOwnership {\n  void Method() {\n#if INNER && FLAG || ALT\n    if (true) {}\n#else\n    while (false) {}\n#endif\n  }\n}\n",
+      "coverage": [
+        "preprocessor-condition-zero",
+        "preprocessor-top-level-branches"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 85,
+        "S": 14,
+        "U": 2,
+        "M": 3,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 3
+          },
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 3
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "conditional",
+            "owner": "initialization/top-level"
+          },
+          {
+            "kind": "if",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          }
+        ],
+        "shapeDigest": "bef41db677eae044fdbaf6c39d82c38f38968d2ea143c990af793e64310f9ddc"
+      }
+    },
+    {
+      "id": "foreach-forms",
+      "source": "class ForeachForms {\n  void M(int[] values, (int Key, int Value)[] pairs) {\n    foreach (var value in values) {}\n    foreach (var (key, value) in pairs) {}\n    foreach (ref readonly var value in values) {}\n  }\n}\n",
+      "coverage": [
+        "loop-foreach-ordinary",
+        "loop-foreach-deconstruction",
+        "loop-foreach-ref"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 84,
+        "S": 7,
+        "U": 1,
+        "M": 4,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 4
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          }
+        ],
+        "shapeDigest": "6e213d39a9988d84a6a902eb479f5e33ec689a4aba80a1e01af85116a3ad6ac0"
+      }
+    },
+    {
+      "id": "decision-points",
+      "source": "class Decisions {\n  int M(int? x, int[] values) {\n    if (x > 0) {} else {}\n    for (int i = 0; i < 1; i++) {}\n    foreach (var value in values) {}\n    while (false) {}\n    do {} while (false);\n    x ??= 0;\n    return (x > 0 && x < 2 || x == 3) ? (x ?? 0) : 0;\n  }\n}\n",
+      "coverage": [
+        "if",
+        "loop-for",
+        "loop-foreach",
+        "loop-while",
+        "loop-do",
+        "conditional",
+        "logical-and",
+        "logical-or",
+        "nullish",
+        "nullish-assign",
+        "else-zero",
+        "comparisons-zero"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 137,
+        "S": 11,
+        "U": 1,
+        "M": 11,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 11
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "if",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "loop",
+            "owner": "method#1"
+          },
+          {
+            "kind": "??=",
+            "owner": "method#1"
+          },
+          {
+            "kind": "conditional",
+            "owner": "method#1"
+          },
+          {
+            "kind": "||",
+            "owner": "method#1"
+          },
+          {
+            "kind": "&&",
+            "owner": "method#1"
+          },
+          {
+            "kind": "??",
+            "owner": "method#1"
+          }
+        ],
+        "shapeDigest": "18d05a0790bd95bec91e62be3083a1729c39f461fb08b0b50cb9d6adfdcef50a"
+      }
+    },
+    {
+      "id": "switch-guards-filters-and-defaults",
+      "source": "class Branches {\n  int M(int x) {\n    switch (x) { case 1 when x > 0: break; case 2: case 3: break; default: break; }\n    try {} catch (Exception) when (x > 0) {}\n    return x switch { 1 when x > 0 => 1, _ when x < 0 => 2, _ => 0 };\n  }\n}\n",
+      "coverage": [
+        "case-label",
+        "switch-guard",
+        "catch",
+        "catch-filter",
+        "switch-expression-arm",
+        "switch-expression-default-zero",
+        "guarded-discard",
+        "switch-zero",
+        "default-statement-zero",
+        "try-zero"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 117,
+        "S": 7,
+        "U": 1,
+        "M": 11,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 11
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "case",
+            "owner": "method#1"
+          },
+          {
+            "kind": "switch-guard",
+            "owner": "method#1"
+          },
+          {
+            "kind": "case",
+            "owner": "method#1"
+          },
+          {
+            "kind": "case",
+            "owner": "method#1"
+          },
+          {
+            "kind": "catch",
+            "owner": "method#1"
+          },
+          {
+            "kind": "catch-filter",
+            "owner": "method#1"
+          },
+          {
+            "kind": "switch-expression-arm",
+            "owner": "method#1"
+          },
+          {
+            "kind": "switch-guard",
+            "owner": "method#1"
+          },
+          {
+            "kind": "switch-expression-arm",
+            "owner": "method#1"
+          },
+          {
+            "kind": "switch-guard",
+            "owner": "method#1"
+          }
+        ],
+        "shapeDigest": "8fe622fd2319ea1a30bad157b4866be98e81167e333649424f92624f700e759a"
+      }
+    },
+    {
+      "id": "zero-point-and-zero-unit-syntax",
+      "source": "[A(true ? 1 : 0)]\nclass Zero(int p = true ? 1 : 0) {\n  const int C = true ? 1 : 0;\n  enum E { A = 1, B = 2 }\n  int M(int x = true ? 1 : 0) {\n    try { var q = from n in new[] { 1 } where n > 0 select n; if (x is > 0 and < 3 or not 9) Call()?.Next(); return (x & 1) == 0 ? 1 : 0; } finally {}\n  }\n}\n",
+      "coverage": [
+        "attribute-zero",
+        "primary-header-zero",
+        "parameter-default-zero",
+        "const-zero",
+        "enum-zero",
+        "patterns-zero",
+        "query-zero",
+        "finally-zero",
+        "calls-zero",
+        "bitwise-zero",
+        "conditional-access-zero"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 183,
+        "S": 8,
+        "U": 1,
+        "M": 3,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "block",
+            "parent": "file",
+            "complexity": 3
+          }
+        ],
+        "decisions": [
+          {
+            "kind": "if",
+            "owner": "method#1"
+          },
+          {
+            "kind": "conditional",
+            "owner": "method#1"
+          }
+        ],
+        "shapeDigest": "adc32eb9cad2d8772fc646067ecb175b5959cf1cfcc6c02994c7af3dd5eafabe"
+      }
+    },
+    {
+      "id": "unicode-whitespace-lines",
+      "source": "class UnicodeWhitespace {\n  string Emoji = \"😀\";\n  // excluded after supplementary scalar\n}\n\u00a0\n\u3000\n",
+      "coverage": [
+        "unicode-white-space"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 19,
+        "S": 3,
+        "U": 1,
+        "M": 1,
+        "units": [
+          {
+            "id": "initialization/top-level",
+            "kind": "initialization/top-level",
+            "form": "file",
+            "parent": "file",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "fa10ceb696790bcfa7efb9d61f8d904399305b653bcd3c4b075f7983b3ed593e"
+      }
+    },
+    {
+      "id": "representative-modern-syntax",
+      "source": "record Point(int X, int Y);\nclass Modern {\n  required string Name { get; init; }\n  int[] Values() => [1, 2, 3];\n  string Text() => \"\"\"raw // text\"\"\";\n  bool Match(object value) => value is [1, ..];\n}\n",
+      "coverage": [
+        "modern-record",
+        "modern-required",
+        "modern-collection-expression",
+        "modern-raw-string",
+        "modern-list-pattern"
+      ],
+      "expected": {
+        "valid": true,
+        "signals": {
+          "rootHasError": false,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 94,
+        "S": 7,
+        "U": 3,
+        "M": 1,
+        "units": [
+          {
+            "id": "method#1",
+            "kind": "method",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "method#2",
+            "kind": "method",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          },
+          {
+            "id": "method#3",
+            "kind": "method",
+            "form": "expression",
+            "parent": "file",
+            "complexity": 1
+          }
+        ],
+        "decisions": [],
+        "shapeDigest": "1cff029d55b5111fe17e931da4d0403d15fa3e08f26d30e33b96a778145ce784"
+      }
+    },
+    {
+      "id": "malformed-error",
+      "source": "class Broken { void M() { int x = ; } }",
+      "coverage": [
+        "malformed",
+        "error-signal"
+      ],
+      "expected": {
+        "valid": false,
+        "signals": {
+          "rootHasError": true,
+          "errorNodes": 1,
+          "missingNodes": 0
+        },
+        "visitedNodes": 24
+      }
+    },
+    {
+      "id": "truncated-missing",
+      "source": "namespace N",
+      "coverage": [
+        "truncated",
+        "missing-signal"
+      ],
+      "expected": {
+        "valid": false,
+        "signals": {
+          "rootHasError": true,
+          "errorNodes": 0,
+          "missingNodes": 1
+        },
+        "visitedNodes": 5
+      }
+    },
+    {
+      "id": "recovery-error",
+      "source": "class Recovery { void M(int = 1) {} }",
+      "coverage": [
+        "recovery",
+        "error-signal"
+      ],
+      "expected": {
+        "valid": false,
+        "signals": {
+          "rootHasError": true,
+          "errorNodes": 0,
+          "missingNodes": 0
+        },
+        "visitedNodes": 21
+      }
+    }
+  ]
+}

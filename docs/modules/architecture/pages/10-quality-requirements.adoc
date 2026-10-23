@@ -1,66 +1,56 @@
-= 10. Quality Requirements
+= Quality Requirements
 
-[cols="1,3",options="header"]
+Product thresholds, formulas, controls, and proofs remain in the requirements
+and executable tests. These scenarios identify where architecture contributes.
+
+[cols="1,2,2,2",options="header"]
 |===
-|Quality |Required evidence
+|Quality |Scenario |Architectural response |Evidence location
+
+|Integrity
+|Provider evidence is malformed, incomplete, redirected, truncated, or changes
+identity.
+|Bounded gateways fail closed; complete inventory and blob identity checks occur
+before analysis; no partial city is published.
+|`src/edge/github-*-gateway.ts`, `src/domain/source-admission.ts`, source
+retrieval tests
 
 |Determinism
-|Repeated processing of the same admitted content produces the same facts and
-city; identical camera state and input produce the same matrix and exact CPU hit
+|Equivalent accepted source facts are processed again.
+|Canonical ordering, pinned grammars, pure metric/city policies, and closed
+payload validation keep result meaning stable.
+|xref:requirements:source-and-metrics.adoc[Source and Metrics], domain and
+reproducibility tests
 
 |Safety and privacy
-|Adversarial repository, query, and provider data remains inert, uses only the
-fixed network boundary, and creates no credential or active content. Inspection
-and result paths use only isolated `textContent`; paths/queries do not enter
-attributes, styles, URLs, WebGL, telemetry, provider traffic, logs, observers,
-or release evidence
-
-|Completeness
-|When the fixed provider path returns complete source, a supported repository
-inside the published envelope produces a complete result, not a sampled or
-partial one
-
-|Capacity
-|Packaged-browser fixtures cover the exact module, per-module, and aggregate
-maxima with dense and deep valid syntax and no private lower limit
+|Repository-controlled content crosses provider, worker, or UI boundaries.
+|Treat it as data, validate exact shapes, transfer a source-free result, publish
+paths as inert text, and expose sanitized failures only.
+|xref:requirements:city-and-failures.adoc[City and Failures], controller,
+protocol, publication, and package-policy tests
 
 |Atomicity
-|Geometry, inspection, empty native search and its listeners, numeric district
-presentation/projection, one empty reserved contextual row, canvas, inspector,
-persistent complexity legend, and revision publish as one transaction; search
-reveal is a
-complete camera/selection/inspector/search/focus transaction; replacement,
-cancellation, failure, resize, context loss, or stale interaction cannot publish
-partial or stale output
+|An attempt is replaced, cancelled, stale, or fails during presentation.
+|Generation gates, staged publication, rollback, and idempotent ownership cleanup
+leave either one complete current city or none.
+|`src/application/main-controller.ts`, worker-attempt and presenter tests
 
-|Resource ownership
-|Provider, parser, worker, presentation, and listener resources follow the
-lifetime and exactly-once cleanup rules
+|Usability and accessibility
+|A keyboard or pointer user investigates a current city across supported viewport
+sizes.
+|Native semantic controls, keyboard selection, visible focus, inert inspection
+text, and responsive presentation accompany WebGL.
+|xref:requirements:city-and-failures.adoc[City and Failures], semantic and camera
+policy tests
 
-|Numeric correctness
-|Concentrated and `N=G=4000` scenes renew plate-inclusive camera and retained
-byte-compatible numeric projection, selected-AABB strict X/Y/W/depth reveal,
-one stable contextual row with controller-owned precedence, building-only
-picking, shared-centre exact `float32` representation, and the
-`420+28N+24G <= 208420` upload envelope
-
-|Accessibility
-|Keyboard users can navigate and select every building and natively scroll/focus
-every current search result without pointer emulation; search activation returns
-focus to the canvas; instructions, status text, paths, facts, formulas, and
-palette bands do not rely on colour alone
-
-|Visual quality
-|The city remains the visual focus, controls and interaction are intentional and
-predictable, surface focus preserves metric-colour prominence, and the inspector
-and persistent numeric legend remain clean, responsive, and readable. Representative review and textual-only
-attestation are owned by https://github.com/FelixGeisler/code-city/issues/537[#537]
-without a numeric aesthetic threshold
-
-|Reproducibility
-|Pinned dependencies and assets are verifiable, and production serves the exact
-verified artifact
+|Release reproducibility
+|A pull request or main publication is built.
+|The locked closure, canonical build, second-build comparison, package audit,
+documentation build, and workflow-owned artifact bindings are verified.
+|`package.json`, `.github/workflows/`, package and publication tests
 |===
 
-Detailed examples and boundary cases belong in executable tests rather than in
-this architecture chapter.
+The accepted target adds availability, confidentiality, retention, recovery,
+and capacity concerns for server-owned source and saved investigations. Their
+mechanisms and measurable scenarios require the unresolved target design; this
+chapter does not invent them.

@@ -1,0 +1,58 @@
+= ADR 0014: Standalone server runtime and analysis execution boundary
+
+Status:: Accepted
+
+== Context
+
+Accepted ADR 0013 assigns source acquisition, analysis, and the authoritative source-result association to the server, but does not select a runtime or execution boundary. The standalone M5 slice accepts public GitHub source and must keep HTTP handling responsive while an analysis can be cancelled or replaced.
+
+The existing TypeScript domain and application modules already implement the accepted metric behavior. The existing Tree-sitter adapter uses pinned WASM grammars, and local feasibility evidence shows those production modules and assets can execute under Node in a worker. This evidence establishes feasibility on the observed desktop environment, not Raspberry Pi performance or resource qualification.
+
+== Alternatives
+
+[cols="1,3,3",options="header"]
+|===
+|Alternative |Strengths |Costs and trade-offs
+
+|Node.js, native same-origin HTTP, and a dedicated worker thread for each admitted analysis attempt
+|Reuses the qualified TypeScript/WASM analysis path; keeps synchronous parsing away from the HTTP event loop; allows the parent to terminate an attempt and suppress stale results; adds no server framework.
+|Requires worker lifecycle, message validation, source transfer, termination, and exit coordination. Worker threads share a process-level failure and memory boundary.
+
+|Run analysis synchronously in the Node.js HTTP process
+|Has the smallest runtime topology and no worker message boundary.
+|Synchronous WASM parsing blocks HTTP progress and cannot be cancelled promptly while parsing.
+
+|Run each analysis in a child process
+|Provides stronger process-fault separation and separate process accounting; the parent can terminate the child.
+|Adds process startup, IPC, packaging, and source-transfer costs. Current evidence does not show that this stronger boundary is required.
+
+|Reimplement analysis in another runtime
+|Could align with a different future hosting environment.
+|Duplicates the existing accepted algorithms and parser integration, increasing divergence and qualification work without a current need.
+
+|Add an HTTP framework
+|Could provide routing and middleware conventions if those capabilities become necessary.
+|Adds a dependency and abstraction without a demonstrated standalone M5 requirement; it does not solve analysis isolation.
+|===
+
+== Decision
+
+Use the package-supported Node.js runtime to reuse the existing TypeScript domain, application, and Tree-sitter/WASM analysis code.
+
+Serve the browser application and its internal application requests from one native `node:http` service on the same origin. Do not add a web framework for M5.
+
+Execute each admitted analysis attempt in a dedicated `worker_threads` worker. The parent process owns the attempt lifecycle, validates worker messages, terminates and awaits exit of workers that must stop, and prevents a cancelled or replaced attempt from publishing stale results. Endpoint shapes, worker message schemas, software versions, and detailed lifecycle states are implementation contracts, not this decision.
+
+== Rationale
+
+This is the smallest architecture that preserves the accepted analysis behavior, avoids a second analyzer, keeps synchronous WASM work off the HTTP event loop, and provides a terminable execution unit. Native HTTP and same-origin delivery satisfy the current standalone need without framework capabilities. Child processes remain a credible escalation if later evidence demonstrates a need for process-level fault separation.
+
+== Consequences
+
+The server must package the existing parser runtime and pinned grammar assets for Node and must implement deterministic worker termination, exit coordination, stale-result suppression, and failure sanitization.
+
+A worker thread is not an operating-system sandbox. It does not safely execute repository code, and Code City must continue to treat source only as untrusted data. Worker resource limits do not cover every WASM, native, or external allocation. This decision therefore provides no guarantee against process failure or host out-of-memory termination. Child processes alone would not provide an OS sandbox or host-OOM guarantee either.
+
+The feasibility evidence does not establish Raspberry Pi throughput, concurrency, or memory capacity. Runtime versions and deployment-specific capacity values remain executable configuration rather than ADR commitments.
+
+This ADR does not select source persistence, Save/reopen behavior, authentication, network exposure, a public API, private FLOW/ADO integration, or detailed transport protocols. Standalone M5 operating policies for custody, exposure, capacity, and cleanup require separate explicit human acceptance.

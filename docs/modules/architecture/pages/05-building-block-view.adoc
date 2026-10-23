@@ -1,161 +1,70 @@
-= 5. Building Block View
+= Building Block View
 
-image::building-blocks.svg[Main-context controller and presenter with the sole processing worker]
+== Current browser system
 
-[cols="2,1,4",options="header"]
+image::building-blocks.svg[Current browser main-context and worker building blocks with accepted target responsibility boundary]
+
+[cols="1,2,3",options="header"]
 |===
-|Block |Location |Responsibility
+|Stratum |Building block |Responsibility
 
-|UI attempt controller |Main application |Validate submitted URL shape; own the
-current attempt, the sole city-payload validator, immutable inspection snapshot,
-semantic hover and selection, exact path matching and result validation,
-traversal, contextual district derivation/precedence and inspector identity,
-generation/token/publication
-identity gating, and the single publication-root commit
+|Domain
+|Repository reference, source admission, metrics, complexity, city model,
+camera and picking policy
+|Pure validation and deterministic product decisions. It imports neither
+application nor edge code.
 
-|Worker bridge |Main and worker edge |Own the sole concrete worker handle;
-validate closed, generation-tagged commands, outcomes, and lifecycle messages;
-reject stale messages
+|Application
+|Main controller
+|Captures attempts, generation-gates messages and semantic events, validates
+worker results, coordinates atomic publication, search, hover, selection,
+replacement, cancellation, failure, and cleanup.
 
-|Semantic publication |Main edge |Own the native current-city path-search input,
-result buttons, their DOM listeners, and inert result-path `bdi.textContent`;
-forward only exact query and numeric canonical-index semantic callbacks
+|Application
+|Worker attempt, retrieval and metric services
+|Orders revision selection, complete acquisition, sequential normalization and
+processing, city construction, release of source, and one terminal outcome.
 
-|Interactive presenter |Main edge |Own stage tokens and sessions, canvas and its DOM
-input, immutable scene-centre camera, pointer capture, request epoch, building-only
-CPU picking, exact numeric district projection snapshots,
-one-program/two-pass WebGL city resources, and uniform-driven hover/selection
-surface focus
+|Edge: main context
+|Browser entry, semantic publication, city presenter
+|Connects the form and worker; stages inert DOM content; renders WebGL2;
+translates browser input into semantic events; owns visual resources.
 
-|Worker pipeline coordinator |Worker application |Sequence capabilities and
-suppress downstream work after failure or cancellation
-
-|Revision selection |Worker application |Ask the GitHub gateway for the
-immutable head commit of the repository's default branch
-
-|GitHub gateway |Worker edge |Construct and perform fixed-origin anonymous
-requests; return bounded primitive evidence
-
-|Source retrieval |Worker application |Coordinate immutable tree and blob
-retrieval, verify identities, and return canonically ordered source evidence
-
-|Admission |Worker domain |Normalise paths and content, select modules, and own
-the published Code City envelope and its limit result
-
-|Parser adapter |Worker edge |Validate one syntax tree and translate it into
-grammar-neutral observations
-
-|Metrics |Worker domain |Consume normalised source and syntax observations;
-own SLOC, executable-unit, ownership, and complexity rules
-
-|City builder |Worker domain |Create one complete, aligned, renderer-neutral
-`{geometry, inspection}` city
+|Edge: one worker
+|Processing worker, GitHub gateways, Tree-sitter adapter
+|Owns current provider requests and parsing integrations while delegating
+validation and policy to application/domain code.
 |===
-
-The controller owns semantic facts and independently reconstructs the numeric
-presentation snapshot. The presenter receives only opaque validated geometry
-plus plate minima/dimensions, plate-inclusive `sceneBounds`, and centre; it
-receives no group identity or path. Its closed numeric projection callback
-contains no identity or token. Presenter input listeners map DOM events to the semantic event
-families in
-xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]. The
-controller receives no DOM event and rejects stale generations, semantic
-publication identities, query snapshots, or invalid indices before changing
-semantics or sending visual state. A validated search reveal reaches the
-presenter only as a numeric canonical index and exact numeric AABB-centre target.
-
-== Dependency rule
-
-[source,text]
-----
-edge ───────► application ───────► domain
-  └──────────────────────────────► domain  (capability-local policy only)
-----
-
-Reverse dependencies are forbidden. Driving adapters enter application ports;
-domain code imports no GitHub, browser, Worker, Tree-sitter, or WebGL API. Pure
-camera and picking policy may remain in core, while mutable browser and WebGL
-mechanisms remain at the edge. Transport moves data but does not classify
-product failures. Only the controller changes visible semantic state. This
-slice remains governed by xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
-xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
-the amended xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR
-0011], and
-xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[ADR
-0012].
 
 [[data-boundaries]]
-== Data boundaries
+== Current data boundaries
 
-[cols="2,2,4",options="header"]
-|===
-|Value |From → to |Content
+`START` carries a validated repository reference with an optional explicit
+branch, a generation, and the atomically captured, sorted additional exclusions
+into the worker. GitHub edge adapters project bounded provider evidence. After
+branch or default-head selection, commit and raw-source requests use the
+selected immutable commit ID. Commit evidence supplies a validated same-width
+root tree ID for the recursive-tree request. Application and domain preparation
+must validate the complete inventory before it is trusted or used for filtering
+and reads.
 
-|Repository reference |UI → revision selection |The two non-empty URL path
-segments as inert strings
+Normalized source exists only inside the worker pipeline. Files are fetched and
+normalized sequentially; syntax and metric processing starts after the complete
+admitted set exists and then releases each source as it is processed. City
+construction produces canonical-order geometry and inspection facts. The
+worker transfers only geometry buffers and the aligned `{canonicalPath, S, U,
+M}` inspection facts. It transfers no source body, parser tree, provider object,
+or diagnostic.
 
-|Selected revision |Revision selection → retrieval and controller |Repository
-reference and GitHub's full immutable commit ID. Before retrieval, the worker
-publishes the closed interim `REVISION_SELECTED` message containing only its
-generation and revision. The controller retains it without displaying it while
-work continues.
+The controller independently validates exact protocol shape, geometry,
+inspection alignment, deterministic presentation projection, and safe values.
+Only that validated, source-free city can reach semantic publication and the
+presenter.
 
-|Source evidence |GitHub gateway → retrieval |Projected tree records or one
-bounded, identity-verified, strictly decoded source text value; no provider
-object, provider URL, or raw buffer crosses this boundary
+== Accepted target boundary
 
-|Admitted module |Admission → parser and metrics |Canonical path and normalised
-UTF-8 source
-
-|Syntax observations |Parser → metrics |Primitive spans and events for lexical
-exclusions, executable-unit boundaries and nesting, runtime/type-only regions,
-and decision occurrences
-
-|Module facts |Metrics → city builder |Canonical path and the three integers
-`S`, `U`, and `M`
-
-|City payload |City builder → controller |One source-free `{geometry,
-inspection}` value. Geometry contains dense origins, sizes, colours, and bounds;
-inspection contains aligned `{canonicalPath,S,U,M}` facts.
-
-|Validated city |Controller validator → controller/presenter |Controller-owned,
-non-aliasing geometry, inspection, and immutable numeric presentation snapshots.
-The numeric presentation contains only ordered plate minima/dimensions,
-plate-inclusive `sceneBounds`, and centre. The validated city separately owns
-aligned `{root,identity}` district descriptors. The presenter receives geometry
-and numeric presentation, never inspection, identity, or label data; it returns
-only ordered numeric projection snapshots.
-
-|Semantic event |Presenter/semantic publication → controller |From the
-presenter: generation plus hover or activation index, one traversal action, or
-an immutable closed district projection snapshot. From semantic publication:
-generation, exact publication identity, exact query snapshot, and optionally a
-numeric canonical index. Never a DOM event, fact, or browser object; query text
-never enters the presenter.
-
-|Semantic publication |Controller → DOM |One atomically committed native path
-search, reserved normal-flow contextual district row, canvas, selection
-inspector, and persistent noninteractive numeric complexity legend. Matching
-returns only canonical ordered numeric indices; semantic publication assigns
-controller-resolved district text and captured paths only to safe
-`bdi.textContent` nodes. Numeric projection does not control the contextual
-row.
-
-|Visual state |Controller → presenter |Generation plus opaque hover/selection
-indices, or one validated numeric reveal `{index,target}`. The presenter
-validates them and assigns focus/camera state around the fixed
-plate-first/building-second redraw; never query text, inspection facts, paths,
-search nodes, or plate indices
-
-|Attempt outcome |Worker → controller |One closed, generation-tagged success or
-failure payload. Every post-selection outcome carries the selected full revision;
-pre-selection failures carry none.
-|===
-
-Concrete provider, parser, DOM, and WebGL objects remain at their edges.
-Repository paths may be published only as wrapping, bidirectionally isolated
-inspector or search-result `bdi.textContent`; approved grouped directory
-identities may additionally be contextual-row and selected-inspector
-`bdi.textContent`. They are never markup, attributes, styles,
-object keys, shader text, URLs, resource locators, logs, or evidence. Evidence observers access geometry only
-and do not retain or disclose inspection.
+The target replaces the worker's authoritative acquisition and analysis role
+with server authority. The server also owns retained analyzed source and saved
+investigations; the browser owns presentation and investigation. This boundary
+requires server capability but does not define components, services, endpoints,
+stores, processes, or topology. Those details remain unresolved.

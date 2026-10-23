@@ -1,39 +1,62 @@
-= 8. Crosscutting Concepts
+= Crosscutting Concepts
 
-This chapter is an index. Each concept is defined in one owning section.
-
-[cols="2,3",options="header"]
+[cols="1,3,3",options="header"]
 |===
-|Concept |Owner
+|Concept |Current implementation |Authority and evidence
 
-|Trust crossings
-|xref:03-context-and-scope.adoc[Context and Scope]
+|Dependency direction
+|Domain is independent; application coordinates domain and capabilities; edge
+adapts GitHub, worker, parser, DOM, and WebGL APIs.
+|`src/domain/`, `src/application/`, `src/edge/`
 
-|Dependency direction, data boundaries, and inert values
-|xref:05-building-block-view.adoc[Building Block View]
+|Untrusted source and input
+|Provider projection is not trust. Complete raw ancestry, canonical identity,
+kind, content, protocol, and city checks occur before each downstream trust
+boundary. Source is parsed as data and never executed.
+|xref:requirements:source-and-metrics.adoc#CC-CORE-SRC-04[Untrusted source],
+xref:requirements:source-and-metrics.adoc#CC-CORE-SRC-06[complete acquisition]
 
-|Provider ingress and immutable retrieval
-|xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
-
-|Deterministic source, metrics, and city rules
-|xref:requirements:source-and-metrics.adoc[Source and Metrics] and
+|Deterministic processing
+|Captured exclusions and canonical paths have fixed ordering. Admission,
+metrics, city construction, payload reconstruction, and camera policy use
+closed rules; the same accepted facts have the same meaning.
+|xref:requirements:source-and-metrics.adoc[Source and Metrics],
 xref:requirements:city-and-failures.adoc[City and Failures]
 
-|Current attempt, city transaction, interaction state, cancellation, and cleanup
-|xref:06-runtime-view.adoc[Runtime View] and
-xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
+|Atomic lifecycle
+|Generation gates exclude stale work. Presenter and semantic content are staged
+before one current publication; failure removes the complete city.
+|xref:06-runtime-view.adoc[Runtime View], `src/application/main-controller.ts`
 
-|Static syntax boundary
-|xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+|Controlled publication
+|Repository source text is parsed as data inside the worker and never returns
+for presentation. A canonical path can reach validated controller facts and
+inert text nodes. In UI and rendering publication, neither source nor path text
+becomes active HTML or CSS, shader source, or a resource locator. The
+fixed-origin retrieval gateway separately percent-encodes each segment of the
+candidate's exact raw provider path when it constructs provider requests; the
+canonical NFC path remains the deterministic identity and display value. The
+presenter uploads validated numeric geometry
+and colour data as GPU attributes to fixed trusted shaders.
+|xref:requirements:city-and-failures.adoc[Failure and privacy contract],
+`src/edge/github-source-gateway.ts`, `src/edge/semantic-publication.ts`,
+`src/edge/city-presenter.ts`
 
-|Interactive camera, CPU picking, semantic event ownership, and WebGL lifecycle
-|xref:requirements:city-and-failures.adoc[City and Failures] and
-xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
+|Resource ownership
+|The worker releases provider/source/parser ownership by phase. Presenter
+sessions own listeners, frames, pointer capture, WebGL resources, and canvas
+state and clean them up idempotently.
+|xref:05-building-block-view.adoc#data-boundaries[Data Boundaries],
+`src/application/worker-attempt.ts`, `src/edge/city-presenter.ts`
 
-|Aligned geometry and inspection, inert paths, and evidence privacy
-|xref:05-building-block-view.adoc#data-boundaries[Data Boundaries] and
-xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
-
-|Production artifact and browser policy
+|Reproducible release evidence
+|The canonical build is rebuilt for reproducibility, audited over HTTP, bound
+to a manifest and publication record, and deployed as one Pages artifact.
+Production observation runs only when workflow eligibility permits it.
 |xref:07-deployment-view.adoc[Deployment View]
 |===
+
+The accepted target must preserve these concerns while moving analysis authority
+and retained source to a server. Target authentication, authorization,
+retention, deletion, backup, and operational controls are unresolved; current
+browser safeguards must not be mistaken for those future policies.
