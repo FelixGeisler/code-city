@@ -28,7 +28,7 @@ export async function inspectDependencyClosure(rootDirectory) {
   invariant(packageManifest.engines?.npm === ">=11 <12", "Root npm engine changed");
   const expectedDependencies = {
     "@vscode/tree-sitter-wasm": "0.3.1",
-    "web-tree-sitter": "0.27.0",
+    "web-tree-sitter": "0.27.1",
   };
   invariant(
     JSON.stringify(packageManifest.dependencies) === JSON.stringify(expectedDependencies),
@@ -92,9 +92,9 @@ export async function inspectDependencyClosure(rootDirectory) {
 
   const expectedRenewedRecords = {
     "web-tree-sitter": {
-      version: "0.27.0",
-      resolved: "https://registry.npmjs.org/web-tree-sitter/-/web-tree-sitter-0.27.0.tgz",
-      integrity: "sha512-XK08gj6RwTMQatAG7uVRP8MunqotL/XC19vHgkSPKmELgbGPBj4ECvB8haHOUnyj6ls2B8t42UTro14zxGgAHg==",
+      version: "0.27.1",
+      resolved: "https://registry.npmjs.org/web-tree-sitter/-/web-tree-sitter-0.27.1.tgz",
+      integrity: "sha512-qtx0VyUyNRHtL3ze7+v0hCKB/sLcAmY7ZAVp/ZK/bCj0yED8ptvNrr7Vd7DwDyKDWN9baqcUx4uaD2r2ql+6IA==",
       license: "MIT",
     },
     "@antora/cli": {

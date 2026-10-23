@@ -18,7 +18,7 @@ export const VENDOR_FILES = Object.freeze([
 
 export const SELECTED_ASSETS = Object.freeze([
   Object.freeze({ role: "runtime-js", relativePath: "node_modules/web-tree-sitter/web-tree-sitter.js", sha256: "7c49e3c1d87e24e0bb4c2def909d17154dfde281f5f8280225450090bb4b8110" }),
-  Object.freeze({ role: "runtime-wasm", relativePath: "node_modules/web-tree-sitter/web-tree-sitter.wasm", sha256: "c03bccdc3b448a32848f5ae327e209c982bbb0840d43eec8bc2d5759544a1ed3" }),
+  Object.freeze({ role: "runtime-wasm", relativePath: "node_modules/web-tree-sitter/web-tree-sitter.wasm", sha256: "beca80e44cccbf2299ed4d1e3fa6462a9a6fe818aeebf847547a392227ce4acc" }),
   Object.freeze({ role: "grammar-javascript", relativePath: "node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm", sha256: "5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240", abi: 15 }),
   Object.freeze({ role: "grammar-typescript", relativePath: "vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm", sha256: "e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9", bytes: 1_362_713, abi: 14 }),
   Object.freeze({ role: "grammar-tsx", relativePath: "vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm", sha256: "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7", bytes: 1_446_550, abi: 14 }),
@@ -39,7 +39,7 @@ const EXPECTED_VENDOR = Object.freeze({
   "wasm/tree-sitter-typescript.wasm": Object.freeze({ sha256: "e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9", bytes: 1_362_713 }),
   "wasm/tree-sitter-tsx.wasm": Object.freeze({ sha256: "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7", bytes: 1_446_550 }),
 });
-const EXPECTED_INVENTORY = Object.freeze({ sha256: "50400a778a4ad9bfe8d1b09f4194d89ace4b9f63b3685b54e61001869afeffe0", bytes: 11_041, rows: 238 });
+const EXPECTED_INVENTORY = Object.freeze({ sha256: "217b899aa0535c5ca3f043fa49fb90e6cc29526c8ec67b809ab99e89542a806a", bytes: 11_041, rows: 238 });
 const EXPECTED_PROVENANCE_VALUE_SHA256 = "aca712af736b438827b75ebfd4d0b6926f15de1fb33fc922674735e20d3adf5f";
 const EXPECTED_DYLINK = Object.freeze({
   "grammar-typescript": Object.freeze({ memorySize: 1_330_484, memoryAlign: 4, tableSize: 7, tableAlign: 0, neededLibraries: Object.freeze([]), subsectionTypes: Object.freeze([1]) }),
