@@ -51,7 +51,14 @@ ownership. Rollback, context loss, `pagehide`, or controller disposal removes
 listeners, semantic nodes, canvas state, worker ownership, and WebGL resources
 through idempotent cleanup.
 
-== Accepted, unimplemented standalone M5 runtime
+== Standalone M5 runtime preparation
+
+An inactive shared core now completes verified raw acquisition, records
+unsupported text per file, initializes the parser once, continues syntax and
+metric failures, and returns a deterministic city, failed-file rows, and
+retained normalized bytes. It is prepared for the later Node worker. It does
+not change the current browser sequence above and has no active protocol or
+transfer path.
 
 The accepted standalone slice runs the browser application and internal
 application requests on one native same-origin `node:http` service under the
@@ -69,14 +76,15 @@ deployment values, and capacity values remain implementation contracts. No
 standalone server or Raspberry Pi behavior is implemented, deployed, or
 qualified by this baseline.
 
-== Accepted, unimplemented whole-core runtime outcomes
+== Accepted whole-core runtime outcomes
 
-The whole-core target continues after eligible per-file text, syntax, or metric
-failures and reports each sanitized failed-file outcome. It recursively
+The inactive core implements continuation after eligible per-file text, syntax,
+or metric failures and reports each sanitized failed-file outcome. Active
+integration remains unimplemented. The whole-core target also recursively
 represents the successful hierarchy and provides a complete sortable
 successful-file inventory. Selection is shared between city and list and does
 not move the camera. Explicit unit drill-down shows exact analyzed source and
-owned contributions.
+owned contributions; none of these additional outcomes is implemented here.
 
 A completed whole-core analysis remains temporary until explicit Save. Save
 creates a new immutable server-owned snapshot. Reopen uses retained source and
