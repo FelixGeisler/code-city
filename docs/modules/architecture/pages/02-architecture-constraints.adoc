@@ -22,13 +22,31 @@
 * Dependency and tool versions are authoritative only in `package.json` and
   `package-lock.json`.
 
-== Accepted target
+== Accepted standalone M5 design
+
+The standalone M5 slice uses the package-supported Node.js runtime and one
+native same-origin `node:http` service. Each admitted analysis attempt runs in
+one dedicated `worker_threads` worker. The parent owns worker termination and
+awaits worker exit before terminal cleanup. This is a same-process execution
+boundary, not an operating-system sandbox or protection against process or host
+out-of-memory failure.
+
+The xref:requirements:standalone-m5-operating-policy.adoc[standalone M5
+operating policy] defines process-memory-only temporary custody, loopback-first
+exposure with deliberate trusted-LAN use limited to public GitHub source, a
+finite operator-set admission capacity without a numerical default, and joined
+terminal cleanup. These choices and
+xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR 0014] are
+accepted design. They are not implemented or deployed, and they provide no
+Raspberry Pi performance, concurrency, memory, or deployment qualification.
+
+== Approved whole-core target
 
 xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
 requires a Code City server to own acquisition, analysis, retained source-result
 association, and optional saved investigations. The browser remains responsible
 for presentation and investigation. Explicit Save creates an immutable shared
-snapshot; temporary work is not silently saved.
+snapshot. Temporary work is not silently saved.
 
 The target must retain the product contracts linked above. In particular, it
 must support per-file continuation after complete acquisition, recursive
@@ -38,8 +56,12 @@ accepted constraints, not current capabilities.
 
 == Unresolved design
 
-The server technology, API or transport, process split, storage representation,
-access and security mechanisms, deletion, backup, ingress, deployment topology,
-and production resource values are unselected. Recursive geometry, ordering,
-spacing, labels, and picking are also unselected. This documentation does not
-choose them.
+For standalone M5, detailed request and event protocols, a public API,
+authentication, Internet exposure, deployment topology, calibrated capacity
+values, and device qualification remain unselected. The accepted design does not authorize private
+repositories or FLOW/ADO integration.
+
+For the whole-core target, Save persistence technology, portable exchange
+representation, format and I/O, deletion, backup, and recovery remain
+unselected. Recursive geometry, ordering, spacing, labels, and picking are also
+unselected. This documentation does not choose them.

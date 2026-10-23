@@ -51,15 +51,35 @@ ownership. Rollback, context loss, `pagehide`, or controller disposal removes
 listeners, semantic nodes, canvas state, worker ownership, and WebGL resources
 through idempotent cleanup.
 
-== Accepted, unimplemented runtime outcomes
+== Accepted, unimplemented standalone M5 runtime
 
-The target continues after eligible per-file text, syntax, or metric failures
-and reports each sanitized failed-file outcome. It recursively represents the
-successful hierarchy and provides a complete sortable successful-file inventory.
-Selection is shared between city and list and does not move the camera. Explicit
-unit drill-down shows exact analyzed source and owned contributions.
+The accepted standalone slice runs the browser application and internal
+application requests on one native same-origin `node:http` service under the
+package-supported Node.js runtime. The server admits each analysis attempt into
+one dedicated `worker_threads` worker. The parent terminates and awaits exit of
+a worker that must stop, and stale worker messages cannot publish discarded
+state. This same-process worker boundary does not sandbox source or guarantee
+survival of process or host out-of-memory failure.
 
-A completed analysis remains temporary until explicit Save. Save creates a new
-immutable server-owned snapshot; reopen uses retained source and results without
-GitHub acquisition or reanalysis. These outcomes are accepted, but no request,
-transport, persistence, or cleanup flow has been designed or implemented.
+The xref:requirements:standalone-m5-operating-policy.adoc[standalone M5
+operating policy] owns temporary process-memory custody, session-loss and
+shutdown cleanup, loopback-first exposure, and finite operator-set admission.
+Detailed request and event shapes, lifecycle states, session-loss detection,
+deployment values, and capacity values remain implementation contracts. No
+standalone server or Raspberry Pi behavior is implemented, deployed, or
+qualified by this baseline.
+
+== Accepted, unimplemented whole-core runtime outcomes
+
+The whole-core target continues after eligible per-file text, syntax, or metric
+failures and reports each sanitized failed-file outcome. It recursively
+represents the successful hierarchy and provides a complete sortable
+successful-file inventory. Selection is shared between city and list and does
+not move the camera. Explicit unit drill-down shows exact analyzed source and
+owned contributions.
+
+A completed whole-core analysis remains temporary until explicit Save. Save
+creates a new immutable server-owned snapshot. Reopen uses retained source and
+results without GitHub acquisition or reanalysis. These outcomes are accepted,
+but detailed request and transport flows, Save persistence, and whole-core
+cleanup and recovery flows have not been designed or implemented.
