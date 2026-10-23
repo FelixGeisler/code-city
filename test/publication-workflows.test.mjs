@@ -21,7 +21,7 @@ const VERIFY_COMMANDS = ["npm ci --ignore-scripts", "npm ls --all", "node tools/
 const PACKET_FILES = ["artifact.json", "smoke.json", "qualification.json", "capacity.json", "requests.json", "lifecycle.json", "index.json"];
 const ACTIONS = {
   checkout: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-  node: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+  node: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
   pagesUpload: "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b",
   artifactUpload: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
   deploy: "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346",
