@@ -789,30 +789,13 @@ test("district projection fails complete W, depth, finite, dimension, and exact-
   ]) failure(result, id);
 });
 
-test("accepted ADR history and current perspective requirements stay synchronized without ADR 0013", async () => {
-  const adrFiles = [
-    ["0008-browser-native-webgl2-instanced-city-presentation.adoc", 5_274, "b493f62f8a9a51d447b4b103a37a65f75687bcf0178465174d877234b278bb18"],
-    ["0011-interactive-webgl2-navigation-and-inspection.adoc", 23_113, "9cc5774e0bc5b14575269904d304a83504a94173fc9bef3f61b257dc56eec912"],
-    ["0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc", 16_083, "8e860012ac58e010ca7f0515a966cd97224138dd8ff709d562f70c78130898e4"],
-  ];
-  const adrs = [];
-  for (const [file, expectedLength, expectedHash] of adrFiles) {
-    const text = await readFile(path.join(root, "docs/modules/architecture/pages/adr", file), "utf8");
-    const bytes = Buffer.from(text.replaceAll("\r\n", "\n"));
-    assert.equal(bytes.byteLength, expectedLength, file);
-    assert.equal(createHash("sha256").update(bytes).digest("hex"), expectedHash, file);
-    assert.equal(bytes.at(-1), 10, file);
-    assert.match(text, /^Status:: Accepted$/mu, file);
-    adrs.push(text);
-  }
-  assert(adrs[0].includes("issues/569"));
-  assert(adrs[1].includes("Subsequent refinement (issue 569)"));
-  assert(adrs[2].includes("Subsequent refinement (issue 569)"));
-  assert(adrs[1].includes("Subsequent refinement (issue 571)"));
-  assert(adrs[2].includes("Subsequent refinement (issue 571)"));
-  assert(adrs.every((adr) => adr.includes("issues/573") && adr.includes("issues/575") && adr.includes("issues/586")));
-  assert(adrs[2].includes("Subsequent refinement (issue 588)"));
-  assert.equal(await readFile(path.join(root, "docs/modules/architecture/nav.adoc"), "utf8").then((text) => text.includes("0013")), false);
+test("ADR 0013 and current perspective requirements stay synchronized", async () => {
+  const ownershipAdr = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc"), "utf8");
+  const ownershipBytes = Buffer.from(ownershipAdr.replaceAll("\r\n", "\n"));
+  assert.equal(createHash("sha256").update(ownershipBytes).digest("hex"), "8430d0ca3744dadf2f9b3a46baf8b3a75f93630a47b1de81df17151110538f80");
+  assert.match(ownershipAdr, /^Status:: Accepted$/mu);
+  const architectureNav = await readFile(path.join(root, "docs/modules/architecture/nav.adoc"), "utf8");
+  assert(architectureNav.includes("xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc"));
   const requirements = await readFile(path.join(root, "docs/modules/requirements/pages/city-and-failures.adoc"), "utf8");
   const normalized = requirements.replace(/\s+/g, " ");
   for (const statement of [

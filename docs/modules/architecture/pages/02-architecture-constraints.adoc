@@ -1,27 +1,67 @@
-= 2. Architecture Constraints
+= Architecture Constraints
 
-[cols="1,3",options="header"]
-|===
-|Constraint |Consequence
+== Current implementation
 
-|Browser only
-|UI and presentation run in the main context; processing uses at most one worker.
+* The application is a static TypeScript package built with Vite and runs in a
+  browser main context plus one module worker. It has no application server or
+  persistence runtime.
+* The current provider is anonymous public GitHub. The browser resolves the
+  explicit branch head, or the default-branch head when no branch was supplied,
+  and retrieves source through validated immutable commit and root tree
+  identities.
+* Repository content is untrusted data. It is decoded and parsed but never
+  imported, executed, built, or tested. The static package applies its manifest-
+  owned content security and connection policy.
+* Supported languages, source admission, processing limits, metric semantics,
+  and visual mapping are product constraints owned by
+  xref:requirements:source-and-metrics.adoc[Source and Metrics] and
+  xref:requirements:city-and-failures.adoc[City and Failures].
+* Syntax analysis uses pinned WebAssembly grammars.
+* Presentation requires WebGL2 and follows the product presentation contract in
+  xref:requirements:city-and-failures.adoc[City and Failures].
+* Dependency and tool versions are authoritative only in `package.json` and
+  `package-lock.json`.
 
-|Public GitHub only
-|Repository access is direct and anonymous. There is no proxy or credential.
+== Accepted standalone M5 design
 
-|Static hosting
-|GitHub Pages serves one application artifact below `/code-city/`.
+The standalone M5 slice uses the package-supported Node.js runtime and one
+native same-origin `node:http` service. Each admitted analysis attempt runs in
+one dedicated `worker_threads` worker. The parent owns worker termination and
+awaits worker exit before terminal cleanup. This is a same-process execution
+boundary, not an operating-system sandbox or protection against process or host
+out-of-memory failure.
 
-|Session only
-|Reload clears product state. There is no database or browser persistence.
+The xref:requirements:standalone-m5-operating-policy.adoc[standalone M5
+operating policy] defines process-memory-only temporary custody, loopback-first
+exposure with deliberate trusted-LAN use limited to public GitHub source, a
+finite operator-set admission capacity without a numerical default, and joined
+terminal cleanup. These choices and
+xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR 0014] are
+accepted design. They are not implemented or deployed, and they provide no
+Raspberry Pi performance, concurrency, memory, or deployment qualification.
 
-|Independent core
-|Core rules depend on no browser, GitHub, Worker, parser, renderer, or build API.
+== Approved whole-core target
 
-|Fixed result
-|Users cannot configure revision, metrics, layout, palette, or limits.
+xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
+requires a Code City server to own acquisition, analysis, retained source-result
+association, and optional saved investigations. The browser remains responsible
+for presentation and investigation. Explicit Save creates an immutable shared
+snapshot. Temporary work is not silently saved.
 
-|One publisher
-|Only protected `main` may publish the production application.
-|===
+The target must retain the product contracts linked above. In particular, it
+must support per-file continuation after complete acquisition, recursive
+hierarchy, source and unit drill-down, a complete sortable file inventory,
+Save/reopen, and selection without automatic camera movement. These are
+accepted constraints, not current capabilities.
+
+== Unresolved design
+
+For standalone M5, detailed request and event protocols, a public API,
+authentication, Internet exposure, deployment topology, calibrated capacity
+values, and device qualification remain unselected. The accepted design does not authorize private
+repositories or FLOW/ADO integration.
+
+For the whole-core target, Save persistence technology, portable exchange
+representation, format and I/O, deletion, backup, and recovery remain
+unselected. Recursive geometry, ordering, spacing, labels, and picking are also
+unselected. This documentation does not choose them.

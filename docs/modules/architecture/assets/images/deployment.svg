@@ -1,14 +1,45 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 450" role="img" aria-labelledby="title desc">
-  <title id="title">Code City deployment</title>
-  <desc id="desc">GitHub Pages serves static assets to the browser. The browser main context owns the semantic controller and interactive WebGL presenter. One worker constructs the aligned city and accesses public GitHub directly.</desc>
-  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#475569"/></marker></defs>
-  <style>.n{fill:#f8fafc;stroke:#334155;stroke-width:2}.b{fill:#e0f2fe;stroke:#0369a1;stroke-width:2}.t{font:17px system-ui,sans-serif;fill:#0f172a;text-anchor:middle}.s{font:14px system-ui,sans-serif;fill:#334155;text-anchor:middle}.a{stroke:#475569;stroke-width:2;marker-end:url(#arrow)}</style>
-  <rect class="n" x="30" y="165" width="190" height="110" rx="8"/><text class="t" x="125" y="205">GitHub Pages</text><text class="s" x="125" y="235">Static application</text>
-  <rect class="b" x="330" y="55" width="300" height="340" rx="12"/><text class="t" x="480" y="90">Browser</text>
-  <rect class="n" x="375" y="125" width="210" height="90" rx="8"/><text class="t" x="480" y="162">Main context</text><text class="s" x="480" y="183">Controller + interactive</text><text class="s" x="480" y="201">WebGL presenter</text>
-  <rect class="n" x="375" y="270" width="210" height="90" rx="8"/><text class="t" x="480" y="307">Worker</text><text class="s" x="480" y="333">Aligned city pipeline</text>
-  <rect class="n" x="740" y="165" width="170" height="110" rx="8"/><text class="t" x="825" y="205">Public GitHub</text><text class="s" x="825" y="235">REST + source</text>
-  <line class="a" x1="220" y1="220" x2="320" y2="170"/><text class="s" x="270" y="175">assets</text>
-  <line class="a" x1="480" y1="215" x2="480" y2="260"/><line class="a" x1="500" y1="270" x2="500" y2="225"/>
-  <line class="a" x1="585" y1="315" x2="730" y2="245"/><line class="a" x1="740" y1="205" x2="595" y2="290"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 760" role="img" aria-labelledby="title desc">
+  <title id="title">Current Code City static deployment</title>
+  <desc id="desc">GitHub Actions builds and verifies one static package and deploys it as a GitHub Pages artifact. A browser main context and one worker run the package and make anonymous reads from public GitHub. No Code City server is deployed. A note states the accepted target needs unresolved server capability.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#334155"/></marker>
+    <style>.node{fill:#f8fafc;stroke:#334155;stroke-width:2}.external{fill:#eef2ff;stroke:#4338ca;stroke-width:2}.runtime{fill:#e0f2fe;stroke:#0369a1;stroke-width:2}.target{fill:#fff7ed;stroke:#c2410c;stroke-width:2;stroke-dasharray:10 7}.line{stroke:#334155;stroke-width:2.5;fill:none;marker-end:url(#arrow)}.label{font:600 21px system-ui,sans-serif;fill:#0f172a}.text{font:17px system-ui,sans-serif;fill:#334155}.small{font:15px system-ui,sans-serif;fill:#475569}.targetText{fill:#9a3412}</style>
+  </defs>
+  <rect width="1300" height="760" fill="#fff"/>
+  <text x="45" y="45" class="label">Current deployed nodes</text>
+  <rect x="45" y="90" width="265" height="165" rx="12" class="node"/>
+  <text x="177" y="133" text-anchor="middle" class="label">GitHub Actions</text>
+  <text x="177" y="168" text-anchor="middle" class="text">Verify locked source</text>
+  <text x="177" y="198" text-anchor="middle" class="text">Build static package</text>
+  <text x="177" y="228" text-anchor="middle" class="small">Create manifest + record</text>
+  <rect x="485" y="90" width="265" height="165" rx="12" class="external"/>
+  <text x="617" y="133" text-anchor="middle" class="label">GitHub Pages</text>
+  <text x="617" y="168" text-anchor="middle" class="text">Reviewed static artifact</text>
+  <text x="617" y="198" text-anchor="middle" class="text">HTML, CSS, JavaScript, WASM</text>
+  <text x="617" y="228" text-anchor="middle" class="small">No application process</text>
+  <rect x="870" y="75" width="385" height="390" rx="14" class="node"/>
+  <text x="900" y="116" class="label">User browser</text>
+  <rect x="915" y="145" width="295" height="120" rx="10" class="runtime"/>
+  <text x="1062" y="185" text-anchor="middle" class="label">Main context</text>
+  <text x="1062" y="217" text-anchor="middle" class="text">Controller · semantic UI</text>
+  <text x="1062" y="243" text-anchor="middle" class="text">WebGL2 presenter</text>
+  <rect x="915" y="305" width="295" height="120" rx="10" class="runtime"/>
+  <text x="1062" y="345" text-anchor="middle" class="label">One module worker</text>
+  <text x="1062" y="377" text-anchor="middle" class="text">Acquisition · parser · metrics</text>
+  <text x="1062" y="403" text-anchor="middle" class="text">City construction</text>
+  <path d="M310 172 H477" class="line"/>
+  <text x="393" y="156" text-anchor="middle" class="small">Pages artifact</text>
+  <path d="M750 172 H862" class="line"/>
+  <text x="806" y="156" text-anchor="middle" class="small">HTTPS assets</text>
+  <path d="M1062 265 V297" class="line"/>
+  <rect x="485" y="525" width="265" height="130" rx="12" class="external"/>
+  <text x="617" y="569" text-anchor="middle" class="label">Public GitHub</text>
+  <text x="617" y="603" text-anchor="middle" class="text">Anonymous API + raw source</text>
+  <text x="617" y="631" text-anchor="middle" class="small">External provider</text>
+  <path d="M915 365 H790 V590 H758" class="line"/>
+  <rect x="870" y="525" width="385" height="165" rx="12" class="target"/>
+  <text x="900" y="569" class="label targetText">Accepted target — not deployed</text>
+  <text x="900" y="605" class="text">Server capability will own acquisition,</text>
+  <text x="900" y="635" class="text">analysis, retained source, and saves.</text>
+  <text x="900" y="668" class="small targetText">Topology and technologies are unresolved.</text>
 </svg>

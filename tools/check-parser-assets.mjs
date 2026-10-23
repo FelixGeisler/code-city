@@ -22,11 +22,13 @@ export const SELECTED_ASSETS = Object.freeze([
   Object.freeze({ role: "grammar-javascript", relativePath: "node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm", sha256: "5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240", abi: 15 }),
   Object.freeze({ role: "grammar-typescript", relativePath: "vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm", sha256: "e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9", bytes: 1_362_713, abi: 14 }),
   Object.freeze({ role: "grammar-tsx", relativePath: "vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm", sha256: "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7", bytes: 1_446_550, abi: 14 }),
+  Object.freeze({ role: "grammar-csharp", relativePath: "node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-c-sharp.wasm", sha256: "d12d85996c25957b4c1b71e26db2d7cc8a294997b60642e9c2a3b031b2c66dd3", bytes: 5_103_332, abi: 15 }),
 ]);
 
 export const NOTICE_LABELS = Object.freeze({
   typescript: "third-party-notice:source-grammar:tree-sitter-typescript@0.23.2",
   javascript: "third-party-notice:source-grammar-dependency:tree-sitter-javascript@0.23.1",
+  csharp: "third-party-notice:source-grammar:tree-sitter-c-sharp@485f0bae0274ac9114797fc10db6f7034e4086e3",
 });
 
 const EXPECTED_VENDOR = Object.freeze({
@@ -37,11 +39,12 @@ const EXPECTED_VENDOR = Object.freeze({
   "wasm/tree-sitter-typescript.wasm": Object.freeze({ sha256: "e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9", bytes: 1_362_713 }),
   "wasm/tree-sitter-tsx.wasm": Object.freeze({ sha256: "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7", bytes: 1_446_550 }),
 });
-const EXPECTED_INVENTORY = Object.freeze({ sha256: "727c583b8823fdaa80204c3f3211c37ed4c6bd8b07a89afbf8bcc90bad28d931", bytes: 10_167, rows: 219 });
+const EXPECTED_INVENTORY = Object.freeze({ sha256: "50400a778a4ad9bfe8d1b09f4194d89ace4b9f63b3685b54e61001869afeffe0", bytes: 11_041, rows: 238 });
 const EXPECTED_PROVENANCE_VALUE_SHA256 = "aca712af736b438827b75ebfd4d0b6926f15de1fb33fc922674735e20d3adf5f";
 const EXPECTED_DYLINK = Object.freeze({
   "grammar-typescript": Object.freeze({ memorySize: 1_330_484, memoryAlign: 4, tableSize: 7, tableAlign: 0, neededLibraries: Object.freeze([]), subsectionTypes: Object.freeze([1]) }),
   "grammar-tsx": Object.freeze({ memorySize: 1_409_560, memoryAlign: 4, tableSize: 7, tableAlign: 0, neededLibraries: Object.freeze([]), subsectionTypes: Object.freeze([1]) }),
+  "grammar-csharp": Object.freeze({ memorySize: 5_013_132, memoryAlign: 4, tableSize: 7, tableAlign: 0, neededLibraries: Object.freeze([]), subsectionTypes: Object.freeze([1]) }),
 });
 const EXPECTED_DECLARATIONS = Object.freeze([
   "  <meta charset=\"UTF-8\">",
@@ -264,6 +267,8 @@ export async function generateCanonicalWasmInventory(root = projectRoot) {
   invariant(digest(generated) === EXPECTED_INVENTORY.sha256, "Generated canonical WASM inventory digest changed");
   const fixture = await readFile(path.join(root, "test", "fixtures", "wasm-inventory.tsv"));
   invariant(generated.equals(fixture), "Tracked canonical WASM inventory differs from generated evidence");
+  const csharpBlock = await readFile(path.join(root, "test", "fixtures", "csharp-wasm-inventory.tsv"));
+  invariant(generated.subarray(generated.byteLength - csharpBlock.byteLength).equals(csharpBlock), "Canonical C# inventory block differs from qualified evidence");
   return generated;
 }
 
@@ -306,8 +311,9 @@ export async function verifyVendorFiles(root = projectRoot) {
 export async function expectedNoticeBlock(root = projectRoot) {
   const typescript = await readFile(path.join(root, "vendor", "tree-sitter-typescript", "LICENSE"), "utf8");
   const javascript = await readFile(path.join(root, "vendor", "tree-sitter-typescript", "LICENSE.javascript"), "utf8");
-  invariant(typescript.endsWith("\n") && javascript.endsWith("\n"), "Notice payloads must retain final LF");
-  return `<!-- ${NOTICE_LABELS.typescript}\n${typescript}-->\n  <!-- ${NOTICE_LABELS.javascript}\n${javascript}-->`;
+  const csharp = await readFile(path.join(root, "test", "fixtures", "csharp-source-license.txt"), "utf8");
+  invariant(typescript.endsWith("\n") && javascript.endsWith("\n") && csharp.endsWith("\n"), "Notice payloads must retain final LF");
+  return `<!-- ${NOTICE_LABELS.typescript}\n${typescript}-->\n  <!-- ${NOTICE_LABELS.javascript}\n${javascript}-->\n  <!-- ${NOTICE_LABELS.csharp}\n${csharp}-->`;
 }
 
 export async function assertEntryNotices(bytes, label, root = projectRoot) {
@@ -356,7 +362,7 @@ export async function checkParserAssets(root = projectRoot) {
   invariant(provenance.closedAssetContract.abi.typescript === 14 && provenance.closedAssetContract.abi.tsx === 14, "Provenance ABI pins changed");
   await generateCanonicalWasmInventory(root);
   await assertEntryNotices(await readFile(path.join(root, "index.html")), "Source", root);
-  console.log("Verified the six-file parser vendor closure, provenance, notices, hashes, ABIs, dylink.0, and canonical inventory.");
+  console.log("Verified the six-file parser vendor closure, three notices, selected parser hashes, ABIs, dylink.0, and five-WASM canonical inventory.");
 }
 
 const invokedPath = process.argv[1] && path.resolve(process.argv[1]);

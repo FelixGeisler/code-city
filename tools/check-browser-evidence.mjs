@@ -14,6 +14,7 @@ import {
 import { canonicalDistDirectory, canonicalManifestPath, projectRoot } from "./build-package.mjs";
 import { createBrowserHarnessSource } from "./browser-evidence-harness.mjs";
 import { SELECTED_ASSETS } from "./check-parser-assets.mjs";
+import { captureNativeScrollEvidence } from "./native-scroll-evidence.mjs";
 import {
   connectCdp,
   discoverInstalledChrome,
@@ -23,7 +24,8 @@ import {
 
 const WATCHDOG_MS = 600_000;
 const SUCCESS_FIXTURE = Object.freeze({
-  repositoryUrl: "https://github.com/code-city/evidence-fixture",
+  repositoryUrl: "https://github.com/code-city/evidence-fixture/tree/release%2Fevidence-encoded",
+  branch: "release/evidence-encoded",
   selected: "0123456789abcdef0123456789abcdef01234567",
   root: "89abcdef89abcdef89abcdef89abcdef89abcdef",
   path: "src/answer.js",
@@ -33,12 +35,26 @@ const SUCCESS_FIXTURE = Object.freeze({
   modelBytesSha256: "30f7ced3a0f3220901639166c4e7e9cee4f62a0b7072a151bacdaafa54132672",
 });
 const CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'";
+const CSHARP_ADMISSION_FIXTURE_PATH = path.join(projectRoot, "test", "fixtures", "csharp-admission-browser.json");
+const CSHARP_ADMISSION_FIXTURE_SHA256 = "e3e90e182ecef155a96dd47e9e7e480d5bac6bd42152c688fea34a85aa95428e";
 const INTERACTIVE_FIXTURE_PATH = path.join(projectRoot, "test", "fixtures", "interactive", "fixture.json");
 const INTERACTIVE_FIXTURE_SHA256 = "12ca139180e3893d19a85271f469c3a6ee2badb3c5ed440bde2b34bcfb94375f";
 const INTERACTIVE_MODEL_SHA256 = "61ee18273ead17b704453074a5c523a20ff4d965dc19fe6842f0874b69b1bdbf";
 
 function invariant(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function completePositiveTree(entries) {
+  const paths = new Set(entries.map(({ path: entryPath }) => entryPath));
+  const parents = new Map();
+  for (const { path: entryPath } of entries) {
+    for (let slash = entryPath.lastIndexOf("/"); slash >= 0; slash = entryPath.lastIndexOf("/", slash - 1)) {
+      const parent = entryPath.slice(0, slash);
+      if (!paths.has(parent)) parents.set(parent, { path: parent, mode: "040000", type: "tree" });
+    }
+  }
+  return [...parents.values(), ...entries];
 }
 
 function exactKeys(value, keys, label) {
@@ -463,7 +479,13 @@ function pageObservationSource() {
         });
       }
       postMessage(command, transfer) {
-        this.__codeCityWorkerRecord.posts.push({ type: command?.type, generation: command?.generation });
+        this.__codeCityWorkerRecord.posts.push({
+          type: command?.type,
+          generation: command?.generation,
+          keys: command && typeof command === "object" ? Object.keys(command) : [],
+          repository: command?.repository && typeof command.repository === "object" ? { ...command.repository } : null,
+          additionalExclusions: Array.isArray(command?.additionalExclusions) ? [...command.additionalExclusions] : null,
+        });
         return transfer === undefined ? nativePost.call(this, command) : nativePost.call(this, command, transfer);
       }
       addEventListener(type, listener, options) {
@@ -638,7 +660,7 @@ const WORKER_OBSERVATION_SOURCE = `(() => {
 async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests }) {
   checkStrictSourceNormalization();
   const fixture = SUCCESS_FIXTURE;
-  const revisionUrl = "https://api.github.com/repos/code-city/evidence-fixture/commits?per_page=1&page=1";
+  const revisionUrl = "https://api.github.com/repos/code-city/evidence-fixture/branches/release%2Fevidence-encoded";
   const commitUrl = `https://api.github.com/repos/code-city/evidence-fixture/git/commits/${fixture.selected}`;
   const treeUrl = `https://api.github.com/repos/code-city/evidence-fixture/git/trees/${fixture.root}?recursive=1`;
   const rawUrl = `https://raw.githubusercontent.com/code-city/evidence-fixture/${fixture.selected}/${fixture.path}`;
@@ -647,9 +669,11 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
   const computedNormalizedSourceSha256 = normalizedSourceDigest(rawSourceBytes);
   assert.equal(computedNormalizedSourceSha256, fixture.expectedNormalizedSourceSha256);
   const bodies = new Map([
-    [revisionUrl, JSON.stringify([{ sha: fixture.selected }])],
+    [revisionUrl, JSON.stringify({ name: fixture.branch, commit: { sha: fixture.selected } })],
     [commitUrl, JSON.stringify({ sha: fixture.selected, tree: { sha: fixture.root } })],
-    [treeUrl, JSON.stringify({ sha: fixture.root, truncated: false, tree: [{ path: fixture.path, mode: "100644", type: "blob", sha: fixture.blob }] })],
+    [treeUrl, JSON.stringify({ sha: fixture.root, truncated: false, tree: completePositiveTree([
+      { path: fixture.path, mode: "100644", type: "blob", sha: fixture.blob },
+    ]) })],
     [rawUrl, rawSourceBytes],
   ]);
   const gets = [];
@@ -712,7 +736,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       const { requestId, request } = message.params;
       const url = request.url;
       const method = request.method;
-      invariant(urls.includes(url), `Parent Fetch intercepted an unrecognized URL: ${url}`);
+      invariant(urls.includes(url), "Parent Fetch intercepted an unrecognized provider route");
       const headers = Object.fromEntries(Object.entries(request.headers).map(([name, value]) => [name.toLowerCase(), value]));
       invariant(headers.origin === origin, `GitHub exchange has wrong Origin: ${headers.origin ?? "none"}`);
       if (method === "OPTIONS") {
@@ -786,7 +810,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     const snapshot = await evaluate("({status:document.querySelector('[data-status]')?.textContent,commit:document.querySelector('[data-commit]')?.textContent,canvases:document.querySelectorAll('[data-city] canvas').length,evidence:globalThis.__codeCitySuccessEvidence})");
-    throw new Error(`Timed out waiting for ${label}; snapshot=${JSON.stringify(snapshot)}; GETs=${JSON.stringify(gets)}; OPTIONS=${JSON.stringify(options)}; transfers=${JSON.stringify(workerTransfers)}; childInstallations=${childInstallations.length}; network=${JSON.stringify(requestedUrls.slice(networkStart))}`);
+    throw new Error(`Timed out waiting for ${label}; snapshot=${JSON.stringify(snapshot)}; GET-count=${gets.length}; OPTIONS-count=${options.length}; transfers=${JSON.stringify(workerTransfers)}; child-installations=${childInstallations.length}; network-count=${requestedUrls.length - networkStart}`);
   };
 
   try {
@@ -796,12 +820,17 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await cdp.send("Page.navigate", { url: `${origin}/code-city/index.html` }, sessionId);
     await waitFor("document.readyState==='complete'&&document.querySelector('form')&&globalThis.__codeCitySuccessEvidence", "canonical package startup");
 
-    const submit = `document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();true`;
+    const exclusionFixture = ["node_modules", "dist", "build", "bin", "obj", "<img src=x>", "\u202Eadverse"];
+    const additionalExclusionText = "\u202Eadverse\n<img src=x>";
+    const submit = `document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('textarea[name=additional-exclusions]').value=${JSON.stringify(additionalExclusionText)};document.querySelector('form').requestSubmit();true`;
     await evaluate(submit);
     const first = await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===1`, "first successful city");
     invariant(first === true, "First successful package run did not publish");
 
-    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,labels:document.querySelectorAll('[data-district-context]').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,legends:document.querySelectorAll('[data-city] [data-palette-legend]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
+    const editOnly = await evaluate(`document.querySelector('textarea[name=additional-exclusions]').value='edited-only';({workers:globalThis.__codeCitySuccessEvidence.workers.length,messages:globalThis.__codeCitySuccessEvidence.messages.length,commit:document.querySelector('[data-commit]').textContent,effective:[...document.querySelectorAll('[data-effective-exclusion-values] bdi')].map(node=>node.textContent)})`);
+    assert.deepEqual(editOnly, { workers: 1, messages: 1, commit: fixture.selected, effective: exclusionFixture });
+
+    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('textarea[name=additional-exclusions]').value=${JSON.stringify(additionalExclusionText)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,labels:document.querySelectorAll('[data-district-context]').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,legends:document.querySelectorAll('[data-city] [data-palette-legend]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
     assert.equal(cleared.commit, "");
     assert.equal(cleared.canvases, 0);
     assert.equal(cleared.labels, 0);
@@ -1003,12 +1032,15 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {draws:context.draws.length-${navigationStart.draws},selectionFocusDraws:context.selectionFocusDraws.length-${navigationStart.selectionFocusDraws},hoverFocusDraws:context.hoverFocusDraws.length-${navigationStart.hoverFocusDraws},matrices:context.matrices.slice(${navigationStart.matrices}),selectionFocusMatrices:context.selectionFocusMatrices.slice(${navigationStart.selectionFocusMatrices}),hoverFocusMatrices:context.hoverFocusMatrices.slice(${navigationStart.hoverFocusMatrices}),subUploads:context.subUploads.length-${navigationStart.subUploads},uploads:context.uploads.map(bytes=>bytes.length),events:Object.fromEntries(Object.entries(globalThis.__navigationEvidence).map(([key,value])=>[key,value.slice(${JSON.stringify(navigationStart.eventCounts)}[key])])),canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,selectionAfterCameraResizeReset:{hidden:inspector.hidden,path:inspector.querySelector('[data-canonical-path]').textContent,sourceLines:inspector.querySelector('[data-source-lines]').textContent,range:inspector.querySelector('[data-selected-range]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent}}; })()`);
 
     const observed = await evaluate("globalThis.__codeCitySuccessEvidence");
-    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,contextRows:document.querySelectorAll('[data-district-context]').length,contextLabels:document.querySelectorAll('[data-district-context-label]').length,contextTextSafe:[...document.querySelectorAll('[data-district-context-label] bdi')].length===1&&document.querySelector('[data-district-context-label] bdi').textContent==='src',inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorHidden:document.querySelector('[data-inspector]')?.hidden,pathTag:document.querySelector('[data-canonical-path]')?.tagName,legendItems:document.querySelectorAll('[data-palette-legend] li').length,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName),publicationOrder:[...document.querySelector('[data-city-publication]').children].map(node=>node.matches('[data-path-search]')?'search':node.matches('[data-district-context]')?'context':node.matches('[data-city]')?'city':'other')})");
+    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,textareas:document.querySelectorAll('textarea[name=additional-exclusions]').length,submit:document.querySelector('form button[type=submit]').textContent,effectiveHidden:document.querySelector('[data-effective-exclusions]').hidden,effectiveValues:[...document.querySelectorAll('[data-effective-exclusion-values] bdi')].map(node=>node.textContent),effectiveTags:[...document.querySelectorAll('[data-effective-exclusion-values] bdi')].map(node=>node.tagName),effectiveMarkupChildren:document.querySelector('[data-effective-exclusion-values]').querySelectorAll('img').length,effectiveStyles:[...document.querySelectorAll('[data-effective-exclusion-values] bdi')].map(node=>({overflowWrap:getComputedStyle(node).overflowWrap,unicodeBidi:getComputedStyle(node).unicodeBidi})),commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,contextRows:document.querySelectorAll('[data-district-context]').length,contextLabels:document.querySelectorAll('[data-district-context-label]').length,contextTextSafe:[...document.querySelectorAll('[data-district-context-label] bdi')].length===1&&document.querySelector('[data-district-context-label] bdi').textContent==='src',inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorHidden:document.querySelector('[data-inspector]')?.hidden,pathTag:document.querySelector('[data-canonical-path]')?.tagName,legendItems:document.querySelectorAll('[data-palette-legend] li').length,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName),publicationOrder:[...document.querySelector('[data-city-publication]').children].map(node=>node.matches('[data-path-search]')?'search':node.matches('[data-district-context]')?'context':node.matches('[data-city]')?'city':'other')})");
 
     invariant(failures.length === 0, `Production success instrumentation failed: ${failures.map(String).join("; ")}`);
     invariant(browserExceptions.length === 0, `Production browser exceptions: ${browserExceptions.join("; ")}`);
     invariant(failedRequests.length === 0, `Production failed requests: ${failedRequests.join("; ")}`);
     assert.deepEqual(gets.map(({ url }) => url), [...urls, ...urls]);
+    assert.equal(gets.filter(({ url }) => url === revisionUrl).length, 2);
+    assert.equal(gets.some(({ url }) => url.endsWith("/commits?per_page=1&page=1")), false);
+    assert.equal(urls.slice(1).some((url) => url.includes(encodeURIComponent(fixture.branch))), false);
     assert.equal(maximumGetConcurrency, 1);
     invariant(options.length >= 3, "Native CORS preflights were not intercepted on the parent session");
     for (const apiUrl of urls.slice(0, 3)) invariant(options.some((entry) => entry.url === apiUrl), `No preflight was intercepted for ${apiUrl}`);
@@ -1019,7 +1051,13 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(observed.liveWorkers, 0);
     assert.equal(observed.workers.length, 2);
     for (const [index, worker] of observed.workers.entries()) {
-      assert.deepEqual(worker.posts, [{ type: "START", generation: index + 1 }]);
+      assert.deepEqual(worker.posts, [{
+        type: "START",
+        generation: index + 1,
+        keys: ["type", "generation", "repository", "additionalExclusions"],
+        repository: { owner: "code-city", repository: "evidence-fixture", branch: fixture.branch },
+        additionalExclusions: ["<img src=x>", "\u202Eadverse"],
+      }]);
       assert.deepEqual(worker.listenerAdds, ["message", "error", "messageerror"]);
       assert.deepEqual(worker.listenerRemoves, ["message", "error", "messageerror"]);
       assert.equal(worker.terminateCalls, 1);
@@ -1187,7 +1225,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert(navigation.events.pointers.some(({ type, target, defaultPrevented }) => type === "pointerdown" && target !== "CANVAS" && !defaultPrevented));
     assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target === "CANVAS" && defaultPrevented));
     assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target !== "CANVAS" && !defaultPrevented));
-    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, contextRows: 1, contextLabels: 1, contextTextSafe: true, inspectors: 1, inspectorHidden: false, pathTag: "BDI", legendItems: 6, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview. Use the arrow keys to traverse buildings, Home or End to select the first or last building, and Escape to clear selection.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION", "SECTION"], publicationOrder: ["search", "context", "city"] });
+    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, textareas: 1, submit: "Analyze", effectiveHidden: false, effectiveValues: exclusionFixture, effectiveTags: exclusionFixture.map(() => "BDI"), effectiveMarkupChildren: 0, effectiveStyles: exclusionFixture.map(() => ({ overflowWrap: "anywhere", unicodeBidi: "isolate" })), commit: fixture.selected, canvases: 1, contextRows: 1, contextLabels: 1, contextTextSafe: true, inspectors: 1, inspectorHidden: false, pathTag: "BDI", legendItems: 6, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview. Use the arrow keys to traverse buildings, Home or End to select the first or last building, and Escape to clear selection.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION", "SECTION"], publicationOrder: ["search", "context", "city"] });
 
     const layouts = [];
     for (const expected of [
@@ -1278,6 +1316,9 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     invariant(heldRequests.length === 1, "Page-lifecycle fixture did not hold exactly one provider request");
+    assert.equal(heldRequests[0].url, revisionUrl);
+    assert.equal(gets.filter(({ url }) => url === revisionUrl).length, 2);
+    assert.equal(gets.length, urls.length * 2);
     const beforePagehide = await evaluate("({workers:globalThis.__codeCitySuccessEvidence.workers.length,live:globalThis.__codeCitySuccessEvidence.liveWorkers,messages:globalThis.__codeCitySuccessEvidence.messages.length,canvases:document.querySelectorAll('[data-city] canvas').length,commit:document.querySelector('[data-commit]').textContent})");
     assert.deepEqual(beforePagehide, { workers: 3, live: 1, messages: 2, canvases: 0, commit: "" });
 
@@ -1289,7 +1330,13 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(pagehide.canvases, 0);
     assert.equal(pagehide.workers.length, 3);
     assert.deepEqual(pagehide.workers[2], {
-      posts: [{ type: "START", generation: 3 }],
+      posts: [{
+        type: "START",
+        generation: 3,
+        keys: ["type", "generation", "repository", "additionalExclusions"],
+        repository: { owner: "code-city", repository: "evidence-fixture", branch: fixture.branch },
+        additionalExclusions: ["<img src=x>", "\u202Eadverse"],
+      }],
       listenerAdds: ["message", "error", "messageerror"],
       listenerRemoves: ["message", "error", "messageerror"],
       terminateCalls: 1,
@@ -1316,7 +1363,197 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const reloaded = await evaluate("({workers:globalThis.__codeCitySuccessEvidence.workers.length,messages:globalThis.__codeCitySuccessEvidence.messages.length,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length})");
     assert.deepEqual(reloaded, { workers: 0, messages: 0, status: "", commit: "", canvases: 0 });
 
-    console.log(`Production lifecycle evidence passed: selected=${fixture.selected}; normalized-source-sha256=${computedNormalizedSourceSha256}; model-sha256=${fixture.modelBytesSha256}; presenter-sha256=${presentationDigests[0]}; max-live-worker=1; pagehide-target-detach=${detachedWorkerTargets.length}; GETs=${gets.map(({ url }) => url).join(" -> ")}; OPTIONS=${JSON.stringify(options)}.`);
+    console.log(`Production lifecycle evidence passed: selected=${fixture.selected}; normalized-source-sha256=${computedNormalizedSourceSha256}; model-sha256=${fixture.modelBytesSha256}; presenter-sha256=${presentationDigests[0]}; max-live-worker=1; pagehide-target-detach=${detachedWorkerTargets.length}; GET-cardinality=${gets.length}; OPTIONS-cardinality=${options.length}.`);
+  } finally {
+    cdp.listeners.delete(listener);
+    try { await cdp.send("Fetch.disable", {}, sessionId); } catch {}
+  }
+}
+
+async function checkCSharpAdmissionPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests }) {
+  const fixtureBytes = await readFile(CSHARP_ADMISSION_FIXTURE_PATH);
+  invariant(createHash("sha256").update(fixtureBytes).digest("hex") === CSHARP_ADMISSION_FIXTURE_SHA256, "C# admission browser fixture changed");
+  const fixture = JSON.parse(fixtureBytes);
+  invariant(fixture.schemaVersion === 1 && fixture.success.modules.length === 3 && fixture.malformed.modules.length === 3, "C# admission browser fixture shape changed");
+  const sourceDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const normalize = (rawBytes) => {
+    let decoded = sourceDecoder.decode(rawBytes);
+    if (decoded.startsWith("\uFEFF")) decoded = decoded.slice(1);
+    invariant(!decoded.includes("\0"), "C# admission fixture contains NUL");
+    return decoded.replace(/\r\n?/gu, "\n");
+  };
+  const blobId = (rawBytes) => createHash("sha1").update(`blob ${rawBytes.byteLength}\0`).update(rawBytes).digest("hex");
+  const routeOracle = new Map();
+  const identities = new Map();
+  const addAttempt = (attempt, label) => {
+    const parsed = new URL(attempt.repositoryUrl);
+    const [owner, repository] = parsed.pathname.slice(1).split("/");
+    invariant(owner && repository && parsed.origin === "https://github.com", "C# admission fixture repository changed");
+    const revisionUrl = `https://api.github.com/repos/${owner}/${repository}/commits?per_page=1&page=1`;
+    const commitUrl = `https://api.github.com/repos/${owner}/${repository}/git/commits/${attempt.selected}`;
+    const treeUrl = `https://api.github.com/repos/${owner}/${repository}/git/trees/${attempt.root}?recursive=1`;
+    const sources = attempt.modules.map((module, index) => {
+      const rawBytes = Buffer.from(module.source, "utf8");
+      const url = `https://raw.githubusercontent.com/${owner}/${repository}/${attempt.selected}/${module.path.split("/").map(encodeURIComponent).join("/")}`;
+      return { identity: `${label}:source-${index + 1}`, url, rawBytes, sha: blobId(rawBytes) };
+    });
+    const routes = [
+      { identity: `${label}:revision`, url: revisionUrl, contentType: "application/json; charset=utf-8", body: Buffer.from(JSON.stringify([{ sha: attempt.selected }]), "utf8") },
+      { identity: `${label}:commit`, url: commitUrl, contentType: "application/json; charset=utf-8", body: Buffer.from(JSON.stringify({ sha: attempt.selected, tree: { sha: attempt.root } }), "utf8") },
+      { identity: `${label}:tree`, url: treeUrl, contentType: "application/json; charset=utf-8", body: Buffer.from(JSON.stringify({ sha: attempt.root, truncated: false, tree: completePositiveTree(attempt.modules.map((module, index) => ({ path: module.path, mode: "100644", type: "blob", sha: sources[index].sha }))) }), "utf8") },
+      ...sources.map(({ identity, url, rawBytes }) => ({ identity, url, contentType: "text/plain; charset=utf-8", body: rawBytes })),
+    ];
+    for (const route of routes) {
+      invariant(!routeOracle.has(route.url), "C# admission route collision");
+      routeOracle.set(route.url, route);
+      identities.set(route.identity, 0);
+    }
+    return routes;
+  };
+  const successRoutes = addAttempt(fixture.success, "mixed");
+  const malformedRoutes = addAttempt(fixture.malformed, "malformed");
+  const allRoutes = [...successRoutes, ...malformedRoutes];
+  const routeUrls = new Set(allRoutes.map(({ url }) => url));
+  const malformedSentinels = Object.values(fixture.malformed.sentinels);
+  invariant(malformedSentinels.length === 4 && new Set(malformedSentinels).size === 4, "Malformed C# sentinel fixture changed");
+  const failures = [];
+  const workerAssetUrls = [];
+  const consoleStart = browserExceptions.length;
+  const failedStart = failedRequests.length;
+  const networkStart = requestedUrls.length;
+  const fulfill = async (requestId, responseCode, headers, body = Buffer.alloc(0)) => {
+    const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body);
+    await cdp.send("Fetch.fulfillRequest", { requestId, responseCode, responseHeaders: headers, body: bytes.toString("base64") }, sessionId);
+  };
+  const listener = (message) => {
+    if (message.method === "Network.requestWillBeSent" && message.sessionId !== sessionId) {
+      workerAssetUrls.push(message.params.request.url);
+      return;
+    }
+    if (message.method === "Target.attachedToTarget" && message.sessionId === sessionId && message.params.targetInfo.type === "worker") {
+      void (async () => {
+        await cdp.send("Network.enable", {}, message.params.sessionId);
+        await cdp.send("Runtime.runIfWaitingForDebugger", {}, message.params.sessionId);
+      })().catch(() => failures.push(new Error("C# admission worker startup failed")));
+      return;
+    }
+    if (message.method !== "Fetch.requestPaused" || message.sessionId !== sessionId) return;
+    void (async () => {
+      const route = routeOracle.get(message.params.request.url);
+      invariant(route, "Unrecognized C# admission provider route");
+      const request = message.params.request;
+      const headers = Object.fromEntries(Object.entries(request.headers).map(([name, value]) => [name.toLowerCase(), value]));
+      invariant(headers.origin === origin, "C# admission route Origin changed");
+      if (request.method === "OPTIONS") {
+        invariant(!route.identity.includes("source-"), "C# source unexpectedly produced a preflight");
+        const requested = (headers["access-control-request-headers"] ?? "").split(",").map((name) => name.trim().toLowerCase()).filter(Boolean).sort();
+        invariant(headers["access-control-request-method"] === "GET" && requested.includes("x-github-api-version"), "C# admission preflight changed");
+        await fulfill(message.params.requestId, 204, [
+          { name: "Access-Control-Allow-Origin", value: origin },
+          { name: "Access-Control-Allow-Methods", value: "GET" },
+          { name: "Access-Control-Allow-Headers", value: requested.join(", ") },
+          { name: "Content-Length", value: "0" },
+        ]);
+        return;
+      }
+      invariant(request.method === "GET", "C# admission provider method changed");
+      invariant(!headers.authorization && !headers.cookie && !headers.referer, "C# admission request carried credentials or referrer");
+      identities.set(route.identity, identities.get(route.identity) + 1);
+      await fulfill(message.params.requestId, 200, [
+        { name: "Access-Control-Allow-Origin", value: origin },
+        { name: "Content-Type", value: route.contentType },
+        { name: "Content-Length", value: String(route.body.byteLength) },
+      ], route.body);
+    })().catch(async (error) => {
+      failures.push(error instanceof Error && !malformedSentinels.some((sentinel) => error.message.includes(sentinel)) ? error : new Error("C# admission interception failed"));
+      try { await cdp.send("Fetch.failRequest", { requestId: message.params.requestId, errorReason: "Failed" }, sessionId); } catch {}
+    });
+  };
+  const evaluate = async (expression) => (await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId)).result.value;
+  const waitFor = async (expression, label) => {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      if (failures.length) throw failures[0];
+      const value = await evaluate(expression);
+      if (value) return value;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`C# admission browser wait failed: ${label}`);
+  };
+  const submit = async (repositoryUrl) => {
+    await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(repositoryUrl)};document.querySelector('form').requestSubmit();true`);
+  };
+  cdp.listeners.add(listener);
+  try {
+    await cdp.send("Fetch.enable", { patterns: allRoutes.map(({ url: urlPattern }) => ({ urlPattern, requestStage: "Request" })) }, sessionId);
+    await cdp.send("Page.navigate", { url: `${origin}/code-city/index.html` }, sessionId);
+    await waitFor("document.readyState==='complete'&&document.querySelector('form')&&globalThis.__codeCitySuccessEvidence", "mixed startup");
+    invariant(await evaluate(`document.querySelector('[data-supported-languages]').textContent===${JSON.stringify("Supported languages: JavaScript, TypeScript, and C#.")}`), "Visible language support text changed");
+    await submit(fixture.success.repositoryUrl);
+    await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.success.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===1`, "first mixed city");
+    await waitFor("globalThis.__codeCitySuccessEvidence.workers.length===1&&globalThis.__codeCitySuccessEvidence.workers[0].terminateCalls===1&&globalThis.__codeCitySuccessEvidence.liveWorkers===0", "first mixed cleanup");
+    invariant(await evaluate(`globalThis[${JSON.stringify(fixture.success.sourceExecutionSentinel)}]===undefined`), "Repository source executed in the browser");
+    const firstMessage = await evaluate("globalThis.__codeCitySuccessEvidence.messages[0]");
+    invariant(firstMessage.count === 3, "Mixed city module count changed");
+    const firstGeometry = {
+      origins: float32Values(firstMessage.buffers[0]),
+      sizes: float32Values(firstMessage.buffers[1]),
+      rgba: [...Uint8Array.from(firstMessage.buffers[2])],
+      bounds: float32Values(firstMessage.buffers[3]),
+    };
+    assert.deepEqual(firstGeometry, fixture.success.expected.geometry);
+    const countBytes = new Uint8Array(4);
+    new DataView(countBytes.buffer).setUint32(0, firstMessage.count, true);
+    assert.equal(digestBytes([countBytes, ...firstMessage.buffers]), fixture.success.expected.modelBytesSha256);
+    const firstContext = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0]");
+    assert.deepEqual(firstContext.uploads.map((bytes) => bytes.length), [384, 36, 84, 24]);
+    deriveDistrictGeometry({ message: firstMessage, buildingUpload: firstContext.uploads[2], plateUpload: firstContext.uploads[3], orderedPaths: fixture.success.expected.facts.map(({ canonicalPath }) => canonicalPath) });
+    const inspectedFacts = [];
+    for (const expected of fixture.success.expected.facts) {
+      const observed = await evaluate(`(() => { const input=document.querySelector('[data-path-search-input]');input.value=${JSON.stringify(expected.canonicalPath)};input.dispatchEvent(new Event('input',{bubbles:true}));const button=document.querySelector('[data-path-search-buttons] button');if(!button)return null;button.click();const inspector=document.querySelector('[data-inspector]');return {canonicalPath:inspector.querySelector('[data-canonical-path]').textContent,S:Number(inspector.querySelector('[data-source-lines]').textContent),U:Number(inspector.querySelector('[data-executable-units]').textContent),M:Number(inspector.querySelector('[data-maximum-complexity]').textContent),height:Number(inspector.querySelector('[data-height]').textContent),width:Number(inspector.querySelector('[data-width]').textContent),depth:Number(inspector.querySelector('[data-depth]').textContent)};})()`);
+      invariant(observed !== null, "Mixed city inspector search failed");
+      inspectedFacts.push({ canonicalPath: observed.canonicalPath, S: observed.S, U: observed.U, M: observed.M });
+      const geometryIndex = fixture.success.expected.facts.findIndex(({ canonicalPath }) => canonicalPath === expected.canonicalPath);
+      invariant(observed.height === fixture.success.expected.geometry.sizes[geometryIndex * 3 + 1]
+        && observed.width === fixture.success.expected.geometry.sizes[geometryIndex * 3]
+        && observed.depth === fixture.success.expected.geometry.sizes[geometryIndex * 3 + 2], "Mixed city inspector geometry changed");
+    }
+    assert.deepEqual(inspectedFacts, fixture.success.expected.facts);
+    await submit(fixture.success.repositoryUrl);
+    const cleared = await evaluate("({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-inspector]').length,children:document.querySelector('[data-city]').childNodes.length})");
+    assert.deepEqual(cleared, { commit: "", canvases: 0, inspectors: 0, children: 0 });
+    await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.success.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===2`, "repeated mixed city");
+    await waitFor("globalThis.__codeCitySuccessEvidence.workers.length===2&&globalThis.__codeCitySuccessEvidence.workers.every((worker)=>worker.terminateCalls===1)&&globalThis.__codeCitySuccessEvidence.liveWorkers===0", "repeated mixed cleanup");
+    const repeatedMessages = await evaluate("globalThis.__codeCitySuccessEvidence.messages");
+    const modelDigests = repeatedMessages.map((message) => {
+      const count = new Uint8Array(4);
+      new DataView(count.buffer).setUint32(0, message.count, true);
+      return digestBytes([count, ...message.buffers]);
+    });
+    assert.deepEqual(modelDigests, [fixture.success.expected.modelBytesSha256, fixture.success.expected.modelBytesSha256]);
+    const normalizedDigests = fixture.success.modules.map(({ source }) => createHash("sha256").update(Buffer.from(normalize(Buffer.from(source, "utf8")), "utf8")).digest("hex"));
+    assert.deepEqual(normalizedDigests, fixture.success.expected.normalizedSourceSha256);
+
+    await submit(fixture.malformed.repositoryUrl);
+    const malformedClearing = await evaluate("({commit:document.querySelector('[data-commit]').textContent,status:document.querySelector('[data-status]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-inspector]').length,children:document.querySelector('[data-city]').childNodes.length})");
+    assert.deepEqual(malformedClearing, { commit: "", status: "WorkingCancel", canvases: 0, inspectors: 0, children: 0 });
+    await waitFor(`document.querySelector('[data-status]').textContent===${JSON.stringify("Metric processing failed (M1-MET-1)")}&&document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.malformed.selected)}&&globalThis.__codeCitySuccessEvidence.liveWorkers===0`, "malformed C# failure");
+    const malformedState = await evaluate("({status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-inspector]').length,contexts:document.querySelectorAll('[data-district-context]').length,children:document.querySelector('[data-city]').childNodes.length,messages:globalThis.__codeCitySuccessEvidence.messages.length,workers:globalThis.__codeCitySuccessEvidence.workers.length})");
+    assert.deepEqual(malformedState, { status: "Metric processing failed (M1-MET-1)", commit: fixture.malformed.selected, canvases: 0, inspectors: 0, contexts: 0, children: 0, messages: 2, workers: 3 });
+    const observableIsRedacted = await evaluate(`(() => { const values=${JSON.stringify(malformedSentinels)};const evidence=globalThis.__codeCitySuccessEvidence;const surface=JSON.stringify({text:document.documentElement.innerText,workers:evidence.workers,messages:evidence.messages,contexts:evidence.contexts});return values.every((value)=>!surface.includes(value));})()`);
+    invariant(observableIsRedacted, "Malformed C# observable output was not redacted");
+    invariant(!browserExceptions.slice(consoleStart).some((value) => malformedSentinels.some((sentinel) => String(value).includes(sentinel))), "Malformed C# browser exception was not redacted");
+    invariant(!failedRequests.slice(failedStart).some((value) => malformedSentinels.some((sentinel) => String(value).includes(sentinel))), "Malformed C# failed-request output was not redacted");
+    const quiescent = { messages: malformedState.messages, requests: requestedUrls.length };
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.deepEqual({ messages: await evaluate("globalThis.__codeCitySuccessEvidence.messages.length"), requests: requestedUrls.length }, quiescent);
+    for (const route of successRoutes) invariant(identities.get(route.identity) === 2, `Mixed route cardinality changed: ${route.identity}`);
+    for (const route of malformedRoutes) invariant(identities.get(route.identity) === 1, `Malformed route cardinality changed: ${route.identity}`);
+    const observedNetwork = [...requestedUrls.slice(networkStart), ...workerAssetUrls];
+    invariant(observedNetwork.every((url) => url.startsWith(origin) || routeUrls.has(url)), "C# admission browser used an unapproved network route");
+    const csharpRecord = manifest.files.find(({ sha256 }) => sha256 === "d12d85996c25957b4c1b71e26db2d7cc8a294997b60642e9c2a3b031b2c66dd3");
+    invariant(csharpRecord && workerAssetUrls.includes(`${origin}/code-city/${csharpRecord.path}`), "Production worker did not request the selected C# WASM");
+    console.log(`C# packaged admission evidence passed: mixed-routes=${successRoutes.length}x2; malformed-routes=${malformedRoutes.length}x1; modules=3; model-sha256=${fixture.success.expected.modelBytesSha256}; malformed-output=redacted.`);
   } finally {
     cdp.listeners.delete(listener);
     try { await cdp.send("Fetch.disable", {}, sessionId); } catch {}
@@ -1347,7 +1584,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
   const bodies = new Map([
     [revisionUrl, JSON.stringify([{ sha: selected }])],
     [commitUrl, JSON.stringify({ sha: selected, tree: { sha: root } })],
-    [treeUrl, JSON.stringify({ sha: root, truncated: false, tree: rawRecords.map(({ path: sourcePath, sha }) => ({ path: sourcePath, mode: "100644", type: "blob", sha })) })],
+    [treeUrl, JSON.stringify({ sha: root, truncated: false, tree: completePositiveTree(rawRecords.map(({ path: sourcePath, sha }) => ({ path: sourcePath, mode: "100644", type: "blob", sha }))) })],
     ...rawRecords.map(({ url, content }) => [url, content]),
   ]);
   const gets = [];
@@ -1364,7 +1601,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     if (message.method !== "Fetch.requestPaused" || message.sessionId !== sessionId) return;
     void (async () => {
       const { requestId, request } = message.params;
-      if (!urls.includes(request.url)) throw new Error(`Unrecognized interactive fixture URL: ${request.url}`);
+      if (!urls.includes(request.url)) throw new Error("Unrecognized interactive fixture provider route");
       if (request.method === "OPTIONS") {
         const requested = (request.headers["Access-Control-Request-Headers"] ?? request.headers["access-control-request-headers"] ?? "");
         await fulfill(requestId, 204, [
@@ -1412,7 +1649,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     const snapshot = await evaluate("({status:document.querySelector('[data-status]')?.textContent,commit:document.querySelector('[data-commit]')?.textContent,feedback:document.querySelector('[data-feedback]')?.textContent,messages:globalThis.__codeCitySuccessEvidence?.messages?.length,contexts:globalThis.__codeCitySuccessEvidence?.contexts?.length,workers:globalThis.__codeCitySuccessEvidence?.workers})");
-    throw new Error(`Timed out waiting for ${label}; snapshot=${JSON.stringify(snapshot)}; GETs=${JSON.stringify(gets)}; failures=${failures.map(String).join("|")}`);
+    throw new Error(`Timed out waiting for ${label}; snapshot=${JSON.stringify(snapshot)}; GET-count=${gets.length}; failure-count=${failures.length}`);
   };
 
   cdp.listeners.add(listener);
@@ -1481,7 +1718,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
       }
     };
     const initialCityHeight = await evaluate("document.querySelector('[data-city]').getBoundingClientRect().height");
-    const searchInputPoint = await evaluate(`(() => { const rectangle=document.querySelector('[data-path-search-input]').getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
+    const searchInputPoint = await evaluate(`(() => { const input=document.querySelector('[data-path-search-input]'); input.scrollIntoView({block:'center'}); const rectangle=input.getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
     await nativeClick(searchInputPoint);
     await typeNativeText("/");
     const overflowEvidence = await evaluate(`(() => {
@@ -1500,18 +1737,33 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     assert.equal(overflowEvidence.normalFlow, true);
     assert.equal(overflowEvidence.cityHeight, initialCityHeight);
     assert.equal(overflowEvidence.safe, true);
-    const resultPoint = await evaluate(`(() => { const rectangle=document.querySelector('[data-path-search-results]').getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
-    await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...resultPoint, deltaX: 0, deltaY: overflowEvidence.scrollHeight }, sessionId);
+    const downwardScroll = await captureNativeScrollEvidence({
+      cdp,
+      sessionId,
+      selector: "[data-path-search-results]",
+      deltaY: overflowEvidence.scrollHeight,
+      deadline: Date.now() + 120_000,
+    });
+    const downwardDiagnostic = `before=${downwardScroll.before}; after=${downwardScroll.after}; geometry=${JSON.stringify(downwardScroll.geometry)}`;
+    const scrolledDown = downwardScroll.after > downwardScroll.before;
+    assert(scrolledDown, `Native search-results downward scroll did not move down; ${downwardDiagnostic}`);
     await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
     assert.equal(await evaluate("document.activeElement===document.querySelector('[data-path-search-buttons] button')"), true);
     for (let index = 1; index < overflowEvidence.count; index += 1) await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
     assert.equal(await evaluate("document.activeElement===document.querySelector('[data-path-search-buttons] button:last-child' )"), true);
-    const scrolledDown = await evaluate("document.querySelector('[data-path-search-results]').scrollTop>0");
-    await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...resultPoint, deltaX: 0, deltaY: -overflowEvidence.scrollHeight }, sessionId);
+    const upwardScroll = await captureNativeScrollEvidence({
+      cdp,
+      sessionId,
+      selector: "[data-path-search-results]",
+      deltaY: -overflowEvidence.scrollHeight,
+      deadline: Date.now() + 120_000,
+    });
+    const upwardDiagnostic = `before=${upwardScroll.before}; after=${upwardScroll.after}; geometry=${JSON.stringify(upwardScroll.geometry)}`;
+    const scrolledUp = upwardScroll.after < upwardScroll.before;
+    assert(scrolledUp, `Native search-results upward scroll did not move up; ${upwardDiagnostic}`);
+    assert.equal(upwardScroll.after, 0, `Native search-results upward scroll did not return to the exact origin; ${upwardDiagnostic}`);
     for (let index = 1; index < overflowEvidence.count; index += 1) await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9, modifiers: 8 });
     assert.equal(await evaluate("document.activeElement===document.querySelector('[data-path-search-buttons] button')"), true);
-    const scrolledUp = await evaluate("document.querySelector('[data-path-search-results]').scrollTop===0");
-    assert.equal(scrolledDown && scrolledUp, true);
     await dispatchKey({ key: "Enter", code: "Enter", virtualKey: 13, text: "\r" });
     const firstActivation = await evaluate("({focused:document.activeElement===document.querySelector('[data-city] canvas'),activeTag:document.activeElement?.tagName,queryCleared:document.querySelector('[data-path-search-input]').value==='',resultsHidden:document.querySelector('[data-path-search-results]').hidden,status:document.querySelector('[data-status]').textContent,buttons:document.querySelectorAll('[data-path-search-buttons] button').length})");
     assert.deepEqual(firstActivation, { focused: true, activeTag: "CANVAS", queryCleared: true, resultsHidden: true, status: "", buttons: 0 });
@@ -1762,7 +2014,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
 }
 
 function validateBrowserResult(result, expectedAssets) {
-  exactKeys(result, ["schemaVersion", "assetRequests", "cases", "matrixRuns", "complexityMatrixRuns", "presentation", "browserExceptions", "unexpectedNetworkRequests", "overallPass"], "Browser result");
+  exactKeys(result, ["schemaVersion", "assetRequests", "cases", "csharpStressRuns", "matrixRuns", "complexityMatrixRuns", "presentation", "browserExceptions", "unexpectedNetworkRequests", "overallPass"], "Browser result");
   assert.equal(result.schemaVersion, 1);
   assert.deepEqual(result.assetRequests, expectedAssets.map(({ role, path: assetPath, sha256 }) => ({ role, path: assetPath, sha256 })));
   assert.deepEqual(result.cases.map(({ id, family }) => ({ id, family })), [
@@ -1785,6 +2037,21 @@ function validateBrowserResult(result, expectedAssets) {
     assert.equal(entry.expectedDigest, entry.observedDigest, entry.id);
     assert.deepEqual(entry.cleanup, { parserDeletes: 1, treeDeletes: 1, cursorDeletes: 2, sourceReleases: 1, observationStreamReleases: 1 });
   }
+  assert.equal(result.csharpStressRuns.length, 2);
+  for (const [index, entry] of result.csharpStressRuns.entries()) {
+    exactKeys(entry, ["moduleBytes", "facts", "observationCounts", "peakLive", "cleanup", "runDigest", "pass"], `C# stress ${index}`);
+    assert.equal(entry.moduleBytes, 2_097_152);
+    assert.deepEqual(entry.facts, [
+      { canonicalPath: "stress/deep.cs", S: 1, U: 1, M: 1 },
+      { canonicalPath: "stress/dense.CS", S: 1, U: 1, M: 1 },
+    ]);
+    assert.equal(entry.observationCounts.length, 2);
+    assert(entry.observationCounts.every(({ observationCount, observationPackedByteLength }) => observationCount > 0 && observationPackedByteLength > 0));
+    assert.deepEqual(entry.peakLive, { parser: 1, tree: 1, cursor: 1, source: 1, observationStream: 1 });
+    assert.deepEqual(entry.cleanup, { parserDeletes: 2, treeDeletes: 2, cursorDeletes: 4, sourceReleases: 2, observationStreamReleases: 2 });
+    assert.equal(entry.pass, true);
+  }
+  assert.equal(result.csharpStressRuns[0].runDigest, result.csharpStressRuns[1].runDigest);
   assert.equal(result.matrixRuns.length, 2);
   for (const [index, entry] of result.matrixRuns.entries()) {
     exactKeys(entry, ["modules", "normalizedBytes", "expected", "observed", "peakLive", "cleanup", "runDigest", "pass"], `Matrix ${index}`);
@@ -2030,7 +2297,7 @@ export async function checkPackagedBrowserEvidence() {
         }
       })(),
       new Promise((_, reject) => {
-        watchdog = setTimeout(() => reject(new Error(`Packaged browser evidence exceeded the ten-minute watchdog; exceptions=${browserExceptions.join("|")}; requests=${requestedUrls.join("|")}`)), WATCHDOG_MS);
+        watchdog = setTimeout(() => reject(new Error(`Packaged browser evidence exceeded the ten-minute watchdog; exception-count=${browserExceptions.length}; request-count=${requestedUrls.length}`)), WATCHDOG_MS);
       }),
     ]);
     clearTimeout(watchdog);
@@ -2048,8 +2315,9 @@ export async function checkPackagedBrowserEvidence() {
     invariant(unexpected.length === 0, `Unexpected browser network request(s): ${unexpected.join(", ")}`);
     validateBrowserResult(result, selected);
     await checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests });
+    await checkCSharpAdmissionPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests });
     await checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUrls, browserExceptions, failedRequests });
-    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, two complete complexity matrices, canonical success/context-loss evidence, interactive 18-module native baseline evidence, and pagehide/reload lifecycle evidence.`);
+    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} JavaScript/TypeScript stress cases, two exact C# stress runs, two C#-inclusive comment matrices, two complete complexity matrices, mixed-language admission and malformed-clearing evidence, canonical success/context-loss evidence, interactive 18-module native baseline evidence, and pagehide/reload lifecycle evidence.`);
   } catch (error) {
     failure = error;
   } finally {

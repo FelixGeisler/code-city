@@ -35,7 +35,9 @@ architecture.
 
 Create an ADR for a significant decision that is costly to reverse, constrains
 future work, or changes an important system boundary, technology, data contract,
-deployment model, or security property. Do not create ADRs for routine local
+deployment model, or security property. An ADR records context, considered
+options, the selected decision, rationale, and consequences; it is not a
+catalogue of current implementation state. Do not create ADRs for routine local
 implementation choices.
 
 New ADRs start as `Proposed`. The user must explicitly accept an ADR before it
@@ -43,8 +45,9 @@ is marked `Accepted` and before implementation depends on that decision. Agents
 may draft and revise ADRs, but must not accept them on the user's behalf.
 
 Store one ADR per AsciiDoc file under
-`docs/modules/architecture/pages/adr/`, add it to the architecture navigation,
-and retain superseded decisions as historical records.
+`docs/modules/architecture/pages/adr/` and add it to the architecture navigation.
+ADR files deleted by explicit human direction remain available only through Git
+history and must not be recreated as live records.
 
 ## Documentation quality
 

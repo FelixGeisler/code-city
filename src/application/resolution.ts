@@ -49,7 +49,12 @@ export async function resolveRevision(
       return { kind: "failure", category: "Revision unavailable" };
     }
     if (result.kind === "http" && result.status === 404) {
-      return { kind: "failure", category: "Repository unavailable for anonymous access" };
+      return {
+        kind: "failure",
+        category: repository.branch === null
+          ? "Repository unavailable for anonymous access"
+          : "Revision unavailable",
+      };
     }
     return { kind: "failure", category: "Provider/resolution failure" };
   } catch {

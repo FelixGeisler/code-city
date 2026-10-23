@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "success": {
+    "repositoryUrl": "https://github.com/code-city/mixed-csharp-admission",
+    "selected": "234567890abcdef1234567890abcdef123456789",
+    "root": "34567890abcdef1234567890abcdef1234567890",
+    "sourceExecutionSentinel": "__CODE_CITY_M4_SOURCE_MUST_REMAIN_INERT__",
+    "modules": [
+      {
+        "path": "src/a.js",
+        "source": "globalThis.__CODE_CITY_M4_SOURCE_MUST_REMAIN_INERT__ = true;\n"
+      },
+      {
+        "path": "src/b.ts",
+        "source": "export function value(flag: boolean) { return flag ? 1 : 0; }\n"
+      },
+      {
+        "path": "src/case.CS",
+        "source": "﻿class Sample {\r\n  int Compute(bool flag) {\r    return flag ? 1 : 0;\r\n  }\r\n}\r"
+      }
+    ],
+    "expected": {
+      "normalizedSourceSha256": [
+        "ce1fa7752f531c548d3c3a8fbead8a318c12f1110b39aab8ba240108db03b9af",
+        "e92b0055585dca7cbb114494ad7c0c97654b73e12829137cf4559e10c95ef402",
+        "304af3b188c916eb289c3d7959aec189a23318a0ff0fe5bfc89c81c93ed47b80"
+      ],
+      "facts": [
+        { "canonicalPath": "src/a.js", "S": 1, "U": 1, "M": 1 },
+        { "canonicalPath": "src/b.ts", "S": 1, "U": 2, "M": 2 },
+        { "canonicalPath": "src/case.CS", "S": 5, "U": 1, "M": 2 }
+      ],
+      "geometry": {
+        "origins": [7, 0, 0, 0, 0, 0, 0, 0, 7],
+        "sizes": [4, 5, 4, 5, 5, 5, 4, 7, 4],
+        "rgba": [132, 204, 22, 255, 250, 204, 21, 255, 250, 204, 21, 255],
+        "bounds": [0, 0, 0, 11, 7, 11]
+      },
+      "modelBytesSha256": "38b063f2b9738f7101d2665dbfbde78479065647b9a00fe57fea405d9c16180f"
+    }
+  },
+  "malformed": {
+    "repositoryUrl": "https://github.com/code-city/malformed-csharp-admission",
+    "selected": "4567890abcdef1234567890abcdef12345678901",
+    "root": "567890abcdef1234567890abcdef123456789012",
+    "sentinels": {
+      "source": "M4_PRIVATE_SOURCE_SENTINEL_7F4A",
+      "path": "M4_PRIVATE_PATH_SENTINEL_6E3B",
+      "parser": "M4_PRIVATE_PARSER_SENTINEL_5D2C",
+      "diagnostic": "M4_PRIVATE_DIAGNOSTIC_SENTINEL_4C1D"
+    },
+    "modules": [
+      {
+        "path": "safe/valid.js",
+        "source": "export const ok = true;\n"
+      },
+      {
+        "path": "safe/valid.ts",
+        "source": "export const typed: number = 1;\n"
+      },
+      {
+        "path": "private/M4_PRIVATE_PATH_SENTINEL_6E3B.CS",
+        "source": "﻿// M4_PRIVATE_SOURCE_SENTINEL_7F4A\r\n// M4_PRIVATE_PARSER_SENTINEL_5D2C\r// M4_PRIVATE_DIAGNOSTIC_SENTINEL_4C1D\r\nclass Broken { int M( {\r"
+      }
+    ]
+  }
+}

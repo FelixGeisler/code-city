@@ -12,7 +12,7 @@ import {
   type ValueAnchorKind,
 } from "../domain/base-metrics";
 
-export type ParserAssetUrls = Readonly<{ runtimeJavaScript: string; runtimeWasm: string; grammarJavaScript: string; grammarTypeScript: string; grammarTsx: string }>;
+export type ParserAssetUrls = Readonly<{ runtimeJavaScript: string; runtimeWasm: string; grammarJavaScript: string; grammarTypeScript: string; grammarTsx: string; grammarCSharp?: string }>;
 export type ParserResourceEvent =
   | "parser-created" | "parser-deleted" | "tree-created" | "tree-deleted" | "cursor-created" | "cursor-deleted"
   | "observation-stream-created" | "observation-stream-released";
@@ -197,9 +197,152 @@ function projectTree(root: RootHandle, source: string, observe: (event: ParserRe
   return rows.finish(source);
 }
 
+type CSharpUnitFrame = { row: number; form?: ExplicitUnitForm; nodeType: string; start: number; end: number; ownedStarts: number[]; ownedEnds: number[] };
+type CSharpOperatorFrame = { row: number; and: boolean; or: boolean; nullish: boolean; nullishAssign: boolean };
+type CSharpFrame = {
+  nodeType: string;
+  excluded: boolean;
+  declarationConst: boolean;
+  sawPrimaryParameters: boolean;
+  primaryBase: boolean;
+  unit?: CSharpUnitFrame;
+  operator?: CSharpOperatorFrame;
+  switchArm?: { row: number; discard: boolean; guarded: boolean };
+  switchSection?: { row: number; hasCase: boolean };
+  variableAnchor?: { row: number; hasInitializer: boolean };
+  topLevelAnchor?: { row: number; suppressed: boolean };
+};
+
+const CSHARP_CALLABLE_FORMS: Readonly<Record<string, ExplicitUnitForm>> = {
+  method_declaration: "method",
+  local_function_statement: "function",
+  constructor_declaration: "constructor",
+  destructor_declaration: "method",
+  operator_declaration: "method",
+  conversion_operator_declaration: "method",
+  lambda_expression: "arrow",
+  anonymous_method_expression: "function",
+};
+const CSHARP_LOOPS = new Set(["do_statement", "for_statement", "foreach_statement", "while_statement"]);
+const CSHARP_DECLARATIONS_WITH_INITIALIZERS = new Set(["field_declaration", "event_field_declaration"]);
+const CSHARP_CONST_DECLARATIONS = new Set(["field_declaration", "local_declaration_statement"]);
+const CSHARP_EXCLUDED_ROOTS = new Set(["attribute", "attribute_list", "global_attribute", "parameter_list", "bracketed_parameter_list", "parameter", "implicit_parameter", "enum_member_declaration"]);
+
+function isDirectTopLevelPreprocessorBody(frames: readonly (CSharpFrame | undefined)[], depth: number): boolean {
+  let parent = depth - 1;
+  if (parent < 0 || !frames[parent]!.nodeType.startsWith("preproc_")) return false;
+  while (parent >= 0 && frames[parent]!.nodeType.startsWith("preproc_")) parent -= 1;
+  return parent >= 0 && frames[parent]!.nodeType === "compilation_unit";
+}
+
+function projectCSharpTree(root: RootHandle, source: string, observe: (event: ParserResourceEvent) => void) {
+  const cursor = createCursor(root, observe), rows = new ObservationRows(), frames: Array<CSharpFrame | undefined> = []; const depth = { value: 0 };
+  function finishFrame(exitingDepth: number): void {
+    const frame = frames[exitingDepth]; if (!frame) return;
+    if (frame.operator) {
+      const operator = frame.operator;
+      const kind: DecisionKind | undefined = operator.nullishAssign ? "nullish-assign" : operator.and ? "logical-and" : operator.or ? "logical-or" : operator.nullish ? "nullish" : undefined;
+      if (kind) rows.patch(operator.row, ROW_DECISION, payload(DECISION_KINDS, kind)); else rows.disable(operator.row);
+    }
+    if (frame.switchArm) {
+      const arm = frame.switchArm;
+      if (arm.discard && !arm.guarded) rows.disable(arm.row);
+      else rows.patch(arm.row, ROW_DECISION, payload(DECISION_KINDS, "case"));
+    }
+    if (frame.switchSection) {
+      if (frame.switchSection.hasCase) rows.patch(frame.switchSection.row, ROW_DECISION, payload(DECISION_KINDS, "case"));
+      else rows.disable(frame.switchSection.row);
+    }
+    if (frame.variableAnchor && !frame.variableAnchor.hasInitializer) rows.disable(frame.variableAnchor.row);
+    if (frame.topLevelAnchor?.suppressed) rows.disable(frame.topLevelAnchor.row);
+    if (frame.unit) {
+      const unit = frame.unit;
+      if (!unit.form || unit.ownedStarts.length === 0) rows.disable(unit.row);
+      else {
+        rows.patch(unit.row, ROW_UNIT, payload(EXPLICIT_UNIT_FORMS, unit.form));
+        rows.setOwned(unit.row, unit.ownedStarts, unit.ownedEnds);
+      }
+    }
+    frames.length = exitingDepth;
+  }
+  try {
+    for (;;) {
+      const nodeType = cursor.nodeType, start = cursor.startIndex, end = cursor.endIndex, field = cursor.currentFieldName; invariant(Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start && end <= 0xffff_ffff, "Invalid parser endpoint");
+      const parent = frames[depth.value - 1];
+      if (nodeType === "const" && parent?.nodeType === "modifier") {
+        for (let owner = depth.value - 2; owner >= 0; owner -= 1) {
+          const declaration = frames[owner];
+          if (!declaration || !CSHARP_CONST_DECLARATIONS.has(declaration.nodeType)) continue;
+          declaration.declarationConst = true;
+          if (declaration.topLevelAnchor) declaration.topLevelAnchor.suppressed = true;
+          const enclosing = frames[owner - 1];
+          if (enclosing?.nodeType === "global_statement" && enclosing.topLevelAnchor) enclosing.topLevelAnchor.suppressed = true;
+          break;
+        }
+      }
+      if (parent?.unit) {
+        const unit = parent.unit;
+        if (field === "body" || (unit.nodeType === "anonymous_method_expression" && nodeType === "block") || ((unit.nodeType === "property_declaration" || unit.nodeType === "indexer_declaration") && field === "value" && nodeType === "arrow_expression_clause")) {
+          unit.ownedStarts.push(start); unit.ownedEnds.push(end);
+        }
+        if (unit.nodeType === "constructor_declaration" && nodeType === "constructor_initializer") { unit.ownedStarts.push(start); unit.ownedEnds.push(end); }
+        if (unit.nodeType === "accessor_declaration" && field === "name") {
+          if (nodeType === "get") unit.form = "getter";
+          else if (["set", "init", "add", "remove"].includes(nodeType)) unit.form = "setter";
+        }
+      }
+      if (parent?.operator) {
+        if (nodeType === "&&") parent.operator.and = true;
+        else if (nodeType === "||") parent.operator.or = true;
+        else if (nodeType === "??") parent.operator.nullish = true;
+        else if (nodeType === "??=") parent.operator.nullishAssign = true;
+      }
+      if (parent?.switchArm) { if (nodeType === "discard") parent.switchArm.discard = true; if (nodeType === "when_clause") parent.switchArm.guarded = true; }
+      if (parent?.switchSection && nodeType === "case") parent.switchSection.hasCase = true;
+      if (parent?.variableAnchor && nodeType === "=") parent.variableAnchor.hasInitializer = true;
+      if (parent && nodeType === "parameter_list") parent.sawPrimaryParameters = true;
+
+      const preprocessorCondition = field === "condition" && (parent?.nodeType === "preproc_if" || parent?.nodeType === "preproc_elif");
+      const excluded = (parent?.excluded ?? false) || (parent?.declarationConst ?? false) || CSHARP_EXCLUDED_ROOTS.has(nodeType) || preprocessorCondition;
+      const form = CSHARP_CALLABLE_FORMS[nodeType] ?? ((nodeType === "property_declaration" || nodeType === "indexer_declaration") ? "getter" : undefined);
+      let unit: CSharpUnitFrame | undefined;
+      if (!excluded && (form || nodeType === "accessor_declaration")) unit = { row: rows.append(ROW_UNIT, 0, start, end), form, nodeType, start, end, ownedStarts: [], ownedEnds: [] };
+
+      let operator: CSharpOperatorFrame | undefined;
+      if (!excluded && (nodeType === "binary_expression" || nodeType === "assignment_expression")) operator = { row: rows.append(ROW_DECISION, 0, start, end), and: false, or: false, nullish: false, nullishAssign: false };
+      const switchArm = !excluded && nodeType === "switch_expression_arm" ? { row: rows.append(ROW_DECISION, 0, start, end), discard: false, guarded: false } : undefined;
+      const switchSection = !excluded && nodeType === "switch_section" ? { row: rows.append(ROW_DECISION, 0, start, end), hasCase: false } : undefined;
+
+      const variableOwner = frames[depth.value - 2];
+      const variableAnchor = !excluded && nodeType === "variable_declarator" && parent?.nodeType === "variable_declaration" && variableOwner && CSHARP_DECLARATIONS_WITH_INITIALIZERS.has(variableOwner.nodeType)
+        ? { row: rows.append(ROW_VALUE, payload(VALUE_ANCHOR_KINDS, "runtime-statement/declaration"), start, end), hasInitializer: false }
+        : undefined;
+      const topLevel = !excluded && (nodeType === "global_statement" || ((nodeType.endsWith("_statement") || nodeType === "block") && isDirectTopLevelPreprocessorBody(frames, depth.value)));
+      const topLevelAnchor = topLevel ? { row: rows.append(ROW_VALUE, payload(VALUE_ANCHOR_KINDS, "runtime-statement/declaration"), start, end), suppressed: false } : undefined;
+      if (!excluded && parent?.nodeType === "property_declaration" && field === "value" && nodeType !== "arrow_expression_clause") rows.append(ROW_VALUE, payload(VALUE_ANCHOR_KINDS, "runtime-statement/declaration"), start, end);
+      if (!excluded && parent?.nodeType === "base_list" && parent.primaryBase && nodeType === "argument_list") rows.append(ROW_VALUE, payload(VALUE_ANCHOR_KINDS, "runtime-statement/declaration"), start, end);
+
+      const primaryBase = nodeType === "base_list" && Boolean(parent?.sawPrimaryParameters);
+      frames[depth.value] = { nodeType, excluded, declarationConst: false, sawPrimaryParameters: false, primaryBase, ...(unit ? { unit } : {}), ...(operator ? { operator } : {}), ...(switchArm ? { switchArm } : {}), ...(switchSection ? { switchSection } : {}), ...(variableAnchor ? { variableAnchor } : {}), ...(topLevelAnchor ? { topLevelAnchor } : {}) };
+      frames.length = depth.value + 1;
+      if (nodeType === "comment") rows.append(ROW_LEXICAL, 0, start, end);
+      if (!excluded) {
+        let decision: DecisionKind | undefined;
+        if (nodeType === "if_statement" || nodeType === "when_clause" || nodeType === "catch_filter_clause") decision = "if";
+        else if (CSHARP_LOOPS.has(nodeType)) decision = "loop";
+        else if (nodeType === "catch_clause") decision = "catch";
+        else if (nodeType === "conditional_expression") decision = "ternary";
+        if (decision) rows.append(ROW_DECISION, payload(DECISION_KINDS, decision), start, end);
+      }
+      if (!advance(cursor, depth, finishFrame)) break;
+    }
+  } finally { deleteCursor(cursor, observe); }
+  return rows.finish(source);
+}
+
 export function createTreeSitterAdapter(assets: ParserAssetUrls, options: ParserAdapterOptions = {}): StaticSyntaxParser {
   const importRuntime = options.importRuntime ?? ((url: string) => import(/* @vite-ignore */ url)); const loadBytes = options.loadBytes ?? defaultLoadBytes; const observe = options.observeResource ?? (() => {});
-  let initialization: Promise<Readonly<{ runtime: RuntimeModule; javascript: LanguageHandle; typescript: LanguageHandle; tsx: LanguageHandle }>> | undefined;
-  async function initializeAll() { const runtime = runtimeModule(await importRuntime(assets.runtimeJavaScript)); await runtime.Parser.init({ locateFile(requestedPath) { if (requestedPath === "web-tree-sitter.wasm") return assets.runtimeWasm; throw new Error("Unexpected parser runtime asset request"); }, print() {}, printErr() {} }); const javascript = await runtime.Language.load(await loadBytes(assets.grammarJavaScript)); const typescript = await runtime.Language.load(await loadBytes(assets.grammarTypeScript)); const tsx = await runtime.Language.load(await loadBytes(assets.grammarTsx)); return { runtime, javascript, typescript, tsx }; }
-  return { async initialize() { initialization ??= initializeAll(); await initialization; }, async project(grammarFamily, normalizedSource) { initialization ??= initializeAll(); const initialized = await initialization; const language = grammarFamily === "typescript" ? initialized.typescript : grammarFamily === "tsx" ? initialized.tsx : initialized.javascript; let parser: ParserHandle | undefined, tree: TreeHandle | undefined; try { parser = new initialized.runtime.Parser(); observe("parser-created"); parser.setLanguage(language); tree = parser.parse(normalizedSource) ?? undefined; invariant(tree, "Parser returned no tree"); observe("tree-created"); validateTree(tree.rootNode, grammarFamily === "javascript-no-jsx", observe); const observations = projectTree(tree.rootNode, normalizedSource, observe); observe("observation-stream-created"); let released = false; return { observations, release() { if (!released) { released = true; observe("observation-stream-released"); } } }; } finally { if (tree) { tree.delete(); observe("tree-deleted"); } if (parser) { parser.delete(); observe("parser-deleted"); } } } };
+  let initialization: Promise<Readonly<{ runtime: RuntimeModule; javascript: LanguageHandle; typescript: LanguageHandle; tsx: LanguageHandle; csharp?: LanguageHandle }>> | undefined;
+  async function initializeAll() { const runtime = runtimeModule(await importRuntime(assets.runtimeJavaScript)); await runtime.Parser.init({ locateFile(requestedPath) { if (requestedPath === "web-tree-sitter.wasm") return assets.runtimeWasm; throw new Error("Unexpected parser runtime asset request"); }, print() {}, printErr() {} }); const javascript = await runtime.Language.load(await loadBytes(assets.grammarJavaScript)); const typescript = await runtime.Language.load(await loadBytes(assets.grammarTypeScript)); const tsx = await runtime.Language.load(await loadBytes(assets.grammarTsx)); const csharp = assets.grammarCSharp ? await runtime.Language.load(await loadBytes(assets.grammarCSharp)) : undefined; return { runtime, javascript, typescript, tsx, ...(csharp ? { csharp } : {}) }; }
+  return { async initialize() { initialization ??= initializeAll(); await initialization; }, async project(grammarFamily, normalizedSource) { if (grammarFamily === "csharp" && !assets.grammarCSharp) throw new Error("C# parser asset is not configured"); initialization ??= initializeAll(); const initialized = await initialization; const language = grammarFamily === "csharp" ? initialized.csharp : grammarFamily === "typescript" ? initialized.typescript : grammarFamily === "tsx" ? initialized.tsx : initialized.javascript; invariant(language, "Parser language is not configured"); let parser: ParserHandle | undefined, tree: TreeHandle | undefined; try { parser = new initialized.runtime.Parser(); observe("parser-created"); parser.setLanguage(language); tree = parser.parse(normalizedSource) ?? undefined; invariant(tree, "Parser returned no tree"); observe("tree-created"); validateTree(tree.rootNode, grammarFamily === "javascript-no-jsx", observe); const observations = grammarFamily === "csharp" ? projectCSharpTree(tree.rootNode, normalizedSource, observe) : projectTree(tree.rootNode, normalizedSource, observe); observe("observation-stream-created"); let released = false; return { observations, release() { if (!released) { released = true; observe("observation-stream-released"); } } }; } finally { if (tree) { tree.delete(); observe("tree-deleted"); } if (parser) { parser.delete(); observe("parser-deleted"); } } } };
 }
