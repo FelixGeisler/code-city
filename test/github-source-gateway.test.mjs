@@ -19,7 +19,7 @@ const {
   projectTreeEvidence,
 } = await import("../src/edge/github-source-gateway.ts");
 
-const REPOSITORY = { owner: "owner", repository: "repo" };
+const REPOSITORY = { owner: "owner", repository: "repo", branch: "moving/branch?ignored" };
 const SHA40 = "a".repeat(40);
 const SHA64 = "b".repeat(64);
 const ROOT40 = "c".repeat(40);
@@ -54,7 +54,7 @@ function treeApiUrl(root = ROOT40) {
   return `https://api.github.com/repos/owner/repo/git/trees/${root}?recursive=1`;
 }
 
-test("commit and tree requests are exact, sequential, identity-consistent, and primitive-projected", async () => {
+test("branch text is ignored while commit and validated root tree identities drive sequential acquisition", async () => {
   const calls = [];
   let active = 0;
   let maximumActive = 0;
@@ -121,6 +121,23 @@ test("own-data projectors reject accessors and mixed identities without consulti
   assert.deepEqual(projectTreeEvidence({ sha: ROOT40, truncated: false, tree: excluded }, ROOT40, 40), excluded.map(({ path, mode, type }) => ({ path, mode, type })));
   assert.equal(reads, 0);
 
+  const excludedSupported = accessor({ path: "excluded/a.ts", mode: "100644", type: "blob" }, "sha");
+  assert.deepEqual(projectTreeEvidence({ sha: ROOT40, truncated: false, tree: [
+    { path: "excluded", mode: "040000", type: "tree" }, excludedSupported,
+  ] }, ROOT40, 40, ["excluded"]), [
+    { path: "excluded", mode: "040000", type: "tree" },
+    { path: "excluded/a.ts", mode: "100644", type: "blob" },
+  ]);
+  assert.equal(reads, 0, "additional-excluded supported blob identity must not be inspected");
+  const fixedExcluded = accessor({ path: "node_modules/a.ts", mode: "100644", type: "blob" }, "sha");
+  assert.deepEqual(projectTreeEvidence({ sha: ROOT40, truncated: false, tree: [
+    { path: "node_modules", mode: "040000", type: "tree" }, fixedExcluded,
+  ] }, ROOT40, 40), [
+    { path: "node_modules", mode: "040000", type: "tree" },
+    { path: "node_modules/a.ts", mode: "100644", type: "blob" },
+  ]);
+  assert.equal(reads, 0, "fixed-excluded supported blob identity must not be inspected");
+
   const candidate = accessor({ path: "a.ts", mode: "100644", type: "blob" }, "sha");
   assert.deepEqual(projectTreeEvidence({ sha: ROOT40, truncated: false, tree: [candidate] }, ROOT40, 40), [
     { path: "a.ts", mode: "100644", type: "blob" },
@@ -181,7 +198,7 @@ test("REST evidence caps accept exact 4/8 MiB and reject the next byte independe
 });
 
 test("raw URL and request options use only local immutable values and independently encoded segments", async () => {
-  const repository = { owner: "a:b @c", repository: "repo!'()*~" };
+  const repository = { owner: "a:b @c", repository: "repo!'()*~", branch: "never/in/downstream" };
   const path = "space here/uni／code.TS";
   const bytes = encoder.encode("export {};");
   const expected = await blobId(bytes);
@@ -253,7 +270,7 @@ test("raw status/final URL, digest mismatch/unavailability, and strict UTF-8 fai
   const invalid = Uint8Array.from([0xff]);
   const invalidId = await blobId(invalid);
   const invalidUtf8 = createGithubSourceGateway(async (url) => streamResponse(url, invalid), (algorithm, payload) => webcrypto.subtle.digest(algorithm, payload));
-  assert.deepEqual(await invalidUtf8.readSource(REPOSITORY, SHA40, { canonicalPath: "a.ts", rawPath: "a.ts", expectedBlobId: invalidId }, new AbortController().signal), { kind: "invalid-content" });
+  assert.deepEqual(await invalidUtf8.readSource(REPOSITORY, SHA40, { canonicalPath: "a.CS", rawPath: "a.CS", expectedBlobId: invalidId }, new AbortController().signal), { kind: "invalid-content" });
 });
 
 test("aborting an active raw read cancels its acquired reader and releases its lock exactly once", async () => {

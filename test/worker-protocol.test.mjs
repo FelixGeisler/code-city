@@ -12,7 +12,7 @@ const { createWorkerAttemptPipeline } = await import("../src/application/worker-
 const { createTreeSitterAdapter } = await import("../src/edge/tree-sitter-adapter.ts");
 const { buildCity } = await import("../src/domain/city-model.ts");
 
-const REPOSITORY = { owner: "owner", repository: "repo" };
+const REPOSITORY = { owner: "owner", repository: "repo", branch: null };
 const SHA = "a".repeat(40);
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -26,22 +26,47 @@ function accessor(record, key) {
   return copy;
 }
 
-test("command protocol is closed, own-data-only, and generation-tagged", () => {
-  const start = { type: "START", generation: 1, repository: REPOSITORY };
+test("command protocol is closed, own-data-only, generation-tagged, and carries one canonical exclusions value", () => {
+  const start = { type: "START", generation: 1, repository: REPOSITORY, additionalExclusions: ["a", "z"] };
   const stop = { type: "STOP", generation: 1 };
-  assert.deepEqual(parseWorkerCommand(start), start);
+  const parsed = parseWorkerCommand(start);
+  assert.deepEqual(parsed, start);
+  assert.equal(Object.isFrozen(parsed.additionalExclusions), true);
+  assert.deepEqual(parseWorkerCommand({ ...start, generation: 99 }), { ...start, generation: 99 }, "valid older values have no parser-visible age");
   assert.deepEqual(parseWorkerCommand(stop), stop);
+  const branchStart = { ...start, repository: { ...REPOSITORY, branch: "feature/x?#\\" } };
+  assert.deepEqual(parseWorkerCommand(branchStart), branchStart);
+
+  const sparse = new Array(1);
+  const accessorArray = [];
+  Object.defineProperty(accessorArray, "0", { enumerable: true, get: () => "a" });
+  accessorArray.length = 1;
+  const extraArray = ["a"];
+  extraArray.extra = true;
+  const symbolArray = ["a"];
+  symbolArray[Symbol("extra")] = true;
+  const customPrototype = ["a"];
+  Object.setPrototypeOf(customPrototype, Object.create(Array.prototype));
 
   for (const invalid of [
     null, [], { ...start, extra: true }, { type: "UNKNOWN", generation: 1 },
-    { type: "START", generation: 0, repository: REPOSITORY },
-    { type: "START", generation: 1.5, repository: REPOSITORY },
-    { type: "START", generation: 1, repository: { owner: "owner" } },
-    { type: "START", generation: 1, repository: { ...REPOSITORY, extra: true } },
-    inherited(start), accessor(start, "type"), accessor(start, "generation"),
+    { type: "START", generation: 0, repository: REPOSITORY, additionalExclusions: [] },
+    { type: "START", generation: 1.5, repository: REPOSITORY, additionalExclusions: [] },
+    { type: "START", generation: 1, repository: REPOSITORY },
+    { type: "START", generation: 1, repository: { owner: "owner", repository: "repo" }, additionalExclusions: [] },
+    { type: "START", generation: 1, repository: { ...REPOSITORY, branch: 1 }, additionalExclusions: [] },
+    { type: "START", generation: 1, repository: { ...REPOSITORY, extra: true }, additionalExclusions: [] },
+    { type: "START", generation: 1, repository: Object.assign({ ...REPOSITORY }, { [Symbol("extra")]: true }), additionalExclusions: [] },
+    { ...stop, additionalExclusions: [] },
+    inherited(start), accessor(start, "type"), accessor(start, "generation"), accessor(start, "additionalExclusions"),
     new Proxy(start, { getPrototypeOf() { throw new Error("trap"); } }),
     { ...start, repository: inherited(REPOSITORY) },
-    { ...start, repository: accessor(REPOSITORY, "owner") },
+    { ...start, repository: accessor(REPOSITORY, "owner") }, { ...start, repository: accessor(REPOSITORY, "branch") },
+    { ...start, additionalExclusions: sparse }, { ...start, additionalExclusions: accessorArray },
+    { ...start, additionalExclusions: extraArray }, { ...start, additionalExclusions: symbolArray },
+    { ...start, additionalExclusions: customPrototype }, { ...start, additionalExclusions: ["a", "a"] },
+    { ...start, additionalExclusions: ["z", "a"] }, { ...start, additionalExclusions: ["/a"] },
+    { ...start, additionalExclusions: ["cafe\u0301"] }, { ...start, additionalExclusions: [1] },
   ]) {
     assert.equal(parseWorkerCommand(invalid), undefined);
   }
@@ -150,11 +175,11 @@ test("STOP aborts current work, releases it, stops downstream publication, and d
   assert.equal(order.filter((entry) => entry === "ATTEMPT_DRAINED").length, 1);
 });
 
-test("all five initialization failures traverse selected-revision worker ownership and drain atomically", async () => {
+test("all six initialization failures traverse selected-revision worker ownership and drain atomically", async () => {
   const rows = [
-    ["runtime-import", 0], ["Parser.init/runtime-WASM", 0], ["JS grammar load", 1], ["TS grammar load", 2], ["TSX grammar load", 3],
+    ["runtime-import", 0], ["Parser.init/runtime-WASM", 0], ["JS grammar load", 1], ["TS grammar load", 2], ["TSX grammar load", 3], ["C# grammar load", 4],
   ];
-  const initializationOrder = ["runtime-import", "Parser.init/runtime-WASM", "JS grammar load", "TS grammar load", "TSX grammar load"];
+  const initializationOrder = ["runtime-import", "Parser.init/runtime-WASM", "JS grammar load", "TS grammar load", "TSX grammar load", "C# grammar load"];
   for (const [injected, failingLoad] of rows) {
     const order = [];
     const resourceEvents = [];
@@ -167,7 +192,7 @@ test("all five initialization failures traverse selected-revision worker ownersh
       parse() { projects += 1; throw new Error("no module may start"); }
       delete() {}
     }
-    const parser = createTreeSitterAdapter({ runtimeJavaScript: "runtime.js", runtimeWasm: "runtime.wasm", grammarJavaScript: "javascript.wasm", grammarTypeScript: "typescript.wasm", grammarTsx: "tsx.wasm" }, {
+    const parser = createTreeSitterAdapter({ runtimeJavaScript: "runtime.js", runtimeWasm: "runtime.wasm", grammarJavaScript: "javascript.wasm", grammarTypeScript: "typescript.wasm", grammarTsx: "tsx.wasm", grammarCSharp: "csharp.wasm" }, {
       async importRuntime() {
         order.push("runtime-import");
         if (injected === "runtime-import") throw new Error(injected);
@@ -182,15 +207,16 @@ test("all five initialization failures traverse selected-revision worker ownersh
         { path: "a.js", mode: "100644", type: "blob", sha: SHA },
         { path: "b.ts", mode: "100644", type: "blob", sha: SHA },
         { path: "c.tsx", mode: "100644", type: "blob", sha: SHA },
+        { path: "d.cs", mode: "100644", type: "blob", sha: SHA },
       ] }; },
       async readSource(_repository, _revision, candidate) { order.push(`retrieved:${candidate.canonicalPath}`); return { kind: "source", decodedSource: "" }; },
     }, (message) => { order.push(message.type); ownershipAtPublication.push([message.type, pipeline.ownership()]); }, undefined, parser, (event) => order.push(event));
     pipeline.start(REPOSITORY, 8);
     await tick(); await tick();
-    assert.deepEqual(order.slice(0, 5), ["REVISION_SELECTED", "retrieved:a.js", "retrieved:b.ts", "retrieved:c.tsx", "PROVIDER_DRAINED_STATIC_ENTERED"], injected);
-    assert.deepEqual(order.slice(5, 5 + initializationOrder.indexOf(injected) + 1), initializationOrder.slice(0, initializationOrder.indexOf(injected) + 1), injected);
-    assert.deepEqual(order.slice(-5), ["source-released", "source-released", "source-released", "FAILURE", "ATTEMPT_DRAINED"], injected);
-    assert.equal(order.filter((entry) => entry === "source-released").length, 3, injected);
+    assert.deepEqual(order.slice(0, 6), ["REVISION_SELECTED", "retrieved:a.js", "retrieved:b.ts", "retrieved:c.tsx", "retrieved:d.cs", "PROVIDER_DRAINED_STATIC_ENTERED"], injected);
+    assert.deepEqual(order.slice(6, 6 + initializationOrder.indexOf(injected) + 1), initializationOrder.slice(0, initializationOrder.indexOf(injected) + 1), injected);
+    assert.deepEqual(order.slice(-6), ["source-released", "source-released", "source-released", "source-released", "FAILURE", "ATTEMPT_DRAINED"], injected);
+    assert.equal(order.filter((entry) => entry === "source-released").length, 4, injected);
     assert.equal(order.includes("source-acquired"), false, injected);
     assert.equal(projects, 0, injected);
     assert.deepEqual(resourceEvents, [], injected);
@@ -211,7 +237,10 @@ test("complete admission crosses only the closed static barrier and retains no p
     return { kind: "revision", revision: SHA };
   }, {
     async loadInventory() {
-      return { kind: "inventory", entries: [{ path: "src/a.ts", mode: "100644", type: "blob", sha: SHA }] };
+      return { kind: "inventory", entries: [
+        { path: "src", mode: "040000", type: "tree" },
+        { path: "src/a.ts", mode: "100644", type: "blob", sha: SHA },
+      ] };
     },
     async readSource() { return { kind: "source", decodedSource: "const value = 1;" }; },
   }, (message) => messages.push(message));

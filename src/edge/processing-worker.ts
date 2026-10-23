@@ -39,7 +39,7 @@ workerScope.addEventListener("message", (event: MessageEvent<unknown>) => {
     return;
   }
   if (command.type === "START") {
-    pipeline.start(command.repository, command.generation);
+    pipeline.start(command.repository, command.generation, command.additionalExclusions);
   } else {
     pipeline.stop(command.generation);
   }

@@ -1,0 +1,44 @@
+= ADR 0013: Ownership of source acquisition, analysis, and saved investigations
+
+Status:: Accepted
+
+== Context
+
+Code City must analyze a selected source revision and support shared saved investigations that reopen without reacquisition or reanalysis. The architectural question is whether the browser or server owns acquisition, computation, and the authoritative association between source and results.
+
+== Alternatives
+
+[cols="1,3,3",options="header"]
+|===
+|Alternative |Strengths |Costs and trade-offs
+
+|Browser-only computation with portable or local snapshots
+|Full source viewing and saving are possible without operating a backend; snapshots can remain user-controlled and portable.
+|Shared saved investigations and centrally controlled analysis require additional coordination. Snapshot custody, availability, and import trust remain client or deployment concerns.
+
+|Browser computation with server-owned saved source and results
+|The browser can show full source and perform analysis, while a server can persist and share source-bearing snapshots.
+|Authority is split: the server must validate uploaded source, results, and their association without having controlled the computation. Backend, storage, and operations are still required.
+
+|Server computation and retained snapshots with browser visualization and investigation
+|One service owns acquisition, analysis, the authoritative source-result association, and shared saved investigations; the browser remains focused on city presentation, investigation, and source viewing.
+|Requires a backend, source-bearing storage, and operational responsibility for security, retention, availability, capacity, backup, and recovery.
+|===
+
+== Decision
+
+Choose server computation and retained snapshots. The server owns source acquisition for the selected immutable revision, analysis, and the authoritative association between source, results, and optional saved investigations. The browser owns presentation and investigation, including on-demand viewing of the exact analyzed source.
+
+This supersedes ADR 0002's browser-only runtime and non-persistence decisions. ADR 0002 remains available in Git history.
+
+== Rationale
+
+This alternative best fits the chosen direction: controlled server-owned analysis, one accountable source-result consistency boundary, and shared saved investigations. It avoids making a browser-produced result the server's authority while still requiring validation at every boundary.
+
+Browser-only and hybrid designs favor local computation or portable custody. They are not selected because this product prioritizes centrally controlled analysis and shared server-owned investigations, despite the additional operating cost.
+
+== Consequences
+
+Code City assumes backend and storage costs and operational responsibility for retained source and results. The browser no longer owns authoritative acquisition or computation, but remains the complete investigation interface.
+
+This decision does not select a backend platform, storage technology, API contract, or software version.

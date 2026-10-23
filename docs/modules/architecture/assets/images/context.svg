@@ -1,12 +1,39 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 380" role="img" aria-labelledby="title desc">
-  <title id="title">Code City system context</title>
-  <desc id="desc">The user submits a public repository, navigates its Code City, and inspects a selected building. GitHub Pages supplies static assets. Code City requests public repository data directly from GitHub.</desc>
-  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#475569"/></marker></defs>
-  <style>.b{fill:#f8fafc;stroke:#334155;stroke-width:2}.core{fill:#e0f2fe;stroke:#0369a1;stroke-width:3}.t{font:18px system-ui,sans-serif;fill:#0f172a;text-anchor:middle}.s{font:14px system-ui,sans-serif;fill:#334155;text-anchor:middle}.a{stroke:#475569;stroke-width:2;marker-end:url(#arrow)}</style>
-  <rect class="b" x="30" y="140" width="170" height="90" rx="8"/><text class="t" x="115" y="178">User</text><text class="s" x="115" y="205">URL, controls, inspection</text>
-  <rect class="core" x="340" y="110" width="240" height="150" rx="8"/><text class="t" x="460" y="160">Code City</text><text class="s" x="460" y="190">Interactive browser app</text><text class="s" x="460" y="215">No backend</text>
-  <rect class="b" x="700" y="35" width="180" height="90" rx="8"/><text class="t" x="790" y="73">GitHub Pages</text><text class="s" x="790" y="100">Static assets</text>
-  <rect class="b" x="700" y="255" width="180" height="90" rx="8"/><text class="t" x="790" y="293">Public GitHub</text><text class="s" x="790" y="320">Repository data</text>
-  <line class="a" x1="200" y1="185" x2="330" y2="185"/><line class="a" x1="340" y1="215" x2="210" y2="215"/>
-  <line class="a" x1="700" y1="95" x2="590" y2="145"/><line class="a" x1="580" y1="225" x2="690" y2="285"/><line class="a" x1="700" y1="315" x2="590" y2="245"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc">
+  <title id="title">Code City current context and accepted target boundary</title>
+  <desc id="desc">The current user accesses a static Code City browser application from GitHub Pages. The browser reads public repository evidence from GitHub. A separate dashed target area states that server authority is accepted but unimplemented and its mechanisms are unresolved.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#334155"/></marker>
+    <style>
+      .box{fill:#f8fafc;stroke:#334155;stroke-width:2}.external{fill:#eef2ff;stroke:#4338ca;stroke-width:2}.target{fill:#fff7ed;stroke:#c2410c;stroke-width:2;stroke-dasharray:10 7}.line{stroke:#334155;stroke-width:2.5;fill:none;marker-end:url(#arrow)}.label{font:600 22px system-ui,sans-serif;fill:#0f172a}.text{font:18px system-ui,sans-serif;fill:#334155}.small{font:16px system-ui,sans-serif;fill:#475569}.targetText{fill:#9a3412}
+    </style>
+  </defs>
+  <rect width="1200" height="700" fill="#ffffff"/>
+  <text x="50" y="52" class="label">Current browser-only context</text>
+  <rect x="60" y="120" width="220" height="130" rx="12" class="external"/>
+  <text x="170" y="170" text-anchor="middle" class="label">User</text>
+  <text x="170" y="205" text-anchor="middle" class="text">Analyze and investigate</text>
+  <rect x="430" y="90" width="340" height="210" rx="12" class="box"/>
+  <text x="600" y="140" text-anchor="middle" class="label">Code City in browser</text>
+  <text x="600" y="178" text-anchor="middle" class="text">Controller and semantic UI</text>
+  <text x="600" y="210" text-anchor="middle" class="text">One processing worker</text>
+  <text x="600" y="242" text-anchor="middle" class="text">WebGL2 presentation</text>
+  <text x="600" y="272" text-anchor="middle" class="small">No Code City server or persistence</text>
+  <rect x="900" y="70" width="240" height="120" rx="12" class="external"/>
+  <text x="1020" y="118" text-anchor="middle" class="label">GitHub Pages</text>
+  <text x="1020" y="153" text-anchor="middle" class="text">Static package</text>
+  <rect x="900" y="240" width="240" height="140" rx="12" class="external"/>
+  <text x="1020" y="286" text-anchor="middle" class="label">Public GitHub</text>
+  <text x="1020" y="321" text-anchor="middle" class="text">Revision and tree</text>
+  <text x="1020" y="351" text-anchor="middle" class="text">Raw source content</text>
+  <path d="M280 185 H425" class="line"/>
+  <text x="352" y="172" text-anchor="middle" class="small">HTTPS</text>
+  <path d="M900 130 H780" class="line"/>
+  <text x="840" y="116" text-anchor="middle" class="small">assets</text>
+  <path d="M770 260 H892" class="line"/>
+  <text x="832" y="246" text-anchor="middle" class="small">anonymous reads</text>
+  <rect x="60" y="465" width="1080" height="175" rx="12" class="target"/>
+  <text x="90" y="510" class="label targetText">Accepted target — unimplemented</text>
+  <text x="90" y="550" class="text">A Code City server owns source acquisition, analysis, retained source-result association,</text>
+  <text x="90" y="582" class="text">and saved investigations. The browser owns presentation and investigation.</text>
+  <text x="90" y="616" class="small targetText">Server, API, storage, access, security, and deployment mechanisms are unresolved.</text>
 </svg>

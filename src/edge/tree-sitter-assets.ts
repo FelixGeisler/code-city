@@ -8,6 +8,8 @@ import grammarJavaScript from "@vscode/tree-sitter-wasm/wasm/tree-sitter-javascr
 import grammarTypeScript from "../../vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm?url";
 // @ts-expect-error Vite resolves the accepted fixed vendored asset URL.
 import grammarTsx from "../../vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm?url";
+// @ts-expect-error Vite resolves the accepted fixed package asset URL.
+import grammarCSharp from "@vscode/tree-sitter-wasm/wasm/tree-sitter-c-sharp.wasm?url";
 import { createTreeSitterAdapter, type ParserAdapterOptions } from "./tree-sitter-adapter";
 
 export const CANONICAL_PARSER_ASSET_URLS = {
@@ -16,6 +18,7 @@ export const CANONICAL_PARSER_ASSET_URLS = {
   grammarJavaScript,
   grammarTypeScript,
   grammarTsx,
+  grammarCSharp,
 } as const;
 
 export function createProductionTreeSitterAdapter(options?: ParserAdapterOptions) {

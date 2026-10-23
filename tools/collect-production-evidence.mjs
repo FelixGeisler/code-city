@@ -49,7 +49,7 @@ const SAFE_HEADERS = new Set([
   "accept", "access-control-allow-origin", "cache-control", "content-type", "origin", "pragma",
   "x-github-api-version", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset",
 ]);
-const SOURCE_SUFFIXES = [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"];
+const SOURCE_SUFFIXES = [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".cs"];
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const QUALIFICATION_IDENTITIES = new WeakMap();
 const CHECKER_DIAGNOSTICS = Object.freeze({
@@ -415,11 +415,13 @@ function utf8Compare(left, right) {
   return Buffer.compare(ENCODER.encode(left), ENCODER.encode(right));
 }
 
-function ancestorIn(value, set) {
-  for (let slash = value.lastIndexOf("/"); slash >= 0; slash = value.lastIndexOf("/", slash - 1)) {
-    if (set.has(value.slice(0, slash))) return true;
-  }
-  return false;
+const FIXED_SOURCE_EXCLUSION_SEGMENTS = new Set(["node_modules", "dist", "build", "bin", "obj"]);
+
+function isSupportedTreeKind(entry) {
+  return (["100644", "100755"].includes(entry.mode) && entry.type === "blob")
+    || (entry.mode === "040000" && entry.type === "tree")
+    || (entry.mode === "120000" && entry.type === "blob")
+    || (entry.mode === "160000" && entry.type === "commit");
 }
 
 export function projectSourceCandidates(providerEntries, selectedWidth, identityLimit = 4001) {
@@ -434,26 +436,24 @@ export function projectSourceCandidates(providerEntries, selectedWidth, identity
     const identity = pathProjection(ownString(providerEntry, "path"));
     const mode = ownString(providerEntry, "mode");
     const type = ownString(providerEntry, "type");
-    invariant(identity && mode && type && !raw.has(identity.rawPath) && !canonical.has(identity.canonicalPath), "invalid tree entry");
+    const entry = { ...identity, mode, type, providerIndex };
+    invariant(identity && mode && type && !raw.has(identity.rawPath) && !canonical.has(identity.canonicalPath)
+      && isSupportedTreeKind(entry), "invalid tree entry");
     raw.add(identity.rawPath); canonical.add(identity.canonicalPath);
-    projected.push({ ...identity, mode, type, providerIndex });
+    projected.push(entry);
   }
-  const boundaries = new Set(projected.filter((entry) => (entry.mode === "120000" && entry.type === "blob")
-    || (entry.mode === "160000" && entry.type === "commit")).map((entry) => entry.canonicalPath));
-  const regular = new Set(projected.filter((entry) => ["100644", "100755"].includes(entry.mode) && entry.type === "blob")
-    .map((entry) => entry.canonicalPath));
+  const rawEntries = new Map(projected.map((entry) => [entry.rawPath, entry]));
+  for (const entry of projected) {
+    for (let slash = entry.rawPath.lastIndexOf("/"); slash >= 0; slash = entry.rawPath.lastIndexOf("/", slash - 1)) {
+      const ancestor = rawEntries.get(entry.rawPath.slice(0, slash));
+      invariant(ancestor?.mode === "040000" && ancestor.type === "tree", "tree ancestry is incomplete");
+    }
+  }
   const candidates = [];
   for (const entry of projected) {
-    if (ancestorIn(entry.canonicalPath, boundaries)) continue;
-    invariant(!ancestorIn(entry.canonicalPath, regular), "tree contradicts a regular file");
+    if (entry.canonicalPath.split("/").some((segment) => FIXED_SOURCE_EXCLUSION_SEGMENTS.has(segment))) continue;
     const supported = SOURCE_SUFFIXES.some((suffix) => entry.canonicalPath.slice(entry.canonicalPath.lastIndexOf("/") + 1).toLowerCase().endsWith(suffix));
-    if (["100644", "100755"].includes(entry.mode) && entry.type === "blob") {
-      if (supported) candidates.push(entry);
-      continue;
-    }
-    if ((entry.mode === "040000" && entry.type === "tree") || (entry.mode === "120000" && entry.type === "blob")
-        || (entry.mode === "160000" && entry.type === "commit")) continue;
-    invariant(false, "tree entry kind is invalid");
+    if (["100644", "100755"].includes(entry.mode) && entry.type === "blob" && supported) candidates.push(entry);
   }
   candidates.sort((left, right) => utf8Compare(left.canonicalPath, right.canonicalPath));
   invariant(candidates.length > 0, "tree has no supported candidates");

@@ -1,86 +1,57 @@
-= 11. Risks and Technical Debt
+= Risks and Technical Debt
 
-[cols="2,4,3",options="header"]
+== Current implementation risks
+
+[cols="2,3,2",options="header"]
 |===
-|Risk |Consequence |Response or stop trigger
+|Risk or debt |Current consequence |Existing containment
 
-|GitHub retrieval scale and drift
-|Thousands of anonymous raw requests may be slow, throttled, or affected by
-CORS, API, and tree-contract changes
-|Run production-origin capacity and release smoke tests. Reopen ADR 0005 or
-0006 if the fixed path is no longer dependable; do not add a silent fallback
+|Browser and anonymous-provider coupling
+|Availability, CORS, rate limits, and browser resource capacity can prevent an
+analysis.
+|Bounded requests, explicit failures, fixed processing envelope, no automatic
+retry, and complete-attempt rollback.
 
-|Full-envelope browser capacity
-|The full published source envelope plus JavaScript, parser, and WASM
-representations may exceed an assumed browser capacity
-|Prove dense, deep, maximum-file, aggregate, repeated-attempt, and cancellation
-fixtures. Failure reopens the envelope or processing lifecycle
+|Whole-attempt file failure
+|One supported file's retrieval, text, syntax, or metric failure prevents all
+otherwise valid files from producing a city.
+|The failure is explicit and source-free; no partial result is presented. The
+accepted target replaces this with per-file continuation after complete
+acquisition.
 
-|Lifecycle and interaction races
-|Cancellation, replacement, pointer capture, queued hover, resize, context loss,
-or stale callbacks could publish stale semantics or leak an owned resource
-|Exercise every generation, token, request-epoch, interruption, and disposal
-boundary; stop on overlap, stale publication, or non-idempotent cleanup
+|Source-free result
+|Current inspection cannot show exact source or unit/contribution evidence.
+|The browser exposes only aligned paths and raw file metrics. Target retained
+source and drill-down remain unimplemented.
 
-|Parser and grammar drift
-|A dependency or grammar change can alter accepted syntax and metric facts
-|Pin and verify runtime, grammar assets, ABI, provenance, and representative
-facts; renew before accepting a change
+|Shallow city grouping
+|Current city construction groups by at most the first two directory segments,
+not the accepted recursive repository hierarchy.
+|The behavior is deterministic and documented as current only. Recursive
+presentation details remain unresolved.
 
-|WebGL, picking, and numeric drift
-|A changed metric, layout, plate envelope, camera, or representation can
-invalidate clipping, CPU hits, resource bounds, or exact `float32` coordinates
-|Renew ADR 0011's shared scene-centre, clipping, matrix, exact-slab, plate-pass,
-and `208420`-byte proofs with concentrated and `N=G=4000` scenes; do not hide
-instability with epsilon or capacity shortcuts
+|Current camera coupling
+|Path-search activation selects and moves the camera, contrary to the target's
+selection-without-camera-movement behavior.
+|Other selection paths remain explicit and generation-gated. Target interaction
+is not claimed as implemented.
 
-|Geometry and inspection misalignment
-|A path or metric fact could describe a different rendered building or escape
-through a presenter or evidence observer
-|Use one closed city payload, the sole controller validator, non-aliasing
-snapshots, aligned controller-only district descriptors, numeric-only presenter
-projection, geometry-only observers, and sentinel privacy tests
-
-|Contextual district identity or stale hover
-|Context could churn during navigation, let hover override selection, disclose
-identity outside text, or survive replacement
-|Use one reserved normal-flow row, controller-owned selected-over-hover
-precedence, fresh-movement-only hover scheduling, captured-token callbacks,
-inert `bdi.textContent`, and full partial/current cleanup; retained numeric
-projection never controls label visibility or layout
-
-|Interaction usability and visual imbalance
-|Controls, surface focus, inspector, or persistent legend layout could obscure
-the city, become unpredictable, intercept picking, or rely on colour alone
-|Keep fixed accessible controls, numeric legend labels, external reserved legend
-space, and textual redundancy; issue
-https://github.com/FelixGeisler/code-city/issues/537[#537] performs one common
-representative visual review before M2 release
-
-|Production artifact drift
-|A rebuild, stale asset, mutable dependency, or permissive browser policy can
-make deployed bytes differ from reviewed bytes
-|Build once in the protected-main publication run, deploy that verified artifact,
-and stop when production bytes, media types, policy, or deployment identity differ
-
-|Anonymous production-provider limits
-|The same-run qualification and 4,001-request capacity journey can be throttled,
-blocked by CORS, or invalidated by provider tree and content drift
-|Preserve a schema-valid handled-failure packet, fail publication evidence, and
-require explicit disposition; never retry, authenticate, or substitute a provider
-
-|Evidence privacy or integrity failure
-|A malformed, unsealed, substituted, or over-disclosed packet could create false
-release confidence or persist sensitive diagnostics
-|Upload only the seven allow-listed validated files. Delete output and upload
-nothing after privacy, schema, path-safety, or binding failure
-
-|Evidence retention and external wrapper custody
-|The Actions artifact expires after 90 days and the external wrapper is not stored
-with the sealed packet
-|Authenticate and download the exact artifact promptly, finalize it offline with
-no-clobber publication, record its digest, and keep acceptance explicit
+|No persistence
+|Reload, navigation, replacement, or close loses the browser-session analysis.
+|The UI makes no save claim. Explicit immutable Save/reopen is accepted but
+unimplemented.
 |===
 
-No architecture-specific technical debt is currently accepted. Temporary work
-status belongs in the relevant GitHub issue, not in this chapter.
+== Target delivery gap
+
+The largest architectural gap is the move from browser-owned acquisition and
+analysis to server authority with retained source-result association and saved
+investigations. That gap includes per-file continuation, recursive hierarchy,
+unit facts and source drill-down, a sortable complete file inventory, explicit
+Save/reopen, and target camera behavior.
+
+These are accepted product outcomes, not evidence that a backend exists. Server,
+API, storage, access/security, retention operations, deletion, backup, ingress,
+deployment, recursive layout, and portable interchange remain unresolved. They
+must be decided before implementation that depends on them; this reset does not
+turn them into a plan.

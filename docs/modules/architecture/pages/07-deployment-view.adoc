@@ -1,99 +1,40 @@
-= 7. Deployment View
+= Deployment View
 
-image::deployment.svg[GitHub Pages and browser deployment]
+== Current deployed topology
 
-[cols="1,3",options="header"]
-|===
-|Node |Content
+image::deployment.svg[Current static GitHub Pages deployment with browser main context and one worker]
 
-|GitHub Actions publication run
-|Protected-main verification, immutable artifacts, Pages deployment, eligibility,
-and production evidence
+GitHub Pages serves one verified static package under the Code City base path.
+A user's browser runs the package in two execution contexts: the main context
+for controller, semantic UI, and WebGL2 presentation, and one module worker for
+GitHub acquisition, parsing, metrics, and city construction. Both are browser
+code from the same package. Public GitHub remains an external provider.
 
-|GitHub Pages
-|One reviewed static application artifact
+There is no Node.js application process in production. Node.js, npm, Vite, and
+Antora are build and verification tools. A Pages artifact is static content,
+not a Code City server runtime.
 
-|Browser main context
-|UI, controller-owned semantic state, worker bridge, and presenter-owned
-interactive WebGL2 session
+== Current publication path
 
-|Browser worker
-|GitHub access, admission, parsing, metrics, and aligned geometry-and-inspection
-city construction
+The pull-request `CI` workflow installs the locked dependency closure, performs
+the security audit, and runs `npm run verify`. It does not publish.
 
-|Public GitHub
-|Default-branch head identity, immutable tree, source content, deployment identity,
-and the open production-acceptance gate
-|===
+On a push to `main`, the `Publish` workflow repeats verification, creates the
+canonical package and publication record, uploads the reviewed Pages artifact,
+and deploys that artifact. The package manifest and publication tooling own
+artifact identity and publication evidence; tool versions remain in the package
+and lock files.
 
-== Publication path
+The workflow's production-evidence job is conditional on its explicit issue-
+state eligibility check. When eligible, the collector verifies deployment and
+production assets before recording observations. Therefore the workflow defines
+a verified evidence path; it does not imply that production evidence is
+collected for every merge.
 
-Pull requests have one `verify` check and cannot publish. A push to protected `main`
-runs the separate publication workflow. Its `verify` job checks out the event commit
-without persisted credentials, installs the pinned closure, audits it, and runs the
-complete verification command. The canonical package produced by that command is
-the run's only publication build.
+== Accepted target
 
-After verification, the job creates a canonical publication record bound to the
-repository, push event, event commit, run, run attempt, and package-manifest digest.
-It uploads `dist/` as the Pages artifact and uploads the manifest and publication
-record as the fixed internal evidence artifact. Deployment consumes the Pages
-artifact without checkout, configuration, or rebuild and targets the protected
-`github-pages` environment.
-
-The eligibility job reads M2 acceptance issue 537. While that issue is open,
-publication continues to production evidence; a closed issue ends publication
-without evidence; an unavailable or unexpected state fails the run. The complete
-binding inventory is atomically bound to that issue and its accepted body digest
-as permitted by
-xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]; no
-partial migration, schema change, workflow dispatch, or alternate publication
-trigger is allowed.
-
-== Production evidence
-
-The evidence job downloads only the fixed internal artifact from its own run and
-checks the push, main ref, event commit, checkout, manifest, publication record,
-repository, run, and attempt bindings before collection. The collector process has
-a minimal environment without a GitHub token. It independently checks the active
-Pages deployment, compares production bytes and policy with the manifest, runs the
-ordinary hosted product in a fresh Chrome profile, and records the accepted smoke,
-qualification, capacity, request, and lifecycle facts.
-
-Only a validated marker permits upload. The marker itself is excluded; the seven
-canonical JSON files are retained for 90 days in the single artifact named from the
-event commit and run attempt. Handled product or provider failure remains a failed
-job after preserving its validated packet. Privacy, schema, or unsafe-storage failure
-deletes the output and creates no evidence artifact. A closed CLI diagnostic names
-only the first observed checker cause; it is unauthenticated, noncanonical
-operational output and cannot support acceptance or substitute for the packet. The
-job summary records the Actions artifact ID and URL, platform digest, packet digest,
-event commit, run, attempt, and retention binding for authenticated finalization.
-
-== Local finalization
-
-A coordinator authenticates the Actions artifact and job log, downloads the packet
-to a marker-free `sealed/` directory outside the repository, and writes only the
-eight authenticated fields to sibling `artifact-metadata.json`. Finalization is
-then local and offline:
-
-----
-node tools/finalize-production-evidence.mjs --packet <sealed-dir> --metadata <metadata-json> --output <production-dir>/wrapper.json
-----
-
-The finalizer copies only the seven regular packet files to an invocation-owned
-validation directory, adds the expected digest marker there, and uses the packet
-reader and schema validator to recompute all bindings. It creates and validates the
-canonical external wrapper, writes and fsyncs an exclusively created same-parent
-temporary file, rereads it, and commits it with a hard link. It never renames or
-replaces an output. A raced or pre-existing output therefore remains unchanged.
-The downloaded packet is never modified.
-
-== Browser policy
-
-The entry document applies a default-deny content policy and no-referrer policy.
-Executable code, styles, worker code, and WASM assets are same-origin; network
-connections are limited to the two fixed GitHub origins owned by the gateway.
-Objects, embedding, base-URL changes, and remote runtime assets are disabled.
-Because GitHub Pages response headers and worker policy inheritance cannot be
-assumed, the gateway's fixed-origin checks remain authoritative.
+The target requires server capability for acquisition, analysis, retained
+source-result association, and saved investigations. No server node appears in
+the current deployment diagram because none is deployed. Platform, process,
+storage, access, ingress, network, resource, and deployment choices remain
+unresolved.

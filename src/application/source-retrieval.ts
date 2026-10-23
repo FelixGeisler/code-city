@@ -29,6 +29,7 @@ export type ImmutableSourceGateway = Readonly<{
     repository: RepositoryReference,
     selected: string,
     signal: AbortSignal,
+    additionalExclusions?: readonly string[],
   ): Promise<InventoryGatewayResult>;
   readSource(
     repository: RepositoryReference,
@@ -76,6 +77,7 @@ export async function retrieveAdmittedSources(
   signal: AbortSignal,
   gateway: ImmutableSourceGateway,
   observe: (ownership: RetrievalOwnership) => void = () => {},
+  additionalExclusions: readonly string[] = Object.freeze([]),
 ): Promise<SourceRetrievalResult> {
   if (!validObjectId(selected)) {
     return providerFailure();
@@ -86,7 +88,7 @@ export async function retrieveAdmittedSources(
 
   try {
     observe({ phase: "provider-inventory", projectedInventory: false, providerResource: false });
-    const inventoryResult = await gateway.loadInventory(repository, selected, signal);
+    const inventoryResult = await gateway.loadInventory(repository, selected, signal, additionalExclusions);
     if (signal.aborted) {
       return { kind: "cancelled" };
     }
@@ -94,7 +96,7 @@ export async function retrieveAdmittedSources(
       return providerFailure();
     }
 
-    const inventory = prepareSourceInventory(inventoryResult.entries);
+    const inventory = prepareSourceInventory(inventoryResult.entries, additionalExclusions);
     if (inventory.kind === "failure") {
       return inventory;
     }

@@ -1,7 +1,8 @@
 export const SUPPORTED_SUFFIXES = [
-  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".cs",
 ] as const;
 
+export const FIXED_EXCLUDED_SEGMENTS = ["node_modules", "dist", "build", "bin", "obj"] as const;
 export const MAX_ADMITTED_MODULES = 4_000;
 export const MAX_NORMALIZED_MODULE_BYTES = 2_097_152;
 export const MAX_NORMALIZED_TOTAL_BYTES = 41_943_040;
@@ -39,6 +40,7 @@ export type InventoryAdmissionResult =
 const PATH_CONTROL = /\p{Cc}/u;
 const DRIVE_PATH = /^[A-Za-z]:/;
 const textEncoder = new TextEncoder();
+const fixedExcludedSegments = new Set<string>(FIXED_EXCLUDED_SEGMENTS);
 
 type ValidatedEntry = Readonly<{
   canonicalPath: string;
@@ -80,9 +82,13 @@ function validatePath(path: string): Readonly<{ rawPath: string; canonicalPath: 
   };
 }
 
-export function isCanonicalSourcePath(path: string): boolean {
+export function isCanonicalPath(path: string): boolean {
   const validated = validatePath(path);
-  return validated?.canonicalPath === path && hasSupportedSuffix(path);
+  return validated?.canonicalPath === path;
+}
+
+export function isCanonicalSourcePath(path: string): boolean {
+  return isCanonicalPath(path) && hasSupportedSuffix(path);
 }
 
 export function compareUnsignedUtf8(left: string, right: string): number {
@@ -98,20 +104,54 @@ export function compareUnsignedUtf8(left: string, right: string): number {
   return leftBytes.length - rightBytes.length;
 }
 
-function hasAncestor(path: string, ancestors: ReadonlySet<string>): boolean {
-  let separator = path.lastIndexOf("/");
-  while (separator >= 0) {
-    if (ancestors.has(path.slice(0, separator))) {
-      return true;
-    }
-    separator = path.lastIndexOf("/", separator - 1);
+export function parseAdditionalExclusions(text: string): readonly string[] | undefined {
+  const paths: string[] = [];
+  const identities = new Set<string>();
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    if (line.length === 0) continue;
+    if (!isCanonicalPath(line) || identities.has(line)) return undefined;
+    identities.add(line);
+    paths.push(line);
   }
-  return false;
+  paths.sort(compareUnsignedUtf8);
+  return Object.freeze(paths);
 }
 
-export function prepareSourceInventory(entries: readonly ProjectedTreeEntry[]): InventoryAdmissionResult {
+export function isCanonicalAdditionalExclusions(paths: readonly string[]): boolean {
+  let prior: string | undefined;
+  const identities = new Set<string>();
+  for (const path of paths) {
+    if (!isCanonicalPath(path) || identities.has(path)
+      || (prior !== undefined && compareUnsignedUtf8(prior, path) >= 0)) return false;
+    identities.add(path);
+    prior = path;
+  }
+  return true;
+}
+
+function isSupportedKind(entry: ValidatedEntry): boolean {
+  return ((entry.mode === "100644" || entry.mode === "100755") && entry.type === "blob")
+    || (entry.mode === "040000" && entry.type === "tree")
+    || (entry.mode === "120000" && entry.type === "blob")
+    || (entry.mode === "160000" && entry.type === "commit");
+}
+
+function isTree(entry: ValidatedEntry | undefined): boolean {
+  return entry?.mode === "040000" && entry.type === "tree";
+}
+
+export function isExcludedSourcePath(path: string, additionalExclusions: readonly string[]): boolean {
+  if (path.split("/").some((segment) => fixedExcludedSegments.has(segment))) return true;
+  return additionalExclusions.some((excluded) => path === excluded || path.startsWith(`${excluded}/`));
+}
+
+export function prepareSourceInventory(
+  entries: readonly ProjectedTreeEntry[],
+  additionalExclusions: readonly string[] = Object.freeze([]),
+): InventoryAdmissionResult {
   const rawIdentities = new Set<string>();
   const canonicalIdentities = new Set<string>();
+  const rawEntries = new Map<string, ValidatedEntry>();
   const validated: ValidatedEntry[] = [];
 
   for (const entry of entries) {
@@ -119,32 +159,28 @@ export function prepareSourceInventory(entries: readonly ProjectedTreeEntry[]): 
     if (!path || rawIdentities.has(path.rawPath) || canonicalIdentities.has(path.canonicalPath)) {
       return failure("Source admission failed", "M1-ADM-1");
     }
+    const candidate = { ...path, mode: entry.mode, type: entry.type, ...(entry.sha === undefined ? {} : { sha: entry.sha }) };
+    if (!isSupportedKind(candidate)) return failure("Source admission failed", "M1-ADM-3");
     rawIdentities.add(path.rawPath);
     canonicalIdentities.add(path.canonicalPath);
-    validated.push({ ...path, mode: entry.mode, type: entry.type, ...(entry.sha === undefined ? {} : { sha: entry.sha }) });
+    rawEntries.set(path.rawPath, candidate);
+    validated.push(candidate);
   }
 
-  const boundaries = new Set<string>();
-  const regularFiles = new Set<string>();
   for (const entry of validated) {
-    if ((entry.mode === "120000" && entry.type === "blob")
-      || (entry.mode === "160000" && entry.type === "commit")) {
-      boundaries.add(entry.canonicalPath);
-    } else if ((entry.mode === "100644" || entry.mode === "100755") && entry.type === "blob") {
-      regularFiles.add(entry.canonicalPath);
+    let separator = entry.rawPath.lastIndexOf("/");
+    while (separator >= 0) {
+      if (!isTree(rawEntries.get(entry.rawPath.slice(0, separator)))) {
+        return failure("Source admission failed", "M1-ADM-3");
+      }
+      separator = entry.rawPath.lastIndexOf("/", separator - 1);
     }
   }
 
   const candidates: SourceCandidate[] = [];
   let qualifyingSkippedEntry = false;
   for (const entry of validated) {
-    if (hasAncestor(entry.canonicalPath, boundaries)) {
-      continue;
-    }
-    if (hasAncestor(entry.canonicalPath, regularFiles)) {
-      return failure("Source admission failed", "M1-ADM-3");
-    }
-
+    if (isExcludedSourcePath(entry.canonicalPath, additionalExclusions)) continue;
     const supported = hasSupportedSuffix(entry.canonicalPath);
     if ((entry.mode === "100644" || entry.mode === "100755") && entry.type === "blob") {
       if (supported) {
@@ -156,18 +192,10 @@ export function prepareSourceInventory(entries: readonly ProjectedTreeEntry[]): 
       }
       continue;
     }
-    if (entry.mode === "040000" && entry.type === "tree") {
+    if ((entry.mode === "040000" && entry.type === "tree")
+      || (entry.mode === "120000" && entry.type === "blob")) {
       qualifyingSkippedEntry ||= supported;
-      continue;
     }
-    if (entry.mode === "120000" && entry.type === "blob") {
-      qualifyingSkippedEntry ||= supported;
-      continue;
-    }
-    if (entry.mode === "160000" && entry.type === "commit") {
-      continue;
-    }
-    return failure("Source admission failed", "M1-ADM-3");
   }
 
   candidates.sort((left, right) => compareUnsignedUtf8(left.canonicalPath, right.canonicalPath));

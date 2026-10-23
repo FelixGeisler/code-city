@@ -184,6 +184,7 @@ export function projectTreeEvidence(
   value: unknown,
   expectedRoot: string,
   selectedWidth: number,
+  additionalExclusions: readonly string[] = Object.freeze([]),
 ): readonly ProjectedTreeEntry[] | undefined {
   if (ownString(value, "sha") !== expectedRoot || !validObjectId(expectedRoot, selectedWidth)) {
     return undefined;
@@ -205,7 +206,7 @@ export function projectTreeEvidence(
     primitives.push({ path, mode, type });
   }
 
-  const admission = prepareSourceInventory(primitives);
+  const admission = prepareSourceInventory(primitives, additionalExclusions);
   const candidatePaths = admission.kind === "candidates"
     ? new Set(admission.candidates.map((candidate) => candidate.rawPath))
     : new Set<string>();
@@ -261,10 +262,11 @@ async function requestTreeInventory(
   repository: RepositoryReference,
   root: string,
   selectedWidth: number,
+  additionalExclusions: readonly string[],
   signal: AbortSignal,
 ): Promise<readonly ProjectedTreeEntry[] | undefined> {
   const evidence = await requestJson(fetchImpl, treeUrl(repository, root), TREE_EVIDENCE_CAP, signal);
-  return projectTreeEvidence(evidence, root, selectedWidth);
+  return projectTreeEvidence(evidence, root, selectedWidth, additionalExclusions);
 }
 
 function gitBlobPayload(bytes: Uint8Array): ArrayBuffer {
@@ -284,12 +286,24 @@ export function createGithubSourceGateway(
   digest: Digest = (algorithm, data) => crypto.subtle.digest(algorithm, data),
 ): ImmutableSourceGateway {
   return {
-    async loadInventory(repository, selected, signal): Promise<InventoryGatewayResult> {
+    async loadInventory(
+      repository,
+      selected,
+      signal,
+      additionalExclusions = Object.freeze([]),
+    ): Promise<InventoryGatewayResult> {
       const root = await requestCommitRoot(fetchImpl, repository, selected, signal);
       if (!root) {
         return { kind: "provider-failure" };
       }
-      const entries = await requestTreeInventory(fetchImpl, repository, root, selected.length, signal);
+      const entries = await requestTreeInventory(
+        fetchImpl,
+        repository,
+        root,
+        selected.length,
+        additionalExclusions,
+        signal,
+      );
       return entries ? { kind: "inventory", entries } : { kind: "provider-failure" };
     },
 

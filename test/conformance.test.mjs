@@ -179,16 +179,20 @@ test("every labelled notice mutation fails closed", async () => {
   const text = sourceIndex.toString("utf8");
   const firstStart = text.indexOf("  <!-- third-party-notice:source-grammar:");
   const secondStart = text.indexOf("  <!-- third-party-notice:source-grammar-dependency:");
+  const thirdStart = text.indexOf("  <!-- third-party-notice:source-grammar:tree-sitter-c-sharp@");
   const viewportStart = text.indexOf("  <meta name=\"viewport\"");
-  assert(firstStart >= 0 && secondStart > firstStart && viewportStart > secondStart);
+  assert(firstStart >= 0 && secondStart > firstStart && thirdStart > secondStart && viewportStart > thirdStart);
   const first = text.slice(firstStart, secondStart);
-  const second = text.slice(secondStart, viewportStart);
+  const second = text.slice(secondStart, thirdStart);
+  const third = text.slice(thirdStart, viewportStart);
   const mutations = [
     text.slice(0, firstStart) + text.slice(secondStart),
     text.replace("Permission is hereby granted", "Permission is hereby changed"),
     text.slice(0, secondStart) + first + text.slice(secondStart),
+    text.slice(0, thirdStart) + text.slice(viewportStart),
     text.replace("third-party-notice:source-grammar:tree-sitter-typescript@0.23.2", "third-party-notice:source-grammar:unknown"),
-    text.slice(0, firstStart) + second + first + text.slice(viewportStart),
+    text.replace("tree-sitter-c-sharp@485f0bae0274ac9114797fc10db6f7034e4086e3", "tree-sitter-c-sharp@unknown"),
+    text.slice(0, firstStart) + third + second + first + text.slice(viewportStart),
     text.replace("-->\n  <!-- third-party-notice:source-grammar-dependency:", "\nthird-party-notice:source-grammar-dependency:"),
     text.replaceAll("\n", "\r\n"),
   ];
@@ -197,12 +201,21 @@ test("every labelled notice mutation fails closed", async () => {
   }
 });
 
-test("the four prior and six narrow parser byte-fidelity attributes remain exact and effective", async () => {
+test("the declared byte-fidelity attributes remain exact and effective", async () => {
   const expected = [
     "test/fixtures/wasm-inventory.tsv text eol=lf",
-    "docs/modules/architecture/pages/adr/0011-interactive-webgl2-navigation-and-inspection.adoc text eol=lf",
+    "test/fixtures/csharp-candidate.json text eol=lf",
+    "test/fixtures/csharp-qualification-cases.json text eol=lf",
+    "test/fixtures/csharp-source-license.txt text eol=lf",
+    "test/fixtures/csharp-wasm-inventory.tsv text eol=lf",
+    "test/fixtures/csharp-admission-browser.json text eol=lf",
+    "package.json text eol=lf",
+    "package-lock.json text eol=lf",
+    "docs/ui/img/code-city.svg text eol=lf",
+    "src/domain/source-admission.ts text eol=lf",
+    "src/domain/base-metrics.ts text eol=lf",
+    "src/edge/tree-sitter-assets.ts text eol=lf",
     "test/fixtures/interactive/fixture.json text eol=lf",
-    "docs/modules/architecture/pages/adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc text eol=lf",
     "vendor/tree-sitter-typescript/LICENSE text eol=lf",
     "vendor/tree-sitter-typescript/LICENSE.javascript text eol=lf",
     "vendor/tree-sitter-typescript/grammar.patch text eol=lf",
@@ -215,23 +228,37 @@ test("the four prior and six narrow parser byte-fidelity attributes remain exact
   const committedBlob = execFileSync("git", ["show", "HEAD:.gitattributes"], { cwd: projectRoot, encoding: "utf8" });
   assert.equal(workingTree, expected);
   assert.equal(committedBlob, expected);
-  const paths = [
+  const csharpBytePinnedPaths = [
+    "test/fixtures/csharp-candidate.json",
+    "test/fixtures/csharp-qualification-cases.json",
+    "test/fixtures/csharp-source-license.txt",
+    "test/fixtures/csharp-wasm-inventory.tsv",
+    "test/fixtures/csharp-admission-browser.json",
+    "package.json",
+    "package-lock.json",
+    "src/domain/source-admission.ts",
+    "src/domain/base-metrics.ts",
+    "src/edge/tree-sitter-assets.ts",
+  ];
+  const parserTextPaths = [
     "vendor/tree-sitter-typescript/LICENSE",
     "vendor/tree-sitter-typescript/LICENSE.javascript",
     "vendor/tree-sitter-typescript/grammar.patch",
     "vendor/tree-sitter-typescript/provenance.json",
+  ];
+  const binaryPaths = [
     "vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm",
     "vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm",
-    "index.html",
   ];
-  const output = execFileSync("git", ["check-attr", "text", "eol", "--", ...paths], { cwd: projectRoot, encoding: "utf8" });
-  for (const relativePath of paths.slice(0, 4).concat("index.html")) {
+  const lfPaths = [...csharpBytePinnedPaths, ...parserTextPaths, "index.html"];
+  const output = execFileSync("git", ["check-attr", "text", "eol", "--", ...lfPaths, ...binaryPaths], { cwd: projectRoot, encoding: "utf8" });
+  for (const relativePath of lfPaths) {
     assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: text: set`));
     assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: eol: lf`));
   }
-  for (const relativePath of paths.slice(4, 6)) assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: text: unset`));
-  for (const relativePath of ["LICENSE", "LICENSE.javascript", "grammar.patch", "provenance.json"]) {
-    const bytes = await readFile(path.join(projectRoot, "vendor", "tree-sitter-typescript", relativePath));
+  for (const relativePath of binaryPaths) assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: text: unset`));
+  for (const relativePath of [...csharpBytePinnedPaths, ...parserTextPaths]) {
+    const bytes = await readFile(path.join(projectRoot, ...relativePath.split("/")));
     assert(!bytes.includes(0x0d), `${relativePath} contains CR bytes`);
   }
 });
@@ -308,6 +335,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.equal((indexHtml.match(/<form\b/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/<input\b/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/<button\b/gi) ?? []).length, 2);
+  assert.equal((indexHtml.match(/<textarea\b/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/\sdata-form(?:\s|>)/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/\sdata-status(?:\s|>)/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/\sdata-commit(?:\s|>)/gi) ?? []).length, 1);
@@ -315,7 +343,9 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.equal((indexHtml.match(/\sdata-city-reset(?:\s|>)/gi) ?? []).length, 1);
   assert.match(indexHtml, /<p id="city-navigation-instructions">[^<]+<\/p>/i);
   assert.match(indexHtml, /<button data-city-reset type="button">Reset view<\/button>/i);
-  assert.doesNotMatch(indexHtml, /<(?:select|textarea|canvas)\b/i);
+  assert.doesNotMatch(indexHtml, /<(?:select|canvas)\b/i);
+  assert.match(indexHtml, /<label\s+for="additional-exclusions">Additional exclusions<\/label>/);
+  assert.match(indexHtml, /<button type="submit">Analyze<\/button>/);
 
   const formTag = indexHtml.match(/<form\b[^>]*>/i)?.[0];
   const inputTag = indexHtml.match(/<input\b[^>]*>/i)?.[0];
@@ -323,6 +353,8 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert(inputTag);
   assert.match(formTag, /\snovalidate(?:\s|>)/i);
   assert.match(indexHtml, /<label\s+for="repository">GitHub repository URL<\/label>/);
+  assert.equal((indexHtml.match(/Supported languages: JavaScript, TypeScript, and C#\./g) ?? []).length, 1);
+  assert.match(indexHtml, /<p data-supported-languages>Supported languages: JavaScript, TypeScript, and C#\.<\/p>/);
   assert.match(inputTag, /\sid="repository"(?:\s|>)/i);
   assert.match(inputTag, /\sname="repository"(?:\s|>)/i);
   assert.match(inputTag, /\stype="text"(?:\s|>)/i);
@@ -332,7 +364,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   const workerSource = await readText("src/edge/processing-worker.ts");
   assert.match(mainSource, /from "\.\/processing-worker\.ts\?worker&url"/);
   assert.match(mainSource, /new Worker\(processingWorkerUrl, \{ type: "module" \}\)/);
-  assert.match(mainSource, /form\.addEventListener\("submit", \(event\) => \{\s*event\.preventDefault\(\);\s*controller\.submit\(input\.value\);\s*\}\);/);
+  assert.match(mainSource, /form\.addEventListener\("submit", \(event\) => \{\s*event\.preventDefault\(\);\s*controller\.submit\(input\.value, additionalExclusions\.value\);\s*\}\);/);
   assert.match(mainSource, /replaceStatus\("Working", cancel\)/);
   assert.match(mainSource, /commit\.textContent = revision/);
   assert.match(mainSource, /window\.addEventListener\("pagehide", \(\) => controller\.dispose\(\), \{ once: true \}\)/);
@@ -708,7 +740,10 @@ test("commands preserve the canonical package audit sequence and CI separates re
 });
 
 test("both evidence observers require SUCCESS.city.geometry and contain no inspection access or retention surface", async () => {
-  const browserObserver = await readText("tools/check-browser-evidence.mjs");
+  const browserEvidence = await readText("tools/check-browser-evidence.mjs");
+  const browserStart = browserEvidence.indexOf("function pageObservationSource");
+  const browserEnd = browserEvidence.indexOf("async function checkProductionSuccessPath", browserStart);
+  const browserObserver = browserEvidence.slice(browserStart, browserEnd);
   const productionObserver = await readText("tools/collect-production-evidence.mjs");
   assert.equal((browserObserver.match(/message\.city\.geometry/gu) ?? []).length, 2);
   const productionStart = productionObserver.indexOf("export function createWorkerObserverSource");
@@ -737,6 +772,8 @@ test("the packaged-Chrome watchdog is the exact ten-minute whole-harness bound",
   assert.match(race, /document\.querySelector\('#result'\)\?\.textContent \|\| ''/);
   assert.match(race, /if \(text\) return JSON\.parse\(text\);/);
   assert.match(race, /Packaged browser evidence exceeded the ten-minute watchdog/);
+  assert.match(race, /exception-count=\$\{browserExceptions\.length\}; request-count=\$\{requestedUrls\.length\}/);
+  assert.doesNotMatch(race, /requestedUrls\.join/);
   assert.match(race, /watchdog = setTimeout\([\s\S]*, WATCHDOG_MS\);/);
 });
 

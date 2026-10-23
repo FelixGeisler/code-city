@@ -2,6 +2,7 @@ import { parseWorkerMessage, readGeneration, type ParsedWorkerMessage, type Work
 import type { InspectionFact, NumericPresentation, ValidatedCity, ValidatedGeometry } from "./city-payload";
 import type { FailureCode } from "./resolution";
 import { parseRepositoryReference } from "../domain/repository-reference";
+import { FIXED_EXCLUDED_SEGMENTS, parseAdditionalExclusions } from "../domain/source-admission";
 import {
   createBuildingRevealCommand,
   type BuildingRevealCommand,
@@ -44,6 +45,7 @@ export type ControllerPublication = Readonly<{
 export type AttemptView = Readonly<{
   clear(): void;
   invalid(): void;
+  effectiveExclusions(values: readonly string[]): void;
   working(cancel: () => void): void;
   success(revision: string): void;
   failure(category: string, code?: VisibleFailureCode, revision?: string): void;
@@ -106,6 +108,10 @@ export type ControllerPresentationFactory<G> = (hooks: Readonly<{
 
 type ClosureMeaning = "cancelled" | "replacement" | "invalid" | "disposed";
 type TerminalMeaning = "none" | "failure" | "success";
+type CapturedInput = Readonly<{
+  repository: NonNullable<ReturnType<typeof parseRepositoryReference>>;
+  additionalExclusions: readonly string[];
+}>;
 type SuccessSlot = "unused" | "staging" | "committed";
 
 type ActiveBridge = {
@@ -141,7 +147,7 @@ type CurrentPresentation = {
 };
 
 export type MainController = Readonly<{
-  submit(value: string): boolean;
+  submit(value: string, additionalExclusionText?: string): boolean;
   cancel(): void;
   dispose(): void;
 }>;
@@ -156,7 +162,7 @@ export function createMainController(
   let transaction: PresentationTransaction | undefined;
   let disposed = false;
   let generation = 0;
-  let pending: ReturnType<typeof parseRepositoryReference>;
+  let pending: CapturedInput | undefined;
 
   const safeRollback = (token: unknown): void => {
     try { presenter.rollback(token); } catch {}
@@ -225,9 +231,9 @@ export function createMainController(
 
   function startPending(): void {
     if (disposed || active || !pending) return;
-    const repository = pending;
+    const captured = pending;
     pending = undefined;
-    start(repository);
+    start(captured);
   }
 
   function cleanup(bridge: ActiveBridge): void {
@@ -606,8 +612,9 @@ export function createMainController(
     handleSuccess(bridge, message);
   }
 
-  function start(repository: NonNullable<ReturnType<typeof parseRepositoryReference>>): boolean {
+  function start(captured: CapturedInput): boolean {
     if (disposed) return false;
+    const { repository, additionalExclusions } = captured;
     const nextGeneration = generation + 1;
     let transport: WorkerTransport;
     try {
@@ -642,9 +649,10 @@ export function createMainController(
       return false;
     }
 
+    view.effectiveExclusions(Object.freeze([...FIXED_EXCLUDED_SEGMENTS, ...additionalExclusions]));
     view.working(cancel);
     try {
-      transport.send({ type: "START", generation: nextGeneration, repository });
+      transport.send({ type: "START", generation: nextGeneration, repository, additionalExclusions });
     } catch {
       drainImpossible(bridge);
       return false;
@@ -653,20 +661,22 @@ export function createMainController(
     return true;
   }
 
-  function submit(value: string): boolean {
+  function submit(value: string, additionalExclusionText = ""): boolean {
     if (disposed) return false;
     const repository = parseRepositoryReference(value);
+    const additionalExclusions = parseAdditionalExclusions(additionalExclusionText);
     clearPresentationState();
     const bridge = active;
-    if (!repository) {
+    if (!repository || !additionalExclusions) {
       pending = undefined;
       if (bridge) closeWithMeaning(bridge, "invalid");
       view.invalid();
       return false;
     }
 
-    if (!bridge) return start(repository);
-    pending = repository;
+    const captured = Object.freeze({ repository, additionalExclusions });
+    if (!bridge) return start(captured);
+    pending = captured;
     view.working(cancel);
     closeWithMeaning(bridge, "replacement");
     return true;
