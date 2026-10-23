@@ -528,8 +528,8 @@ test("production admission selects the exact qualified C# package asset without 
     assert.equal(selectGrammarFamily(pathValue), "csharp", pathValue);
   }
   const pins = {
-    "package.json": "3e3dbf915e1452942b01978c9d3513fcfb7050a7a25d7f931424e73a99e551e1",
-    "package-lock.json": "a12408e6a2ec59f3a47484b0df66698fd2e49884ebbaae428d294454bb43fd69",
+    "package.json": "d53d6a7f9650fc7a3b39b698c177c899f3d07d8422e373d6ca0cab03e6deec09",
+    "package-lock.json": "3513aea5d38816c52e4e3952978960472acbdf2124c032bfbc7c1e920aba764a",
     "src/domain/base-metrics.ts": "72503f7b527a5fc443edf5986ee447f365827ecccad7eeacabcaaf3684d9286a",
   };
   for (const [relativePath, expected] of Object.entries(pins)) assert.equal(sha256(await readFile(path.join(projectRoot, ...relativePath.split("/")))), expected, relativePath);
