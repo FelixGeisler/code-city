@@ -727,15 +727,12 @@ test("commands preserve the canonical package audit sequence and CI separates re
   for (const workflow of [ci, publish]) {
     const install = workflow.indexOf("npm ci --ignore-scripts");
     const closure = workflow.indexOf("npm ls --all");
-    const audit = workflow.indexOf("node tools/check-security-audit.mjs");
+    const audit = workflow.indexOf("npm audit --audit-level=high");
     const verify = workflow.indexOf("npm run verify");
     assert(install >= 0 && install < closure && closure < audit && audit < verify);
-    assert.equal((workflow.match(/node tools\/check-security-audit\.mjs/gu) ?? []).length, 1);
-    assert.doesNotMatch(workflow, /npm audit --audit-level=high/u);
+    assert.equal((workflow.match(/npm audit --audit-level=high/gu) ?? []).length, 1);
+    assert.doesNotMatch(workflow, /check-security-audit|npm audit[^\n]*(?:--omit=dev|--production|\|\||continue-on-error)/u);
   }
-  const checker = await readText("tools/check-security-audit.mjs");
-  assert.match(checker, /const auditArguments = \["audit", "--json", "--audit-level=high"\]/u);
-  assert.match(checker, /spawnImpl\(npmExecutable, auditArguments/u);
   assert.doesNotMatch(ci, /upload-artifact|deploy-pages|configure-pages|environment:|pages:\s*write|id-token:\s*write|contents:\s*write/i);
 });
 

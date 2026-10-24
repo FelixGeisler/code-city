@@ -38,7 +38,7 @@ export async function inspectDependencyClosure(rootDirectory) {
     invariant(isExactVersion(version), `Direct production dependency is not exact: ${name}@${version}`);
   }
   invariant(
-    JSON.stringify(packageManifest.overrides) === JSON.stringify({ braces: "3.0.3", "js-yaml": "5.4.2" }),
+    JSON.stringify(packageManifest.overrides) === JSON.stringify({ "js-yaml": "5.4.2" }),
     "The root overrides differ from the accepted exact pins",
   );
 
