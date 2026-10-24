@@ -27,7 +27,7 @@
     "js-yaml": "5.4.2"
   },
   "devDependencies": {
-    "@antora/cli": "3.2.0",
+    "@antora/cli": "3.2.1",
     "@antora/site-generator": "3.2.0",
     "@types/node": "24.19.2",
     "typescript": "7.0.2",

@@ -43,7 +43,7 @@ export async function inspectDependencyClosure(rootDirectory) {
   );
 
   const expectedDevDependencies = {
-    "@antora/cli": "3.2.0",
+    "@antora/cli": "3.2.1",
     "@antora/site-generator": "3.2.0",
     "@types/node": "24.19.2",
     typescript: "7.0.2",
@@ -99,9 +99,9 @@ export async function inspectDependencyClosure(rootDirectory) {
       license: "MIT",
     },
     "@antora/cli": {
-      version: "3.2.0",
-      resolved: "https://registry.npmjs.org/@antora/cli/-/cli-3.2.0.tgz",
-      integrity: "sha512-bJ5Vl+FMH52xm2jxdcbrEUN3aeoIYj5NGzLGsVwIPewM0RXee0kckbToAFnU0EK0Uw07cBomiJ5hwVELex0/ug==",
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/cli/-/cli-3.2.1.tgz",
+      integrity: "sha512-E7HWvT/WUZtMaFR8blH0wehXlgju5Cu4aJf3vcNliXvm/DRZhxlsW851gVn8yuGNZe+LdFDVEsUYJ/yuEbw1Ag==",
       license: "MPL-2.0",
     },
     "@antora/site-generator": {
@@ -179,7 +179,7 @@ export async function inspectDependencyClosure(rootDirectory) {
       && !undiciTypes.peerDependencies,
     "undici-types development closure differs from accepted evidence",
   );
-  invariant(registryPackageCount === 208, "The lockfile package inventory changed");
+  invariant(registryPackageCount === 210, "The lockfile package inventory changed");
 
   const parserRuntime = lock.packages["node_modules/web-tree-sitter"];
   invariant(
