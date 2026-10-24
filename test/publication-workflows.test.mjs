@@ -21,11 +21,11 @@ const VERIFY_COMMANDS = ["npm ci --ignore-scripts", "npm ls --all", "npm audit -
 const PACKET_FILES = ["artifact.json", "smoke.json", "qualification.json", "capacity.json", "requests.json", "lifecycle.json", "index.json"];
 const ACTIONS = {
   checkout: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-  node: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+  node: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
   pagesUpload: "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b",
-  artifactUpload: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  artifactUpload: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
   deploy: "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346",
-  download: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+  download: "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
 };
 
 function exactKeys(value, expected, label) {
