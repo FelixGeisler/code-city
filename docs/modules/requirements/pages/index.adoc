@@ -23,10 +23,14 @@ technology, access mechanism, or deployment topology.
 
 == Accepted standalone M5 slice
 
-The standalone M5 slice is accepted but not implemented. Its exact custody,
-lifetime, cleanup, exposure, admission-capacity, and no-Save rules are defined
-once in the xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating
-Policy]. Accepted
+The standalone M5 slice is accepted. An inactive shared continuation core now
+implements verified raw-source acquisition, deterministic per-file continuation,
+city construction, failed-file rows, and retained normalized source. It is
+prepared for later Node worker integration but is not connected to the active
+browser pipeline. The standalone service and its transport, session, and worker
+lifecycle remain unimplemented. Exact custody, lifetime, cleanup, exposure,
+admission-capacity, and no-Save rules are defined once in the
+xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating Policy]. Accepted
 xref:architecture:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR
 0014] selects its Node.js, native same-origin HTTP, and worker execution
 boundary. Neither source claims deployment or Raspberry Pi qualification.

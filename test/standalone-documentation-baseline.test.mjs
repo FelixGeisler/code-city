@@ -145,7 +145,9 @@ test("requirements distinguish current browser, standalone M5, and whole-core Sa
   const compactProduct = compact(product);
   const compactCity = compact(city);
 
-  assert.match(compactProduct, /standalone M5 slice is accepted but not implemented/u);
+  assert.match(compactProduct, /inactive shared continuation core now implements verified raw-source acquisition, deterministic per-file continuation, city construction, failed-file rows, and retained normalized source/u);
+  assert.match(compactProduct, /prepared for later Node worker integration but is not connected to the active browser pipeline/u);
+  assert.match(compactProduct, /standalone service and its transport, session, and worker lifecycle remain unimplemented/u);
   assert.match(compactProduct, /currently implemented product is a static browser application with no server runtime or persistence/u);
   assert.match(compactProduct, /Neither source claims deployment or Raspberry Pi qualification/u);
   assert.match(compactCity, /Save and reopen remain approved whole-core outcomes/u);

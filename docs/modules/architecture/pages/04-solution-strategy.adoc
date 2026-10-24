@@ -33,6 +33,23 @@ xref:requirements:source-and-metrics.adoc[Source and Metrics],
 xref:requirements:city-and-failures.adoc[City and Failures], and their executable
 owners in `src/domain/`, `src/application/`, and `src/edge/`.
 
+== Inactive continuation core
+
+An additive application core is prepared for later Node worker integration. Its
+raw GitHub capability verifies the bounded Git blob before text handling. The
+acquisition service then continues unsupported text files while retaining exact
+normalized bytes for text-valid files. One initialized parser capability
+continues syntax and metric failures per file, releases each successful
+projection once, and constructs a city from successful facts only. It returns
+canonical failed-file and retained-source rows with the city or `null` when no
+fact succeeds.
+
+This core is not wired to the browser worker, protocol, controller, or entry
+point. The active browser behavior above remains fail-fast and source-free. No
+standalone Node service, HTTP/session runtime, package cutover, Save or source
+view, private-source support, deployment, or device qualification is
+implemented by this preparation.
+
 == Accepted target strategy
 
 The target keeps the deterministic product rules but moves source acquisition

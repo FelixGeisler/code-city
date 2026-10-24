@@ -61,6 +61,21 @@ inspection alignment, deterministic presentation projection, and safe values.
 Only that validated, source-free city can reach semantic publication and the
 presenter.
 
+== Inactive shared application core
+
+`source-retrieval` now also exposes a raw-source acquisition path that owns
+inventory completion, pre-read candidate validation, text normalization,
+normalized limits, failed text rows, and retained bytes. `project-analysis`
+owns one shared parser initialization, per-file syntax and metric continuation,
+projection release, successful-fact city construction, and canonical union and
+source invariants. The GitHub edge supplies verified raw bytes through an
+additive capability; its existing decoded-source facade remains compatible.
+
+These blocks are not reachable from the current worker, protocol, controller,
+or browser entry. A later Node worker integration owns their transfer and
+boundary validation. No service, endpoint, session, Save/reopen, source-view,
+private-source, deployment, or device block exists yet.
+
 == Accepted target boundary
 
 The target replaces the worker's authoritative acquisition and analysis role
