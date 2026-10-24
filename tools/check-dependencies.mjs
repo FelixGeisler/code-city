@@ -44,7 +44,7 @@ export async function inspectDependencyClosure(rootDirectory) {
 
   const expectedDevDependencies = {
     "@antora/cli": "3.2.0",
-    "@antora/site-generator": "3.2.0",
+    "@antora/site-generator": "3.2.1",
     typescript: "7.0.2",
     vite: "8.3.4",
   };
@@ -104,9 +104,9 @@ export async function inspectDependencyClosure(rootDirectory) {
       license: "MPL-2.0",
     },
     "@antora/site-generator": {
-      version: "3.2.0",
-      resolved: "https://registry.npmjs.org/@antora/site-generator/-/site-generator-3.2.0.tgz",
-      integrity: "sha512-bgShOpARuO+1MF50HUsv25C7msyZk6GpaP2EBcjqD3s0Dj51amQL5KMqAbwfKLjTCiAUTGpC/Yb8rGeogUnmYw==",
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/site-generator/-/site-generator-3.2.1.tgz",
+      integrity: "sha512-tm+rRrxyXQtUhSIHHPn9iGLaJ10tPiHOti8CvWvWMSV48RneuW5SQclp+/stqdVlfpKmwvFek4sE1kHlm3cRzQ==",
       license: "MPL-2.0",
     },
     vite: {
@@ -145,12 +145,68 @@ export async function inspectDependencyClosure(rootDirectory) {
     );
   }
 
+  const expectedHighClosure = {
+    "@antora/content-aggregator": {
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/content-aggregator/-/content-aggregator-3.2.1.tgz",
+      integrity: "sha512-PjA/06nRj1Netv8S6f4wtziwu7B6tzwiskFrAwYzaWxphT1sumQs91UmYJTd1NpX42w8iTHekqVdqIGMDTQAqQ==",
+      dependencies: { "@antora/expand-path-helper": "~3.0", "@antora/logger": "3.2.1", "@antora/user-require-helper": "~3.0", braces: "~3.0", "cache-directory": "~2.0", "fast-glob": "~3.3", hpagent: "~1.2", "isomorphic-git": "~1.38", "js-yaml": "~5.4", "multi-progress": "~4.0", picomatch: "~4.0", progress: "~2.0", "should-proxy": "~1.0", "simple-get": "~4.0", vinyl: "~3.0" },
+    },
+    "@antora/site-generator": {
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/site-generator/-/site-generator-3.2.1.tgz",
+      integrity: "sha512-tm+rRrxyXQtUhSIHHPn9iGLaJ10tPiHOti8CvWvWMSV48RneuW5SQclp+/stqdVlfpKmwvFek4sE1kHlm3cRzQ==",
+      dependencies: { "@antora/asciidoc-loader": "3.2.1", "@antora/content-aggregator": "3.2.1", "@antora/content-classifier": "3.2.1", "@antora/document-converter": "3.2.1", "@antora/file-publisher": "3.2.1", "@antora/logger": "3.2.1", "@antora/navigation-builder": "3.2.1", "@antora/page-composer": "3.2.1", "@antora/playbook-builder": "3.2.1", "@antora/redirect-producer": "3.2.1", "@antora/site-mapper": "3.2.1", "@antora/site-publisher": "3.2.1", "@antora/ui-loader": "3.2.1", "@antora/user-require-helper": "~3.0" },
+    },
+    "@antora/ui-loader": {
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/ui-loader/-/ui-loader-3.2.1.tgz",
+      integrity: "sha512-RqOyJ6cmisf49dDDavoBbI5w5pDdL0JVJVe8G8o8B1O3Uo/Sz7rJECQPKZEpM6iTz+aaR62IG+29iRXqoyJVAA==",
+      dependencies: { "@antora/expand-path-helper": "~3.0", braces: "~3.0", "cache-directory": "~2.0", "fast-glob": "~3.3", hpagent: "~1.2", "js-yaml": "~5.4", picomatch: "~4.0", "should-proxy": "~1.0", "simple-get": "~4.0", vinyl: "~3.0", yauzl: "~3.4" },
+    },
+    "@asciidoctor/core": {
+      version: "2.2.9",
+      resolved: "https://registry.npmjs.org/@asciidoctor/core/-/core-2.2.9.tgz",
+      integrity: "sha512-tIPRHo1T2SFmAm+j77cDsj0RuaszP7xJxsaVTTAF5CwKyTbazw9TnIVlpIWM5yWfIWAWcAZy92RcnPgMJwny1w==",
+      dependencies: { "asciidoctor-opal-runtime": "0.3.4", unxhr: "~1.2" },
+    },
+    "asciidoctor-opal-runtime": {
+      version: "0.3.4",
+      resolved: "https://registry.npmjs.org/asciidoctor-opal-runtime/-/asciidoctor-opal-runtime-0.3.4.tgz",
+      integrity: "sha512-zqd6zn1LV+PZ69AP/kEbB00zuPHMIAJY3IX8+aZV+X1qOwatYvKGjsMmdMc5ApfhtkjZ4mYkqiTPJWnEnBiMJg==",
+      dependencies: { "fast-glob": "~3.3", unxhr: "~1.2" },
+    },
+    braces: {
+      version: "3.0.3",
+      resolved: "https://registry.npmjs.org/braces/-/braces-3.0.3.tgz",
+      integrity: "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==",
+      dependencies: { "fill-range": "^7.1.1" },
+    },
+    "fast-glob": {
+      version: "3.3.3",
+      resolved: "https://registry.npmjs.org/fast-glob/-/fast-glob-3.3.3.tgz",
+      integrity: "sha512-7MptL8U0cqcFdzIzwOTHoilX9x5BrNqye7Z/LuC7kCMRio1EMSyqRK3BEAUD7sXRq4iT4AzTVuZdhgQ2TCvYLg==",
+      dependencies: { "@nodelib/fs.stat": "^2.0.2", "@nodelib/fs.walk": "^1.2.3", "glob-parent": "^5.1.2", merge2: "^1.3.0", micromatch: "^4.0.8" },
+    },
+    micromatch: {
+      version: "4.0.8",
+      resolved: "https://registry.npmjs.org/micromatch/-/micromatch-4.0.8.tgz",
+      integrity: "sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==",
+      dependencies: { braces: "^3.0.3", picomatch: "^2.3.1" },
+    },
+  };
+  for (const [name, expected] of Object.entries(expectedHighClosure)) {
+    const record = lock.packages[`node_modules/${name}`];
+    invariant(record?.dev === true, `${name} must remain development-only`);
+    invariant(record.version === expected.version && record.resolved === expected.resolved && record.integrity === expected.integrity, `${name} lock provenance differs from the approved high closure`);
+    invariant(JSON.stringify(record.dependencies) === JSON.stringify(expected.dependencies), `${name} dependency declarations differ from the approved high closure`);
+  }
   invariant(
     JSON.stringify(lock.packages["node_modules/handlebars"].dependencies) === JSON.stringify({ minimist: "^1.2.8", "neo-async": "^2.6.2", "source-map": "^0.6.1", wordwrap: "^1.0.0" }),
     "handlebars transitive declarations differ from 4.7.10",
   );
   invariant(!lock.packages["node_modules/source-map-js"].dependencies, "source-map-js 1.2.2 unexpectedly adds a dependency");
-  invariant(registryPackageCount === 206, "The lockfile package inventory changed");
+  invariant(registryPackageCount === 212, "The lockfile package inventory changed");
 
   const parserRuntime = lock.packages["node_modules/web-tree-sitter"];
   invariant(
