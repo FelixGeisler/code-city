@@ -9,8 +9,9 @@ registerHooks({
 });
 
 const { buildCity } = await import("../src/domain/city-model.ts");
+const { createFixedTransferNormalizedUtf8 } = await import("../src/application/internal/source-byte-ownership.ts");
 const {
-  MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES, MAX_NORMALIZED_TOTAL_BYTES, normalizeSourceText,
+  MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES, MAX_NORMALIZED_TOTAL_BYTES,
 } = await import("../src/domain/source-admission.ts");
 const {
   parseNodeWorkerCommand, prepareNodeWorkerSuccessForPublication, successTransferList, validSuccessTransferList,
@@ -24,9 +25,7 @@ const REPOSITORY = { owner: "owner", repository: "repo", branch: null };
 const encoder = new TextEncoder();
 
 function fixedTransferBytes(source) {
-  const normalized = normalizeSourceText(source, "fixed-transfer");
-  assert.ok(normalized);
-  return normalized.normalizedUtf8;
+  return createFixedTransferNormalizedUtf8(source);
 }
 
 function receive(value) {
@@ -238,6 +237,25 @@ test("sender validation rejects normalized-away mutations and transfers every ci
     assert.equal(posted.type, "FAILURE");
     assert.equal(posted.category, "Provider/resolution failure");
   }
+
+  const firstSourceMutation = success({
+    result: {
+      city: buildCity([
+        { canonicalPath: "a.ts", S: 1, U: 0, M: 0 },
+        { canonicalPath: "b.ts", S: 1, U: 0, M: 0 },
+      ]),
+      notAnalyzedFiles: [],
+    },
+    sources: [
+      { canonicalPath: "a.ts", normalizedUtf8: fixedTransferBytes("a") },
+      { canonicalPath: "b.ts", normalizedUtf8: fixedTransferBytes("b") },
+    ],
+  });
+  firstSourceMutation.sources[0].normalizedUtf8[0] = 0;
+  let posted;
+  publishNodeWorkerEvent({ postMessage(message) { posted = message; } }, firstSourceMutation);
+  assert.equal(posted.type, "FAILURE");
+  assert.equal(posted.category, "Provider/resolution failure");
 });
 
 test("publication derives transfer membership from the same source validation snapshot", () => {
@@ -281,6 +299,13 @@ test("publication preparation rejects own view properties and non-pristine byte 
     assert.throws(() => prepareNodeWorkerSuccessForPublication(event), /source bytes are invalid/u);
     assert.equal(validateNodeWorkerEvent(event).kind, "invalid");
   }
+
+  const provenanceBypass = encoder.encode("x");
+  Object.preventExtensions(provenanceBypass.buffer);
+  Object.preventExtensions(provenanceBypass);
+  assert.throws(() => prepareNodeWorkerSuccessForPublication(success({
+    sources: [{ canonicalPath: "a.ts", normalizedUtf8: provenanceBypass }],
+  })), /source bytes are invalid/u);
 
   const pristine = success();
   assert.equal(prepareNodeWorkerSuccessForPublication(pristine), pristine);

@@ -49,6 +49,18 @@ async function compiledWorkerFixture(t) {
   await writeFile(acquisitionFault, `export async function acquireProjectSources() {
   return { kind: "failure", category: "Source admission failed", code: "M1-ADM-4" };
 }\n`);
+  const firstSourceMutationFault = path.join(root, "first-source-mutation-fault.mjs");
+  const projectAnalysisUrl = `${pathToFileURL(path.join(root, "src/application/project-analysis.js")).href}?production-first-source-mutation`;
+  await writeFile(firstSourceMutationFault, `
+import { analyzeProjectSources as analyzeProductionProjectSources } from ${JSON.stringify(projectAnalysisUrl)};
+export async function analyzeProjectSources(acquired, parser) {
+  const result = await analyzeProductionProjectSources(acquired, parser);
+  if (result.kind === "analyzed" && result.result.sources.length > 0) {
+    result.result.sources[0].normalizedUtf8[0] = 0;
+  }
+  return result;
+}
+`);
 
   const analysisBootstrap = path.join(root, "test-worker.mjs");
   await writeFile(analysisBootstrap, `
@@ -60,6 +72,9 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   }
   if (workerData.scenario === "admissionContent" && specifier === "../../application/source-retrieval" && context.parentURL?.endsWith("/src/edge/node/analysis-worker.js")) {
     return { url: ${JSON.stringify(pathToFileURL(acquisitionFault).href)}, shortCircuit: true };
+  }
+  if (workerData.scenario === "firstSourceMutation" && specifier === "../../application/project-analysis" && context.parentURL?.endsWith("/src/edge/node/analysis-worker.js")) {
+    return { url: ${JSON.stringify(pathToFileURL(firstSourceMutationFault).href)}, shortCircuit: true };
   }
   return nextResolve(/^\\.\\.?\\//u.test(specifier) && !/\\.[a-z]+$/iu.test(specifier) ? specifier + ".js" : specifier, context);
 } });
@@ -75,6 +90,7 @@ const inventory = {
   allFailed: [["a.ts", "syntax"], ["b.ts", "metrics"], ["c.ts", null]],
   parserBusy: [["a.ts", "busy"]],
   providerWait: [["a.ts", "const a = 1;\\n"]],
+  firstSourceMutation: [["a.ts", "const a = 1;\\n"], ["b.ts", "const b = 1;\\n"]],
 }[workerData.scenario] ?? [["a.ts", "const a = 1;\\n"]];
 const bytes = new TextEncoder();
 runNodeAnalysisWorker(parentPort, {
@@ -128,11 +144,11 @@ registerHooks({ resolve(specifier, context, nextResolve) { return nextResolve(/^
 const { publishNodeWorkerEvent } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/edge/node/analysis-worker.js")).href)});
 const { prepareNodeWorkerSuccessForPublication } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/edge/node/worker-protocol.js")).href)});
 const { buildCity } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/domain/city-model.js")).href)});
-const { normalizeSourceText } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/domain/source-admission.js")).href)});
+const { createFixedTransferNormalizedUtf8 } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/application/internal/source-byte-ownership.js")).href)});
 const SHA = "a".repeat(40);
 const encoder = new TextEncoder();
 const selected = (command) => ({ type: "REVISION_SELECTED", attemptId: command.attemptId, generation: command.generation, revision: SHA });
-const fixedTransferBytes = (source) => normalizeSourceText(source, "fixed-transfer").normalizedUtf8;
+const fixedTransferBytes = (source) => createFixedTransferNormalizedUtf8(source);
 const one = (command, normalizedUtf8 = fixedTransferBytes("x")) => ({
   type: "SUCCESS", attemptId: command.attemptId, generation: command.generation, revision: SHA,
   result: { city: buildCity([{ canonicalPath: "a.ts", S: 1, U: 0, M: 0 }]), notAnalyzedFiles: [] },
@@ -294,6 +310,15 @@ test("actual worker maps resolution, acquisition, parser, metric, and city outco
       type: "FAILURE", attemptId: attempt.attemptId, generation: 3, ...expected,
     }, scenario);
   }
+});
+
+test("actual production worker rejects a mutation of the first acquired source before transfer", async (t) => {
+  const { analysis } = await compiledWorkerFixture(t);
+  const attempt = start(analysis, "firstSourceMutation");
+  assert.deepEqual(await attempt.result, {
+    type: "FAILURE", attemptId: attempt.attemptId, generation: 3, revision: SHA,
+    category: "Provider/resolution failure",
+  });
 });
 
 test("actual worker publisher rejects normalized sender mutations and transfers every owned buffer", async (t) => {

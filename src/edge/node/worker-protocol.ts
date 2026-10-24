@@ -1,4 +1,5 @@
 import { validateCityPayload, type CityPayload, type ValidatedCity } from "../../application/city-payload";
+import { isFixedTransferNormalizedUtf8 } from "../../application/internal/source-byte-ownership";
 import type { RetainedProjectSource } from "../../application/project-analysis";
 import type { FailureCode } from "../../application/resolution";
 import type { FailedFile } from "../../application/source-retrieval";
@@ -7,7 +8,6 @@ import {
   compareUnsignedUtf8,
   isCanonicalAdditionalExclusions,
   isCanonicalSourcePath,
-  isFixedTransferNormalizedUtf8,
   MAX_ADMITTED_MODULES,
   MAX_NORMALIZED_MODULE_BYTES,
   MAX_NORMALIZED_TOTAL_BYTES,

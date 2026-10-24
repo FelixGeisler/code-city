@@ -1,7 +1,15 @@
 import type { MessagePort } from "node:worker_threads";
+import { fixedTransferSourceOwnership } from "../../application/internal/source-byte-ownership";
 import { analyzeProjectSources } from "../../application/project-analysis";
 import { resolveRevision, type RevisionGateway } from "../../application/resolution";
-import { acquireProjectSources, type ImmutableRawSourceGateway } from "../../application/source-retrieval";
+import {
+  acquireProjectSources,
+  type ImmutableRawSourceGateway,
+  type ProjectSourceAcquisitionResult,
+  type RetrievalOwnership,
+} from "../../application/source-retrieval";
+import type { RepositoryReference } from "../../domain/repository-reference";
+import type { NormalizedSourceText } from "../../domain/source-admission";
 import type { SyntaxProjectionCapability } from "../../application/base-metric-processing";
 import { createGithubRevisionGateway } from "../github-revision-gateway";
 import { createGithubRawSourceGateway } from "../github-source-gateway";
@@ -51,6 +59,15 @@ export function publishNodeWorkerEvent(port: Pick<MessagePort, "postMessage">, e
 }
 
 export function runNodeAnalysisWorker(port: MessagePort, dependencies: NodeAnalysisWorkerDependencies): void {
+  const sourceGateway: ImmutableRawSourceGateway & Readonly<{ [fixedTransferSourceOwnership]: true }> = {
+    [fixedTransferSourceOwnership]: true,
+    loadInventory: (repository, selected, signal, additionalExclusions) => (
+      dependencies.sourceGateway.loadInventory(repository, selected, signal, additionalExclusions)
+    ),
+    readRawSource: (repository, selected, candidate, signal) => (
+      dependencies.sourceGateway.readRawSource(repository, selected, candidate, signal)
+    ),
+  };
   let active: Readonly<{ attemptId: string; generation: number; controller: AbortController }> | undefined;
   let terminal = false;
 
@@ -80,8 +97,7 @@ export function runNodeAnalysisWorker(port: MessagePort, dependencies: NodeAnaly
       revision = resolution.revision;
       publishNodeWorkerEvent(port, { type: "REVISION_SELECTED", attemptId: command.attemptId, generation: command.generation, revision });
       const acquired = await acquireProjectSources(
-        command.repository, revision, controller.signal, dependencies.sourceGateway, undefined, command.additionalExclusions,
-        "fixed-transfer",
+        command.repository, revision, controller.signal, sourceGateway, undefined, command.additionalExclusions,
       );
       if (controller.signal.aborted || acquired.kind === "cancelled") { finish(); return; }
       if (acquired.kind === "failure") {
@@ -147,3 +163,24 @@ export function productionNodeAnalysisWorkerDependencies(): NodeAnalysisWorkerDe
     parser: createNodeTreeSitterAdapter(),
   };
 }
+
+type ExactType<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends (<Value>() => Value extends Right ? 1 : 2)
+    ? (<Value>() => Value extends Right ? 1 : 2) extends (<Value>() => Value extends Left ? 1 : 2)
+      ? true
+      : false
+    : false;
+type AssertType<Value extends true> = Value;
+type AcceptedAcquireProjectSources = (
+  repository: RepositoryReference,
+  selected: string,
+  signal: AbortSignal,
+  gateway: ImmutableRawSourceGateway,
+  observe?: (ownership: RetrievalOwnership) => void,
+  additionalExclusions?: readonly string[],
+) => Promise<ProjectSourceAcquisitionResult>;
+type AcceptedNormalizeSourceText = (decodedSource: string) => NormalizedSourceText | undefined;
+type SourceAdmissionExports = typeof import("../../domain/source-admission");
+type _AcquireProjectSourcesApi619 = AssertType<ExactType<typeof acquireProjectSources, AcceptedAcquireProjectSources>>;
+type _NormalizeSourceTextApi619 = AssertType<ExactType<SourceAdmissionExports["normalizeSourceText"], AcceptedNormalizeSourceText>>;
+type _NoSourceOwnershipFunctionExport619 = AssertType<"isFixedTransferNormalizedUtf8" extends keyof SourceAdmissionExports ? false : true>;

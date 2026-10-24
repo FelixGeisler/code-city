@@ -327,6 +327,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.deepEqual(productionFiles, [
     "application/base-metric-processing.ts",
     "application/city-payload.ts",
+    "application/internal/source-byte-ownership.ts",
     "application/main-controller.ts",
     "application/metric-explanation.ts",
     "application/project-analysis.ts",
