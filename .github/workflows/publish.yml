@@ -24,6 +24,7 @@ jobs:
     - run: npm ci --ignore-scripts
     - run: npm ls --all
     - run: npm audit --audit-level=high
+    - run: npm run typecheck:node
     - run: npm run verify
     - name: Create and validate the publication record
       run: |

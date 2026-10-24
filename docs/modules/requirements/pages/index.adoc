@@ -23,21 +23,34 @@ technology, access mechanism, or deployment topology.
 
 == Accepted standalone M5 slice
 
-The standalone M5 slice is accepted but not implemented. Its exact custody,
-lifetime, cleanup, exposure, admission-capacity, and no-Save rules are defined
-once in the xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating
-Policy]. Accepted
+The standalone M5 slice is accepted and implementation has begun. An inactive
+shared continuation core now implements verified raw-source acquisition,
+deterministic per-file continuation, city construction, failed-file rows, and
+retained normalized source. It is prepared for later Node worker integration
+but is not connected to the active browser pipeline or the inactive HTTP
+perimeter. Its exact custody, lifetime, cleanup, exposure, admission-capacity,
+and no-Save rules are defined once in the
+xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating Policy]. Accepted
 xref:architecture:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR
 0014] selects its Node.js, native same-origin HTTP, and worker execution
-boundary. Neither source claims deployment or Raspberry Pi qualification.
+boundary.
+
+The repository also contains an inactive native-HTTP perimeter. It validates
+operator configuration and a supplied fixture manifest before listening,
+derives one canonical HTTP origin, serves only verified public fixture bytes,
+and reserves the future session and command paths without implementing them.
+It is not wired to `npm start`, packaged, deployed, or used by the browser
+product. Sessions, Node worker integration and orchestration, cutover, and
+Raspberry Pi qualification remain unimplemented.
 
 The whole-core Save target above remains approved. Standalone M5 defers it.
 
 == Current implemented baseline
 
-The currently implemented product is a static browser application with no
-server runtime or persistence. The following describes current behavior, not
-the complete approved target.
+The active product remains a static browser application with no active server
+runtime or persistence. The inactive core and perimeter above do not change its
+entry, requests, package, or Pages deployment. The following describes current
+behavior, not the complete approved target.
 
 [cols="1,3",options="header"]
 |===
