@@ -56,9 +56,11 @@ through idempotent cleanup.
 An inactive shared core now completes verified raw acquisition, records
 unsupported text per file, initializes the parser once, continues syntax and
 metric failures, and returns a deterministic city, failed-file rows, and
-retained normalized bytes. It is prepared for the later Node worker. It does
-not change the current browser sequence above and has no active protocol or
-transfer path.
+retained normalized bytes. An inactive Node boundary executes one attempt in a
+dedicated worker, validates both the pre-send value and the received structured
+clone, transfers exact owned city/source buffers, and keeps terminal data
+provisional until code-0 worker exit is joined. It does not change the current
+browser sequence above and has no active browser or HTTP integration path.
 
 The inactive perimeter validates all operator values and supplied manifest
 bytes before listening. After binding it derives one canonical HTTP origin from
@@ -68,15 +70,18 @@ bounded-body sequence. Static GET and HEAD serve only prevalidated public
 fixture bytes. Rejections close the connection without draining a body or
 dispatching later pipelined work. Reserved session and command routes have no
 production handlers and therefore return unavailable responses without reading
-a body or creating state. The inactive core and perimeter are not connected;
-the dedicated Node worker and its integration remain unimplemented.
+a body or creating state. The inactive worker boundary and perimeter are not
+connected; session, capacity, discard, loss, and shutdown orchestration remain
+unimplemented.
 
 The accepted complete standalone slice will run the browser application and
-internal application requests on that same-origin service. It will admit each
-analysis attempt into one dedicated `worker_threads` worker. The parent will
-terminate and await exit of a worker that must stop, and stale worker messages
-cannot publish discarded state. This same-process worker boundary does not
-sandbox source or guarantee survival of process or host out-of-memory failure.
+internal application requests on that same-origin service. The implemented
+inactive attempt boundary creates one dedicated `worker_threads` worker. Its
+parent terminates and awaits exit of a worker that must stop, and stale worker
+messages cannot publish discarded state. Later session orchestration will own
+admission and disposal around this boundary. This same-process worker boundary
+does not sandbox source or guarantee survival of process or host out-of-memory
+failure.
 
 The xref:requirements:standalone-m5-operating-policy.adoc[standalone M5
 operating policy] owns temporary process-memory custody, session-loss and

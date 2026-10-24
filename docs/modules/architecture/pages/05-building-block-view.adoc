@@ -71,26 +71,32 @@ projection release, successful-fact city construction, and canonical union and
 source invariants. The GitHub edge supplies verified raw bytes through an
 additive capability; its existing decoded-source facade remains compatible.
 
-These blocks are not reachable from the current worker, protocol, controller,
-or browser entry. They are not connected to the inactive HTTP perimeter. The
-later Node worker integration owns their transfer and boundary validation; no
-Node worker, session, Save/reopen, source-view, private-source, deployment, or
-device block is implemented yet.
+These blocks are not reachable from the current browser worker, protocol,
+controller, or browser entry. An inactive Node edge now owns their worker-thread
+execution, source/result transfer, hostile message validation, termination, and
+exit join. It is not connected to the inactive HTTP perimeter. No session,
+Save/reopen, source-view, private-source, deployment, or device block is
+implemented yet.
 
 == Inactive standalone perimeter
 
-The isolated `src/edge/node/` graph contains four repository-internal building
-blocks: exact operator-configuration parsing, version-1 fixture-manifest and
-public-byte validation, a bounded body-reader primitive, and native `node:http`
-ingress/response handling. The perimeter preloads only declared public fixture
+The isolated `src/edge/node/` graph contains repository-internal native-HTTP
+and worker building blocks. The HTTP side provides exact operator-configuration
+parsing, version-1 fixture-manifest and public-byte validation, a bounded
+body-reader primitive, and native `node:http` ingress/response handling. The
+worker side provides file-URL parser assets, one actual analysis worker, a
+closed command/event protocol, transfer validation, and a parent-owned joined
+lifecycle. The perimeter preloads only declared public fixture
 bytes, derives one canonical origin after binding, and exposes no package entry
 or configurable handler/plugin surface. Its fixed reserved paths have no
-production handlers, so they create no session, attempt, provider, or worker
-state.
+production handlers, so the HTTP side creates no session, attempt, provider,
+or worker state and does not invoke the inactive application core.
 
 This graph is mandatory in CI through `npm run typecheck:node`, but it is not
 reachable from the active Vite application or current `npm start` package
-server. It does not invoke the inactive application core.
+server. The worker side invokes the inactive application core only when an
+internal parent starts an analysis attempt; no HTTP or package integration can
+start one yet.
 
 == Accepted target boundary
 
