@@ -47,7 +47,7 @@ jobs:
       with:
         path: dist
     - name: Upload internal publication evidence
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: code-city-publication-evidence
         path: |
@@ -228,7 +228,7 @@ jobs:
     - name: Upload the sealed production packet
       id: evidence-upload
       if: always() && steps.packet.outputs.ready == 'true'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: production-evidence-${{ github.sha }}-${{ github.run_attempt }}
         path: |
