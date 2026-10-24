@@ -51,7 +51,7 @@ ownership. Rollback, context loss, `pagehide`, or controller disposal removes
 listeners, semantic nodes, canvas state, worker ownership, and WebGL resources
 through idempotent cleanup.
 
-== Standalone M5 runtime preparation
+== Partially implemented, inactive standalone M5 runtime
 
 An inactive shared core now completes verified raw acquisition, records
 unsupported text per file, initializes the parser once, continues syntax and
@@ -60,21 +60,31 @@ retained normalized bytes. It is prepared for the later Node worker. It does
 not change the current browser sequence above and has no active protocol or
 transfer path.
 
-The accepted standalone slice runs the browser application and internal
-application requests on one native same-origin `node:http` service under the
-package-supported Node.js runtime. The server admits each analysis attempt into
-one dedicated `worker_threads` worker. The parent terminates and awaits exit of
-a worker that must stop, and stale worker messages cannot publish discarded
-state. This same-process worker boundary does not sandbox source or guarantee
-survival of process or host out-of-memory failure.
+The inactive perimeter validates all operator values and supplied manifest
+bytes before listening. After binding it derives one canonical HTTP origin from
+the configured canonical host and actual port. Native HTTP ingress applies one
+fail-closed Host, target, method, Origin, media-type, expectation, framing, and
+bounded-body sequence. Static GET and HEAD serve only prevalidated public
+fixture bytes. Rejections close the connection without draining a body or
+dispatching later pipelined work. Reserved session and command routes have no
+production handlers and therefore return unavailable responses without reading
+a body or creating state. The inactive core and perimeter are not connected;
+the dedicated Node worker and its integration remain unimplemented.
+
+The accepted complete standalone slice will run the browser application and
+internal application requests on that same-origin service. It will admit each
+analysis attempt into one dedicated `worker_threads` worker. The parent will
+terminate and await exit of a worker that must stop, and stale worker messages
+cannot publish discarded state. This same-process worker boundary does not
+sandbox source or guarantee survival of process or host out-of-memory failure.
 
 The xref:requirements:standalone-m5-operating-policy.adoc[standalone M5
 operating policy] owns temporary process-memory custody, session-loss and
 shutdown cleanup, loopback-first exposure, and finite operator-set admission.
-Detailed request and event shapes, lifecycle states, session-loss detection,
-deployment values, and capacity values remain implementation contracts. No
-standalone server or Raspberry Pi behavior is implemented, deployed, or
-qualified by this baseline.
+Session and event payloads, lifecycle states, session-loss detection,
+deployment values, and capacity values remain later implementation contracts.
+The perimeter is not packaged, activated, or deployed, and no Raspberry Pi
+behavior is qualified by this baseline.
 
 == Accepted whole-core runtime outcomes
 
@@ -84,7 +94,8 @@ integration remains unimplemented. The whole-core target also recursively
 represents the successful hierarchy and provides a complete sortable
 successful-file inventory. Selection is shared between city and list and does
 not move the camera. Explicit unit drill-down shows exact analyzed source and
-owned contributions; none of these additional outcomes is implemented here.
+owned contributions; the list, shared selection, source view, and contribution
+outcomes remain unimplemented.
 
 A completed whole-core analysis remains temporary until explicit Save. Save
 creates a new immutable server-owned snapshot. Reopen uses retained source and
