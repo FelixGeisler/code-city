@@ -64,7 +64,7 @@ function assertProductionShape(manifest) {
   invariant(workerAssets.length === 1, "Production package must contain exactly one separate processing worker asset");
   const expectedAssetDigests = new Set([
     "7c49e3c1d87e24e0bb4c2def909d17154dfde281f5f8280225450090bb4b8110",
-    "c03bccdc3b448a32848f5ae327e209c982bbb0840d43eec8bc2d5759544a1ed3",
+    "beca80e44cccbf2299ed4d1e3fa6462a9a6fe818aeebf847547a392227ce4acc",
     "5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240",
     "e78418bb10620f1eef96f254d3a73e745b33f9b9f263ce09ccb195c39dcf88c9",
     "23fca4a07147d124a8453981a24825a47eba090dc3da6ce207a1cbb48579b0a7",
