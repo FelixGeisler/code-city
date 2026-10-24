@@ -32,7 +32,7 @@ export const CSHARP_CANDIDATE = Object.freeze({
     buildDefinition: "https://github.com/microsoft/vscode-tree-sitter-wasm/blob/78c97c860ddd965b9617f0e30962ad1da08c4c91/build/main.ts#L19-L24",
     license: Object.freeze({ kind: "MIT", path: "test/fixtures/csharp-source-license.txt", bytes: 1_133, sha256: "778fb7d63b8c1844da315648c02f325c4713a6f4a5d19644fd413421422776d3", productionNoticeRequiredOnAdmission: true }),
   }),
-  runtime: Object.freeze({ package: "web-tree-sitter", version: "0.27.0", minimumAbi: 13, maximumAbi: 15 }),
+  runtime: Object.freeze({ package: "web-tree-sitter", version: "0.27.1", minimumAbi: 13, maximumAbi: 15 }),
   asset: Object.freeze({ path: CSHARP_ASSET, bytes: 5_103_332, sha256: "d12d85996c25957b4c1b71e26db2d7cc8a294997b60642e9c2a3b031b2c66dd3", abi: 15 }),
   dylink: Object.freeze({ memorySize: 5_013_132, memoryAlign: 4, tableSize: 7, tableAlign: 0, neededLibraries: Object.freeze([]), subsectionTypes: Object.freeze([1]) }),
   inventory: Object.freeze({ path: "test/fixtures/csharp-wasm-inventory.tsv", ...EXPECTED_INVENTORY }),
