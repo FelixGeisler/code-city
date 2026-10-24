@@ -2,9 +2,11 @@
 
 == Current implementation
 
-* The application is a static TypeScript package built with Vite and runs in a
-  browser main context plus one module worker. It has no application server or
-  persistence runtime.
+* The active application is a static TypeScript package built with Vite and
+  runs in a browser main context plus one module worker. It has no active
+  application server or persistence runtime. An inactive shared continuation
+  core and an isolated Node.js type graph containing the native-HTTP perimeter
+  are not connected to the Vite entry or package.
 * The current provider is anonymous public GitHub. The browser resolves the
   explicit branch head, or the default-branch head when no branch was supplied,
   and retrieves source through validated immutable commit and root tree
@@ -37,8 +39,12 @@ exposure with deliberate trusted-LAN use limited to public GitHub source, a
 finite operator-set admission capacity without a numerical default, and joined
 terminal cleanup. These choices and
 xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR 0014] are
-accepted design. They are not implemented or deployed, and they provide no
-Raspberry Pi performance, concurrency, memory, or deployment qualification.
+accepted design. The shared continuation core, CLI validation,
+fixture-manifest validation, bounded body reader, and fail-closed native-HTTP
+perimeter are implemented as separate inactive repository modules. Session
+lifecycle, Node worker integration and orchestration, packaged startup, cutover,
+and deployment are not implemented. This provides no Raspberry Pi performance,
+concurrency, memory, or deployment qualification.
 
 == Approved whole-core target
 
