@@ -45,11 +45,13 @@ canonical failed-file and retained-source rows with the city or `null` when no
 fact succeeds.
 
 This core is not wired to the browser worker, protocol, controller, or entry
-point. The active browser behavior above remains fail-fast and source-free. The
-separate inactive native-HTTP perimeter does not invoke this core. No session
-runtime, dedicated Node worker integration, package cutover, Save or source
-view, private-source support, deployment, or device qualification is
-implemented by this preparation.
+point. The active browser behavior above remains fail-fast and source-free. An
+inactive Node boundary runs one core attempt in an actual worker thread, applies
+closed command/event validation, transfers the exact city and retained-source
+buffers, and exposes a terminal only after normal joined exit. The separate
+inactive native-HTTP perimeter does not invoke this boundary. No session
+runtime, HTTP/worker orchestration, package cutover, Save or source view,
+private-source support, deployment, or device qualification is implemented.
 
 == Accepted target strategy
 

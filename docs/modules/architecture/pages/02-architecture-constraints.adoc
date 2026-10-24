@@ -39,11 +39,11 @@ exposure with deliberate trusted-LAN use limited to public GitHub source, a
 finite operator-set admission capacity without a numerical default, and joined
 terminal cleanup. These choices and
 xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR 0014] are
-accepted design. The shared continuation core, CLI validation,
-fixture-manifest validation, bounded body reader, and fail-closed native-HTTP
-perimeter are implemented as separate inactive repository modules. Session
-lifecycle, Node worker integration and orchestration, packaged startup, cutover,
-and deployment are not implemented. This provides no Raspberry Pi performance,
+accepted design. The shared continuation core, dedicated Node worker execution
+and joined parent boundary, CLI validation, fixture-manifest validation, bounded
+body reader, and fail-closed native-HTTP perimeter are implemented as separate
+inactive repository modules. Session lifecycle, HTTP/worker orchestration,
+packaged startup, cutover, and deployment are not implemented. This provides no Raspberry Pi performance,
 concurrency, memory, or deployment qualification.
 
 == Approved whole-core target
