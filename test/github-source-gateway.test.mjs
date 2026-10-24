@@ -13,6 +13,7 @@ const {
   COMMIT_EVIDENCE_CAP,
   TREE_EVIDENCE_CAP,
   RAW_CONTENT_CAP,
+  createGithubRawSourceGateway,
   createGithubSourceGateway,
   githubRawSourceUrl,
   projectCommitEvidence,
@@ -271,6 +272,23 @@ test("raw status/final URL, digest mismatch/unavailability, and strict UTF-8 fai
   const invalidId = await blobId(invalid);
   const invalidUtf8 = createGithubSourceGateway(async (url) => streamResponse(url, invalid), (algorithm, payload) => webcrypto.subtle.digest(algorithm, payload));
   assert.deepEqual(await invalidUtf8.readSource(REPOSITORY, SHA40, { canonicalPath: "a.CS", rawPath: "a.CS", expectedBlobId: invalidId }, new AbortController().signal), { kind: "invalid-content" });
+});
+
+test("raw capability verifies integrity before exposing malformed text bytes while the legacy facade preserves decoding", async () => {
+  const invalid = Uint8Array.of(0xff, 0x00);
+  const expected = await blobId(invalid);
+  const events = [];
+  const raw = createGithubRawSourceGateway(async (url) => streamResponse(url, invalid), async (algorithm, payload) => {
+    events.push("digest");
+    return webcrypto.subtle.digest(algorithm, payload);
+  });
+  const candidate = { canonicalPath: "a.ts", rawPath: "a.ts", expectedBlobId: expected };
+  assert.deepEqual(await raw.readRawSource(REPOSITORY, SHA40, candidate, new AbortController().signal), {
+    kind: "source", rawBytes: invalid,
+  });
+  assert.deepEqual(events, ["digest"]);
+  const legacy = createGithubSourceGateway(async (url) => streamResponse(url, invalid), (algorithm, payload) => webcrypto.subtle.digest(algorithm, payload));
+  assert.deepEqual(await legacy.readSource(REPOSITORY, SHA40, candidate, new AbortController().signal), { kind: "invalid-content" });
 });
 
 test("aborting an active raw read cancels its acquired reader and releases its lock exactly once", async () => {

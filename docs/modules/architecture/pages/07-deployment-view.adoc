@@ -11,9 +11,10 @@ GitHub acquisition, parsing, metrics, and city construction. Both are browser
 code from the same package. Public GitHub remains an external provider.
 
 There is no Node.js application process in production. Node.js, npm, Vite, and
-Antora remain build and verification tools. The inactive native-HTTP modules
-are neither included in the Pages artifact nor selected by `npm start`. A Pages
-artifact is static content, not a Code City server runtime.
+Antora remain build and verification tools. The inactive continuation core and
+native-HTTP modules are neither connected to the active browser pipeline nor
+selected by `npm start`; the Node modules are not included in the Pages
+artifact. A Pages artifact is static content, not a Code City server runtime.
 
 == Current publication path
 

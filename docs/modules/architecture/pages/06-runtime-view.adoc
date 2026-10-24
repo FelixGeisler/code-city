@@ -53,6 +53,13 @@ through idempotent cleanup.
 
 == Partially implemented, inactive standalone M5 runtime
 
+An inactive shared core now completes verified raw acquisition, records
+unsupported text per file, initializes the parser once, continues syntax and
+metric failures, and returns a deterministic city, failed-file rows, and
+retained normalized bytes. It is prepared for the later Node worker. It does
+not change the current browser sequence above and has no active protocol or
+transfer path.
+
 The inactive perimeter validates all operator values and supplied manifest
 bytes before listening. After binding it derives one canonical HTTP origin from
 the configured canonical host and actual port. Native HTTP ingress applies one
@@ -61,7 +68,8 @@ bounded-body sequence. Static GET and HEAD serve only prevalidated public
 fixture bytes. Rejections close the connection without draining a body or
 dispatching later pipelined work. Reserved session and command routes have no
 production handlers and therefore return unavailable responses without reading
-a body or creating state.
+a body or creating state. The inactive core and perimeter are not connected;
+the dedicated Node worker and its integration remain unimplemented.
 
 The accepted complete standalone slice will run the browser application and
 internal application requests on that same-origin service. It will admit each
@@ -78,14 +86,16 @@ deployment values, and capacity values remain later implementation contracts.
 The perimeter is not packaged, activated, or deployed, and no Raspberry Pi
 behavior is qualified by this baseline.
 
-== Accepted, unimplemented whole-core runtime outcomes
+== Accepted whole-core runtime outcomes
 
-The whole-core target continues after eligible per-file text, syntax, or metric
-failures and reports each sanitized failed-file outcome. It recursively
+The inactive core implements continuation after eligible per-file text, syntax,
+or metric failures and reports each sanitized failed-file outcome. Active
+integration remains unimplemented. The whole-core target also recursively
 represents the successful hierarchy and provides a complete sortable
 successful-file inventory. Selection is shared between city and list and does
 not move the camera. Explicit unit drill-down shows exact analyzed source and
-owned contributions.
+owned contributions; the list, shared selection, source view, and contribution
+outcomes remain unimplemented.
 
 A completed whole-core analysis remains temporary until explicit Save. Save
 creates a new immutable server-owned snapshot. Reopen uses retained source and

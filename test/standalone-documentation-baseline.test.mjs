@@ -136,11 +136,14 @@ test("arc42 records structure without duplicating the authoritative policy", asy
     assert.match(architecture, new RegExp(fact.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"), fact);
   }
   assert.match(architecture, /loopback-first[\s\S]*trusted-LAN/u);
-  assert.match(architecture, /implemented as inactive[\s\S]*not implemented[\s\S]*no\s+Raspberry Pi performance, concurrency, memory, or deployment qualification/u);
+  assert.match(architecture, /implemented as separate inactive repository modules[\s\S]*not implemented[\s\S]*no\s+Raspberry Pi performance, concurrency, memory, or deployment qualification/u);
+  assert.match(compact(runtime), /inactive shared core now completes verified raw acquisition[\s\S]*prepared for the later Node worker/u);
   assert.match(compact(runtime), /inactive perimeter validates all operator values and supplied manifest bytes before listening/u);
+  assert.match(compact(runtime), /inactive core and perimeter are not connected; the dedicated Node worker and its integration remain unimplemented/u);
   assert.match(runtime, /Session and event payloads, lifecycle states, session-loss detection,/u);
+  assert.match(compact(buildingBlocks), /Inactive shared application core[\s\S]*not connected to the inactive HTTP perimeter/u);
   assert.match(compact(buildingBlocks), /isolated `src\/edge\/node\/` graph contains four repository-internal building blocks/u);
-  assert.match(compact(deployment), /inactive native-HTTP modules[\s\S]*neither included in the Pages artifact nor selected by `npm start`/u);
+  assert.match(compact(deployment), /inactive continuation core and native-HTTP modules[\s\S]*not included in the Pages artifact/u);
   assert.match(compact(deployment), /type-checks the isolated Node graph[\s\S]*unchanged `npm run verify`/u);
   assert.doesNotMatch(architecture, /\*Temporary custody:|\*Unsaved lifetime:|Rejected for M5:/u);
 });
@@ -154,9 +157,12 @@ test("requirements distinguish current browser, standalone M5, and whole-core Sa
   const compactCity = compact(city);
 
   assert.match(compactProduct, /standalone M5 slice is accepted and implementation has begun/u);
+  assert.match(compactProduct, /inactive shared continuation core now implements verified raw-source acquisition, deterministic per-file continuation, city construction, failed-file rows, and retained normalized source/u);
+  assert.match(compactProduct, /prepared for later Node worker integration but is not connected to the active browser pipeline or the inactive HTTP perimeter/u);
   assert.match(compactProduct, /inactive native-HTTP perimeter/u);
   assert.match(compactProduct, /active product remains a static browser application with no active server runtime or persistence/u);
   assert.match(compactProduct, /not wired to `npm start`, packaged, deployed, or used by the browser product/u);
+  assert.match(compactProduct, /Sessions, Node worker integration and orchestration, cutover, and Raspberry Pi qualification remain unimplemented/u);
   assert.match(compactCity, /Save and reopen remain approved whole-core outcomes/u);
   assert.match(compactCity, /Standalone M5 retains temporary source and results only in process memory and discards them on explicit discard, replacement, detected session loss, or graceful shutdown/u);
   assert.match(compactCity, /Save and reopen are deferred from M5, not revoked/u);
