@@ -8,7 +8,7 @@ registerHooks({
   },
 });
 
-const { retrieveAdmittedSources } = await import("../src/application/source-retrieval.ts");
+const { acquireProjectSources, retrieveAdmittedSources } = await import("../src/application/source-retrieval.ts");
 
 const REPOSITORY = { owner: "owner", repository: "repo", branch: null };
 const SHA40 = "a".repeat(40);
@@ -160,6 +160,158 @@ test("gateway outcome mapping is closed and never returns partial modules", asyn
   assert.deepEqual(await retrieveAdmittedSources(REPOSITORY, SHA64, new AbortController().signal, inventoryFailure.value), {
     kind: "failure", category: "Provider/resolution failure",
   });
+});
+
+test("project acquisition validates every identity and the 4,000-file envelope before its first raw read", async () => {
+  let boundaryReads = 0;
+  const boundary = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() {
+      return { kind: "inventory", entries: Array.from({ length: 4_000 }, (_, index) => regular(`${String(index).padStart(4, "0")}.ts`)) };
+    },
+    async readRawSource() {
+      boundaryReads += 1;
+      return { kind: "source", rawBytes: Uint8Array.of(0xff) };
+    },
+  });
+  assert.equal(boundary.kind, "acquired");
+  assert.equal(boundaryReads, 4_000);
+  assert.equal(boundary.modules.length, 0);
+  assert.equal(boundary.notAnalyzedFiles.length, 4_000);
+
+  for (const [entries, expected] of [
+    [Array.from({ length: 4_001 }, (_, index) => regular(`${String(index).padStart(4, "0")}.ts`)), { kind: "failure", category: "Repository exceeds Code City limits" }],
+    [[regular("a.ts"), regular("z.ts", "d".repeat(64))], { kind: "failure", category: "Provider/resolution failure" }],
+  ]) {
+    let reads = 0;
+    const result = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+      async loadInventory() { return { kind: "inventory", entries }; },
+      async readRawSource() { reads += 1; return { kind: "source", rawBytes: new Uint8Array() }; },
+    });
+    assert.deepEqual(result, expected);
+    assert.equal(reads, 0);
+  }
+});
+
+test("project acquisition keeps unsupported and excluded paths absent and preserves zero-eligible failure", async () => {
+  const entries = [
+    { path: "excluded", mode: "040000", type: "tree" },
+    regular("excluded/a.ts"),
+    regular("ignored.txt"),
+    regular("kept.ts"),
+  ];
+  const reads = [];
+  const result = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries }; },
+    async readRawSource(_repository, _selected, candidate) {
+      reads.push(candidate.canonicalPath);
+      return { kind: "source", rawBytes: new TextEncoder().encode("kept") };
+    },
+  }, undefined, ["excluded"]);
+  assert.equal(result.kind, "acquired");
+  assert.deepEqual(reads, ["kept.ts"]);
+  assert.deepEqual(result.modules.map(({ canonicalPath }) => canonicalPath), ["kept.ts"]);
+
+  let zeroReads = 0;
+  const zero = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries: [regular("ignored.txt")] }; },
+    async readRawSource() { zeroReads += 1; throw new Error("must not read"); },
+  });
+  assert.deepEqual(zero, { kind: "failure", category: "No supported modules", code: "ADM-06" });
+  assert.equal(zeroReads, 0);
+});
+
+test("project acquisition continues text failures, retains exact normalized own bytes, and is provider-order deterministic", async () => {
+  const entries = [regular("z.ts"), regular("bad-utf8.ts"), regular("nul.ts"), regular("a.ts")];
+  const bytes = new Map([
+    ["a.ts", Uint8Array.from([0xef, 0xbb, 0xbf, 0x61, 0x0d, 0x0a, 0x62, 0x0d])],
+    ["bad-utf8.ts", Uint8Array.of(0xff)],
+    ["nul.ts", new TextEncoder().encode("a\0b")],
+    ["z.ts", new TextEncoder().encode("z")],
+  ]);
+  const outcomes = [];
+  for (const inventoryEntries of [entries, [...entries].reverse()]) {
+    const reads = [];
+    const result = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+      async loadInventory() { return { kind: "inventory", entries: inventoryEntries }; },
+      async readRawSource(_repository, _selected, candidate) {
+        reads.push(candidate.canonicalPath);
+        return { kind: "source", rawBytes: bytes.get(candidate.canonicalPath) };
+      },
+    });
+    assert.equal(result.kind, "acquired");
+    assert.deepEqual(reads, ["a.ts", "bad-utf8.ts", "nul.ts", "z.ts"]);
+    assert.deepEqual(result.notAnalyzedFiles, [
+      { canonicalPath: "bad-utf8.ts", category: "Source text is not supported" },
+      { canonicalPath: "nul.ts", category: "Source text is not supported" },
+    ]);
+    assert.deepEqual(result.modules.map(({ canonicalPath, normalizedSource }) => [canonicalPath, normalizedSource]), [["a.ts", "a\nb\n"], ["z.ts", "z"]]);
+    for (const module of result.modules) {
+      assert.equal(Object.getPrototypeOf(module.normalizedUtf8), Uint8Array.prototype);
+      assert.equal(module.normalizedUtf8.byteOffset, 0);
+      assert.equal(module.normalizedUtf8.byteLength, module.normalizedUtf8.buffer.byteLength);
+      assert.deepEqual(module.normalizedUtf8, new TextEncoder().encode(module.normalizedSource));
+    }
+    outcomes.push(result);
+  }
+  assert.deepEqual(outcomes[1], outcomes[0]);
+});
+
+test("project acquisition enforces inclusive normalized limits and discards a late whole-attempt outcome", async () => {
+  const exact = "x".repeat(2_097_152);
+  const exactResult = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries: [regular("a.ts")] }; },
+    async readRawSource() { return { kind: "source", rawBytes: new TextEncoder().encode(exact) }; },
+  });
+  assert.equal(exactResult.kind, "acquired");
+  assert.equal(exactResult.modules[0].normalizedUtf8.byteLength, 2_097_152);
+
+  const overResult = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries: [regular("a.ts")] }; },
+    async readRawSource() { return { kind: "source", rawBytes: new TextEncoder().encode(`${exact}x`) }; },
+  });
+  assert.deepEqual(overResult, { kind: "failure", category: "Repository exceeds Code City limits" });
+
+  const aggregateEntries = Array.from({ length: 21 }, (_, index) => regular(`${String(index).padStart(2, "0")}.ts`));
+  const aggregateBytes = new TextEncoder().encode(exact);
+  const exactAggregate = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries: aggregateEntries.slice(0, 20) }; },
+    async readRawSource() { return { kind: "source", rawBytes: aggregateBytes }; },
+  });
+  assert.equal(exactAggregate.kind, "acquired");
+  assert.equal(exactAggregate.modules.reduce((sum, module) => sum + module.normalizedUtf8.byteLength, 0), 41_943_040);
+  const overAggregate = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries: aggregateEntries }; },
+    async readRawSource(_repository, _selected, candidate) {
+      return { kind: "source", rawBytes: candidate.canonicalPath === "20.ts" ? Uint8Array.of(0x78) : aggregateBytes };
+    },
+  });
+  assert.deepEqual(overAggregate, { kind: "failure", category: "Repository exceeds Code City limits" });
+
+  let reads = 0;
+  const late = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries: [regular("a.ts"), regular("b.ts")] }; },
+    async readRawSource() {
+      reads += 1;
+      return reads === 1 ? { kind: "source", rawBytes: new TextEncoder().encode("retained only on complete acquisition") } : { kind: "provider-failure" };
+    },
+  });
+  assert.deepEqual(late, { kind: "failure", category: "Provider/resolution failure" });
+  assert.equal(Object.hasOwn(late, "modules"), false);
+  assert.equal(Object.hasOwn(late, "notAnalyzedFiles"), false);
+
+  const controller = new AbortController();
+  let cancellationReads = 0;
+  const cancelled = await acquireProjectSources(REPOSITORY, SHA40, controller.signal, {
+    async loadInventory() { return { kind: "inventory", entries: [regular("a.ts"), regular("b.ts")] }; },
+    async readRawSource() {
+      cancellationReads += 1;
+      if (cancellationReads === 2) controller.abort();
+      return { kind: "source", rawBytes: new TextEncoder().encode("temporary") };
+    },
+  });
+  assert.deepEqual(cancelled, { kind: "cancelled" });
+  assert.equal(Object.hasOwn(cancelled, "modules"), false);
+  assert.equal(Object.hasOwn(cancelled, "notAnalyzedFiles"), false);
 });
 
 test("current cancellation during inventory, JSON-equivalent completion, candidate read, hash wait, and between requests wins", async () => {

@@ -1,6 +1,10 @@
 import type { RepositoryReference } from "../domain/repository-reference";
 import {
   createSourceAdmissionSession,
+  MAX_ADMITTED_MODULES,
+  MAX_NORMALIZED_MODULE_BYTES,
+  MAX_NORMALIZED_TOTAL_BYTES,
+  normalizeSourceText,
   prepareSourceInventory,
   type AdmittedModule,
   type AdmissionCode,
@@ -39,6 +43,54 @@ export type ImmutableSourceGateway = Readonly<{
   ): Promise<SourceGatewayResult>;
 }>;
 
+export type RawSourceGatewayResult =
+  | Readonly<{ kind: "source"; rawBytes: Uint8Array }>
+  | Readonly<{ kind: "provider-failure" }>
+  | Readonly<{ kind: "product-limit" }>;
+
+export type ImmutableRawSourceGateway = Readonly<{
+  loadInventory(
+    repository: RepositoryReference,
+    selected: string,
+    signal: AbortSignal,
+    additionalExclusions?: readonly string[],
+  ): Promise<InventoryGatewayResult>;
+  readRawSource(
+    repository: RepositoryReference,
+    selected: string,
+    candidate: Readonly<SourceCandidate & { expectedBlobId: string }>,
+    signal: AbortSignal,
+  ): Promise<RawSourceGatewayResult>;
+}>;
+
+export type FailedFileCategory =
+  | "Source text is not supported"
+  | "Syntax could not be analyzed"
+  | "Metrics could not be computed";
+
+export type FailedFile = Readonly<{
+  canonicalPath: string;
+  category: FailedFileCategory;
+}>;
+
+export type AcquiredProjectModule = Readonly<{
+  canonicalPath: string;
+  normalizedSource: string;
+  normalizedUtf8: Uint8Array;
+}>;
+
+export type AcquiredProjectSources = Readonly<{
+  kind: "acquired";
+  selected: string;
+  modules: AcquiredProjectModule[];
+  notAnalyzedFiles: FailedFile[];
+}>;
+
+export type ProjectSourceAcquisitionResult =
+  | AcquiredProjectSources
+  | SourceFailure
+  | Readonly<{ kind: "cancelled" }>;
+
 export type RetrievalOwnership = Readonly<{
   phase: "provider-inventory" | "provider-candidate" | "provider-cleared" | "static";
   candidateIndex?: number;
@@ -69,6 +121,93 @@ export function validObjectId(value: unknown, width?: number): value is string {
 
 function providerFailure(): SourceFailure {
   return { kind: "failure", category: "Provider/resolution failure" };
+}
+
+export async function acquireProjectSources(
+  repository: RepositoryReference,
+  selected: string,
+  signal: AbortSignal,
+  gateway: ImmutableRawSourceGateway,
+  observe: (ownership: RetrievalOwnership) => void = () => {},
+  additionalExclusions: readonly string[] = Object.freeze([]),
+): Promise<ProjectSourceAcquisitionResult> {
+  if (!validObjectId(selected)) return providerFailure();
+  if (signal.aborted) return { kind: "cancelled" };
+
+  const modules: AcquiredProjectModule[] = [];
+  const notAnalyzedFiles: FailedFile[] = [];
+  const discard = (): void => {
+    modules.length = 0;
+    notAnalyzedFiles.length = 0;
+  };
+  const terminal = <T extends SourceFailure | Readonly<{ kind: "cancelled" }>>(result: T): T => {
+    discard();
+    return result;
+  };
+
+  try {
+    observe({ phase: "provider-inventory", projectedInventory: false, providerResource: false });
+    const inventoryResult = await gateway.loadInventory(repository, selected, signal, additionalExclusions);
+    if (signal.aborted) return terminal({ kind: "cancelled" });
+    if (inventoryResult.kind !== "inventory") return terminal(providerFailure());
+
+    const inventory = prepareSourceInventory(inventoryResult.entries, additionalExclusions);
+    if (inventory.kind === "failure") return terminal(inventory);
+    observe({ phase: "provider-cleared", projectedInventory: true, providerResource: false });
+
+    for (const candidate of inventory.candidates) {
+      if (!candidate.expectedBlobId || !validObjectId(candidate.expectedBlobId, selected.length)) {
+        return terminal(providerFailure());
+      }
+    }
+    if (inventory.candidates.length > MAX_ADMITTED_MODULES) {
+      return terminal({ kind: "failure", category: "Repository exceeds Code City limits" });
+    }
+
+    let normalizedTotalBytes = 0;
+    for (let index = 0; index < inventory.candidates.length; index += 1) {
+      if (signal.aborted) return terminal({ kind: "cancelled" });
+      const candidate = inventory.candidates[index]!;
+      const expectedBlobId = candidate.expectedBlobId!;
+      observe({ phase: "provider-candidate", candidateIndex: index, projectedInventory: true, providerResource: false });
+      const source = await gateway.readRawSource(repository, selected, { ...candidate, expectedBlobId }, signal);
+      if (signal.aborted) return terminal({ kind: "cancelled" });
+      if (source.kind === "provider-failure") return terminal(providerFailure());
+      if (source.kind === "product-limit") {
+        return terminal({ kind: "failure", category: "Repository exceeds Code City limits" });
+      }
+
+      let decodedSource: string;
+      try {
+        decodedSource = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(source.rawBytes);
+      } catch {
+        notAnalyzedFiles.push({ canonicalPath: candidate.canonicalPath, category: "Source text is not supported" });
+        continue;
+      }
+      const normalized = normalizeSourceText(decodedSource);
+      if (!normalized) {
+        notAnalyzedFiles.push({ canonicalPath: candidate.canonicalPath, category: "Source text is not supported" });
+        continue;
+      }
+      if (normalized.normalizedUtf8.byteLength > MAX_NORMALIZED_MODULE_BYTES
+        || normalizedTotalBytes + normalized.normalizedUtf8.byteLength > MAX_NORMALIZED_TOTAL_BYTES) {
+        return terminal({ kind: "failure", category: "Repository exceeds Code City limits" });
+      }
+      normalizedTotalBytes += normalized.normalizedUtf8.byteLength;
+      modules.push({
+        canonicalPath: candidate.canonicalPath,
+        normalizedSource: normalized.normalizedSource,
+        normalizedUtf8: normalized.normalizedUtf8,
+      });
+    }
+
+    observe({ phase: "provider-cleared", projectedInventory: false, providerResource: false });
+    if (signal.aborted) return terminal({ kind: "cancelled" });
+    observe({ phase: "static", projectedInventory: false, providerResource: false });
+    return { kind: "acquired", selected, modules, notAnalyzedFiles };
+  } catch {
+    return terminal(signal.aborted ? { kind: "cancelled" } : providerFailure());
+  }
 }
 
 export async function retrieveAdmittedSources(
