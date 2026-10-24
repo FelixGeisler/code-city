@@ -25,7 +25,7 @@ const ACTIONS = {
   pagesUpload: "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b",
   artifactUpload: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
   deploy: "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346",
-  download: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+  download: "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
 };
 
 function exactKeys(value, expected, label) {
