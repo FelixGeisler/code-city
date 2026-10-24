@@ -249,6 +249,8 @@ test("project acquisition continues text failures, retains exact normalized own 
       assert.equal(Object.getPrototypeOf(module.normalizedUtf8), Uint8Array.prototype);
       assert.equal(module.normalizedUtf8.byteOffset, 0);
       assert.equal(module.normalizedUtf8.byteLength, module.normalizedUtf8.buffer.byteLength);
+      assert.equal(Object.isExtensible(module.normalizedUtf8), true);
+      assert.equal(Object.isExtensible(module.normalizedUtf8.buffer), true);
       assert.deepEqual(module.normalizedUtf8, new TextEncoder().encode(module.normalizedSource));
     }
     outcomes.push(result);

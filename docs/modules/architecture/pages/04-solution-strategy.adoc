@@ -35,21 +35,24 @@ owners in `src/domain/`, `src/application/`, and `src/edge/`.
 
 == Inactive continuation core
 
-An additive application core is prepared for later Node worker integration. Its
-raw GitHub capability verifies the bounded Git blob before text handling. The
-acquisition service then continues unsupported text files while retaining exact
-normalized bytes for text-valid files. One initialized parser capability
-continues syntax and metric failures per file, releases each successful
-projection once, and constructs a city from successful facts only. It returns
-canonical failed-file and retained-source rows with the city or `null` when no
-fact succeeds.
+An additive application core and its inactive Node worker integration are
+implemented. The raw GitHub capability verifies the bounded Git blob before
+text handling. The acquisition service then continues unsupported text files
+while retaining exact normalized bytes for text-valid files. One initialized
+parser capability continues syntax and metric failures per file, releases each
+successful projection once, and constructs a city from successful facts only.
+It returns canonical failed-file and retained-source rows with the city or
+`null` when no fact succeeds.
 
-This core is not wired to the browser worker, protocol, controller, or entry
-point. The active browser behavior above remains fail-fast and source-free. The
-separate inactive native-HTTP perimeter does not invoke this core. No session
-runtime, dedicated Node worker integration, package cutover, Save or source
-view, private-source support, deployment, or device qualification is
-implemented by this preparation.
+Neither boundary is wired to the browser worker, controller, or entry point.
+The active browser behavior above remains fail-fast and source-free. The
+inactive Node boundary runs one core attempt in an actual worker thread,
+applies its selected closed internal command/event protocol, transfers the
+exact city and retained-source buffers, and exposes a terminal only after
+normal joined exit. The separate inactive native-HTTP perimeter does not invoke
+this boundary. No session runtime, HTTP/worker orchestration, package cutover,
+Save or source view, private-source support, deployment, or device
+qualification is implemented.
 
 == Accepted target strategy
 

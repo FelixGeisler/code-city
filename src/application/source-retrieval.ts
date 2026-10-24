@@ -1,4 +1,5 @@
 import type { RepositoryReference } from "../domain/repository-reference";
+import { applyRequestedSourceByteOwnership } from "./internal/source-byte-ownership";
 import {
   createSourceAdmissionSession,
   MAX_ADMITTED_MODULES,
@@ -189,6 +190,7 @@ export async function acquireProjectSources(
         notAnalyzedFiles.push({ canonicalPath: candidate.canonicalPath, category: "Source text is not supported" });
         continue;
       }
+      applyRequestedSourceByteOwnership(gateway, normalized.normalizedUtf8);
       if (normalized.normalizedUtf8.byteLength > MAX_NORMALIZED_MODULE_BYTES
         || normalizedTotalBytes + normalized.normalizedUtf8.byteLength > MAX_NORMALIZED_TOTAL_BYTES) {
         return terminal({ kind: "failure", category: "Repository exceeds Code City limits" });

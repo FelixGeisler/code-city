@@ -303,11 +303,16 @@ test("exactly four strict no-emit TypeScript configs isolate main, worker, and i
   assert(!node.compilerOptions.lib.includes("dom"));
   assert(!node.compilerOptions.lib.includes("webworker"));
   assert.deepEqual(node.files.map((file) => file.replaceAll("\\", "/")), [
+    "./src/edge/node/analysis-worker-entry.ts",
+    "./src/edge/node/analysis-worker.ts",
     "./src/edge/node/body-reader.ts",
     "./src/edge/node/config.ts",
     "./src/edge/node/fixture-manifest.ts",
     "./src/edge/node/http-perimeter.ts",
+    "./src/edge/node/parser-assets.ts",
     "./src/edge/node/wire-observer.ts",
+    "./src/edge/node/worker-attempt.ts",
+    "./src/edge/node/worker-protocol.ts",
   ]);
 });
 
@@ -322,6 +327,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.deepEqual(productionFiles, [
     "application/base-metric-processing.ts",
     "application/city-payload.ts",
+    "application/internal/source-byte-ownership.ts",
     "application/main-controller.ts",
     "application/metric-explanation.ts",
     "application/project-analysis.ts",
@@ -339,11 +345,16 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/github-revision-gateway.ts",
     "edge/github-source-gateway.ts",
     "edge/main.ts",
+    "edge/node/analysis-worker-entry.ts",
+    "edge/node/analysis-worker.ts",
     "edge/node/body-reader.ts",
     "edge/node/config.ts",
     "edge/node/fixture-manifest.ts",
     "edge/node/http-perimeter.ts",
+    "edge/node/parser-assets.ts",
     "edge/node/wire-observer.ts",
+    "edge/node/worker-attempt.ts",
+    "edge/node/worker-protocol.ts",
     "edge/processing-worker.ts",
     "edge/semantic-publication.ts",
     "edge/shell.css",
