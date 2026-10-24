@@ -1,6 +1,8 @@
 import type {
+  ImmutableRawSourceGateway,
   ImmutableSourceGateway,
   InventoryGatewayResult,
+  RawSourceGatewayResult,
   SourceGatewayResult,
 } from "../application/source-retrieval";
 import { validObjectId } from "../application/source-retrieval";
@@ -281,10 +283,10 @@ function hexadecimal(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function createGithubSourceGateway(
+export function createGithubRawSourceGateway(
   fetchImpl: typeof fetch,
   digest: Digest = (algorithm, data) => crypto.subtle.digest(algorithm, data),
-): ImmutableSourceGateway {
+): ImmutableRawSourceGateway {
   return {
     async loadInventory(
       repository,
@@ -307,7 +309,7 @@ export function createGithubSourceGateway(
       return entries ? { kind: "inventory", entries } : { kind: "provider-failure" };
     },
 
-    async readSource(repository, selected, candidate, signal): Promise<SourceGatewayResult> {
+    async readRawSource(repository, selected, candidate, signal): Promise<RawSourceGatewayResult> {
       const requestUrl = githubRawSourceUrl(repository, selected, candidate.rawPath);
       const body = await requestRawBody(fetchImpl, requestUrl, signal);
       if (body.kind === "overflow") {
@@ -327,10 +329,27 @@ export function createGithubSourceGateway(
       if (actualBlobId !== candidate.expectedBlobId) {
         return { kind: "provider-failure" };
       }
+      return { kind: "source", rawBytes: body.bytes };
+    },
+  };
+}
+
+export function createGithubSourceGateway(
+  fetchImpl: typeof fetch,
+  digest: Digest = (algorithm, data) => crypto.subtle.digest(algorithm, data),
+): ImmutableSourceGateway {
+  const rawGateway = createGithubRawSourceGateway(fetchImpl, digest);
+  return {
+    loadInventory(repository, selected, signal, additionalExclusions): Promise<InventoryGatewayResult> {
+      return rawGateway.loadInventory(repository, selected, signal, additionalExclusions);
+    },
+    async readSource(repository, selected, candidate, signal): Promise<SourceGatewayResult> {
+      const result = await rawGateway.readRawSource(repository, selected, candidate, signal);
+      if (result.kind !== "source") return result;
       try {
         return {
           kind: "source",
-          decodedSource: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(body.bytes),
+          decodedSource: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(result.rawBytes),
         };
       } catch {
         return { kind: "invalid-content" };

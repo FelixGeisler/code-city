@@ -204,6 +204,19 @@ export function prepareSourceInventory(
     : { kind: "candidates", candidates };
 }
 
+export type NormalizedSourceText = Readonly<{
+  normalizedSource: string;
+  normalizedUtf8: Uint8Array;
+}>;
+
+export function normalizeSourceText(decodedSource: string): NormalizedSourceText | undefined {
+  let normalizedSource = decodedSource.startsWith("\uFEFF") ? decodedSource.slice(1) : decodedSource;
+  if (normalizedSource.includes("\0")) return undefined;
+  normalizedSource = normalizedSource.replace(/\r\n?/g, "\n");
+  const normalizedUtf8 = new Uint8Array(textEncoder.encode(normalizedSource));
+  return { normalizedSource, normalizedUtf8 };
+}
+
 export type SourceAdmissionSession = Readonly<{
   add(candidate: SourceCandidate, decodedSource: string): AdmissionFailure | undefined;
   complete(): AdmittedModule[];
@@ -215,19 +228,16 @@ export function createSourceAdmissionSession(): SourceAdmissionSession {
 
   return {
     add(candidate, decodedSource) {
-      let normalizedSource = decodedSource.startsWith("\uFEFF") ? decodedSource.slice(1) : decodedSource;
-      if (normalizedSource.includes("\0")) {
-        return failure("Source admission failed", "M1-ADM-4");
-      }
-      normalizedSource = normalizedSource.replace(/\r\n?/g, "\n");
-      const normalizedBytes = textEncoder.encode(normalizedSource).byteLength;
+      const normalized = normalizeSourceText(decodedSource);
+      if (!normalized) return failure("Source admission failed", "M1-ADM-4");
+      const normalizedBytes = normalized.normalizedUtf8.byteLength;
       if (normalizedBytes > MAX_NORMALIZED_MODULE_BYTES
         || normalizedTotalBytes + normalizedBytes > MAX_NORMALIZED_TOTAL_BYTES
         || modules.length >= MAX_ADMITTED_MODULES) {
         return failure("Repository exceeds Code City limits");
       }
       normalizedTotalBytes += normalizedBytes;
-      modules.push({ canonicalPath: candidate.canonicalPath, normalizedSource });
+      modules.push({ canonicalPath: candidate.canonicalPath, normalizedSource: normalized.normalizedSource });
       return undefined;
     },
     complete: () => modules,
