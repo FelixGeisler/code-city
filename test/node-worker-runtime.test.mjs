@@ -18,7 +18,7 @@ registerHooks({
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const { createNodeTreeSitterAdapter, NODE_PARSER_ASSET_URLS } = await import("../src/edge/node/parser-assets.ts");
 const { startNodeWorkerAttempt } = await import("../src/edge/node/worker-attempt.ts");
-const { validateNodeWorkerEvent } = await import("../src/edge/node/worker-protocol.ts");
+const { validateNodeWorkerStructuredCloneEvent } = await import("../src/edge/node/worker-protocol.ts");
 const REPOSITORY = { owner: "owner", repository: "repo", branch: null };
 const SHA = "a".repeat(40);
 const ATTEMPT = Buffer.alloc(16).toString("base64url");
@@ -128,10 +128,12 @@ registerHooks({ resolve(specifier, context, nextResolve) { return nextResolve(/^
 const { publishNodeWorkerEvent } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/edge/node/analysis-worker.js")).href)});
 const { prepareNodeWorkerSuccessForPublication } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/edge/node/worker-protocol.js")).href)});
 const { buildCity } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/domain/city-model.js")).href)});
+const { normalizeSourceText } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/domain/source-admission.js")).href)});
 const SHA = "a".repeat(40);
 const encoder = new TextEncoder();
 const selected = (command) => ({ type: "REVISION_SELECTED", attemptId: command.attemptId, generation: command.generation, revision: SHA });
-const one = (command, normalizedUtf8 = encoder.encode("x")) => ({
+const fixedTransferBytes = (source) => normalizeSourceText(source, "fixed-transfer").normalizedUtf8;
+const one = (command, normalizedUtf8 = fixedTransferBytes("x")) => ({
   type: "SUCCESS", attemptId: command.attemptId, generation: command.generation, revision: SHA,
   result: { city: buildCity([{ canonicalPath: "a.ts", S: 1, U: 0, M: 0 }]), notAnalyzedFiles: [] },
   sources: [{ canonicalPath: "a.ts", normalizedUtf8 }],
@@ -147,7 +149,11 @@ function eventFor(command, mode) {
   if (mode.endsWith("buffer")) { const value = Buffer.allocUnsafeSlow(1); value[0] = 120; return one(command, value); }
   if (mode.endsWith("subclass")) return one(command, new (class extends Uint8Array {})([120]));
   if (mode.endsWith("view-extra")) { const value = encoder.encode("x"); value.extra = true; return one(command, value); }
+  if (mode.endsWith("view-nonenumerable")) { const value = encoder.encode("x"); Object.defineProperty(value, "extra", { value: true }); return one(command, value); }
+  if (mode.endsWith("view-accessor")) { const value = encoder.encode("x"); Object.defineProperty(value, "extra", { enumerable: true, get: () => true }); return one(command, value); }
+  if (mode.endsWith("view-symbol")) { const value = encoder.encode("x"); value[Symbol("extra")] = true; return one(command, value); }
   if (mode.endsWith("buffer-extra")) { const value = encoder.encode("x"); value.buffer.extra = true; return one(command, value); }
+  if (mode.endsWith("buffer-nonenumerable")) { const value = encoder.encode("x"); Object.defineProperty(value.buffer, "extra", { value: true }); return one(command, value); }
   if (mode.endsWith("buffer-symbol")) { const value = encoder.encode("x"); value.buffer[Symbol("extra")] = true; return one(command, value); }
   if (mode.endsWith("buffer-accessor")) { const value = encoder.encode("x"); Object.defineProperty(value.buffer, "extra", { enumerable: true, get: () => true }); return one(command, value); }
   if (mode.endsWith("row-accessor")) { const value = one(command); Object.defineProperty(value.sources[0], "canonicalPath", { enumerable: true, get: () => "a.ts" }); return value; }
@@ -163,6 +169,16 @@ function eventFor(command, mode) {
   if (mode === "raw-city") { const value = one(command); value.result.city.geometry.sizes[0] = 999; return value; }
   return one(command);
 }
+const publishPrepared = (event) => {
+  try {
+    publishNodeWorkerEvent(parentPort, prepareNodeWorkerSuccessForPublication(event));
+  } catch {
+    publishNodeWorkerEvent(parentPort, {
+      type: "FAILURE", attemptId: event.attemptId, generation: event.generation, revision: event.revision,
+      category: "Provider/resolution failure",
+    });
+  }
+};
 parentPort.on("message", (command) => {
   if (command.type !== "START") return;
   parentPort.postMessage(selected(command));
@@ -176,7 +192,7 @@ parentPort.on("message", (command) => {
     publishNodeWorkerEvent(parentPort, prepareNodeWorkerSuccessForPublication(event));
     parentPort.postMessage({ type: "DETACHED", distinct: new Set(before).size, byteLengths: before.map((buffer) => buffer.byteLength) });
   } else if (workerData.mode.startsWith("publish-")) {
-    publishNodeWorkerEvent(parentPort, event);
+    publishPrepared(event);
   } else {
     parentPort.postMessage(event);
   }
@@ -284,11 +300,12 @@ test("actual worker publisher rejects normalized sender mutations and transfers 
   const { transfer } = await compiledWorkerFixture(t);
   const valid = await collectWorkerMessages(transfer, "valid-transfer");
   assert.equal(valid[0].type, "REVISION_SELECTED");
-  assert.equal(validateNodeWorkerEvent(valid[1]).kind, "valid");
+  assert.equal(validateNodeWorkerStructuredCloneEvent(valid[1]).kind, "valid");
   assert.deepEqual(valid[2], { type: "DETACHED", distinct: 5, byteLengths: [0, 0, 0, 0, 0] });
 
   const senderMutations = [
-    "buffer", "subclass", "view-extra", "buffer-extra", "buffer-symbol", "buffer-accessor", "row-accessor",
+    "buffer", "subclass", "view-extra", "view-nonenumerable", "view-accessor", "view-symbol",
+    "buffer-extra", "buffer-nonenumerable", "buffer-symbol", "buffer-accessor", "row-accessor",
     "partial", "detached", "proxy", "shared", "reused",
   ];
   if (ArrayBuffer.prototype.resize) senderMutations.push("resizable");
@@ -304,14 +321,17 @@ test("actual worker publisher rejects normalized sender mutations and transfers 
 
 test("actual structured clones separate normalized sender identity from receiver-visible malformed data", async (t) => {
   const { transfer } = await compiledWorkerFixture(t);
-  for (const mode of ["raw-buffer", "raw-subclass", "raw-view-extra", "raw-buffer-extra", "raw-buffer-symbol", "raw-buffer-accessor"]) {
+  for (const mode of [
+    "raw-buffer", "raw-subclass", "raw-view-extra", "raw-view-nonenumerable", "raw-view-accessor", "raw-view-symbol",
+    "raw-buffer-extra", "raw-buffer-nonenumerable", "raw-buffer-symbol", "raw-buffer-accessor",
+  ]) {
     const result = await start(transfer, mode).result;
     assert.equal(result.type, "SUCCESS", mode);
     assert.equal(Object.getPrototypeOf(result.sources[0].normalizedUtf8), Uint8Array.prototype, mode);
     assert.equal(Reflect.ownKeys(result.sources[0].normalizedUtf8.buffer).length, 0, mode);
   }
 
-  for (const mode of ["raw-partial", "raw-reused", "raw-invalid-utf8", "raw-cr", "raw-path"]) {
+  for (const mode of ["raw-partial", "raw-reused", "raw-invalid-utf8", "raw-cr", "raw-path", "raw-proxy"]) {
     const result = await start(transfer, mode).result;
     assert.equal(result.type, "FAILURE", mode);
     assert.equal(result.category, "Provider/resolution failure", mode);

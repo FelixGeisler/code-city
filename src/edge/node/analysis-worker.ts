@@ -9,8 +9,8 @@ import { createNodeTreeSitterAdapter } from "./parser-assets";
 import {
   parseNodeWorkerCommand,
   prepareNodeWorkerSuccessForPublication,
-  successTransferList,
   validateNodeWorkerEvent,
+  validateNodeWorkerEventForPublication,
   type NodeWorkerEvent,
   type NodeWorkerFailure,
   type NodeWorkerSuccess,
@@ -29,7 +29,8 @@ function providerFailure(attemptId: string, generation: number, revision?: strin
 }
 
 export function publishNodeWorkerEvent(port: Pick<MessagePort, "postMessage">, event: NodeWorkerEvent): void {
-  const validation = validateNodeWorkerEvent(event, "sender");
+  const publication = validateNodeWorkerEventForPublication(event);
+  const { validation } = publication;
   if (validation.kind !== "valid") {
     if (validation.attemptId === undefined || validation.generation === undefined) {
       throw new Error("Worker event correlation is invalid");
@@ -45,9 +46,8 @@ export function publishNodeWorkerEvent(port: Pick<MessagePort, "postMessage">, e
     port.postMessage(event);
     return;
   }
-  const transfer = successTransferList(event);
-  if (!transfer) throw new Error("Worker success transfer list is invalid");
-  port.postMessage(event, transfer);
+  if (!publication.transfer) throw new Error("Worker success transfer list is invalid");
+  port.postMessage(event, publication.transfer);
 }
 
 export function runNodeAnalysisWorker(port: MessagePort, dependencies: NodeAnalysisWorkerDependencies): void {
@@ -81,6 +81,7 @@ export function runNodeAnalysisWorker(port: MessagePort, dependencies: NodeAnaly
       publishNodeWorkerEvent(port, { type: "REVISION_SELECTED", attemptId: command.attemptId, generation: command.generation, revision });
       const acquired = await acquireProjectSources(
         command.repository, revision, controller.signal, dependencies.sourceGateway, undefined, command.additionalExclusions,
+        "fixed-transfer",
       );
       if (controller.signal.aborted || acquired.kind === "cancelled") { finish(); return; }
       if (acquired.kind === "failure") {
@@ -102,7 +103,6 @@ export function runNodeAnalysisWorker(port: MessagePort, dependencies: NodeAnaly
       }
       const analysis = await analyzeProjectSources(acquired, dependencies.parser);
       if (controller.signal.aborted) { finish(); return; }
-      terminal = true;
       if (analysis.kind === "failure") {
         publishNodeWorkerEvent(port, {
           type: "FAILURE", attemptId: command.attemptId, generation: command.generation, revision,
@@ -116,6 +116,7 @@ export function runNodeAnalysisWorker(port: MessagePort, dependencies: NodeAnaly
         } satisfies NodeWorkerSuccess);
         publishNodeWorkerEvent(port, success);
       }
+      terminal = true;
       finish();
     } catch {
       if (controller.signal.aborted) { finish(); return; }

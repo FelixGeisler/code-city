@@ -4,6 +4,7 @@ import type { RepositoryReference } from "../../domain/repository-reference";
 import {
   parseNodeWorkerCommand,
   validateNodeWorkerEvent,
+  validateNodeWorkerStructuredCloneEvent,
   type NodeWorkerCommand,
   type NodeWorkerFailure,
   type ValidatedNodeWorkerEvent,
@@ -50,6 +51,7 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
   let resolveResult!: (result: JoinedNodeWorkerResult) => void;
   const result = new Promise<JoinedNodeWorkerResult>((resolve) => { resolveResult = resolve; });
   let worker: WorkerLike | undefined;
+  let structuredCloneMessages = false;
   let selectedRevision: string | undefined;
   let provisional: JoinedNodeWorkerTerminal | undefined;
   let invalid = false;
@@ -76,6 +78,7 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
     worker = (options.workerFactory ?? ((url) => new Worker(url)))(
       options.workerUrl ?? new URL("./analysis-worker-entry.js", import.meta.url),
     );
+    structuredCloneMessages = worker instanceof Worker;
   } catch {
     finishWithoutWorker();
     return { attemptId, generation, result, async cancel() {} };
@@ -125,7 +128,9 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
 
   function onMessage(value: unknown): void {
     if (joined || cancelled || invalid || provisional) { terminateInvalid(); return; }
-    const parsed = validateNodeWorkerEvent(value);
+    const parsed = structuredCloneMessages
+      ? validateNodeWorkerStructuredCloneEvent(value)
+      : validateNodeWorkerEvent(value);
     if (parsed.kind !== "valid") {
       if (parsed.mapping === "city" && parsed.attemptId === attemptId && parsed.generation === generation
         && parsed.revision !== undefined && parsed.revision === selectedRevision) {

@@ -7,6 +7,7 @@ import {
   compareUnsignedUtf8,
   isCanonicalAdditionalExclusions,
   isCanonicalSourcePath,
+  isFixedTransferNormalizedUtf8,
   MAX_ADMITTED_MODULES,
   MAX_NORMALIZED_MODULE_BYTES,
   MAX_NORMALIZED_TOTAL_BYTES,
@@ -55,9 +56,15 @@ export type NodeWorkerValidation =
 
 type DataRecord = Record<string, unknown>;
 type SourceByteBoundary = "sender" | "receiver";
+type ParsedSources = Readonly<{ sources: RetainedProjectSource[]; buffers: ArrayBuffer[] }>;
+type InternalNodeWorkerValidation = Readonly<{
+  validation: NodeWorkerValidation;
+  sourceBuffers?: readonly ArrayBuffer[];
+}>;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-const preparedSenderBytes = new WeakSet<Uint8Array>();
+const receivedCloneBytes = new WeakSet<Uint8Array>();
+const receivedCloneBuffers = new WeakSet<ArrayBuffer>();
 
 function exactRecord(value: unknown, keys: readonly string[]): DataRecord | undefined {
   try {
@@ -157,30 +164,58 @@ function correlation(record: DataRecord): boolean {
   return validAttemptId(record.attemptId) && validGeneration(record.generation);
 }
 
-function plainWholeBytes(value: unknown, boundary: SourceByteBoundary): Uint8Array | undefined {
+function plainWholeByteStructure(value: unknown): Readonly<{ bytes: Uint8Array; buffer: ArrayBuffer }> | undefined {
   try {
     if (typeof value !== "object" || value === null || !ArrayBuffer.isView(value)
       || Object.getPrototypeOf(value) !== Uint8Array.prototype) return undefined;
     const bytes = value as Uint8Array;
-    if (Object.getPrototypeOf(bytes.buffer) !== ArrayBuffer.prototype || bytes.byteOffset !== 0
-      || bytes.byteLength !== bytes.buffer.byteLength) return undefined;
-    const buffer = bytes.buffer as ArrayBuffer & { resizable?: boolean };
-    if (buffer.resizable === true || Reflect.ownKeys(buffer).length !== 0) return undefined;
+    const buffer = bytes.buffer as ArrayBuffer;
+    if (Object.getPrototypeOf(buffer) !== ArrayBuffer.prototype || bytes.byteOffset !== 0
+      || bytes.byteLength !== buffer.byteLength
+      || (buffer as ArrayBuffer & { resizable?: boolean }).resizable === true
+      || Reflect.ownKeys(buffer).length !== 0
+      || Object.getOwnPropertySymbols(bytes).length !== 0) return undefined;
     buffer.slice(0, 0);
-    if (Object.getOwnPropertySymbols(bytes).length !== 0) return undefined;
-    if (boundary === "sender" && (!preparedSenderBytes.has(bytes) || Object.isExtensible(bytes))) return undefined;
-    return bytes;
+    return { bytes, buffer };
   } catch {
     return undefined;
   }
 }
 
+function plainWholeBytes(value: unknown, boundary: SourceByteBoundary): Uint8Array | undefined {
+  const structure = plainWholeByteStructure(value);
+  if (!structure) return undefined;
+  const { bytes, buffer } = structure;
+  if (boundary === "sender") return isFixedTransferNormalizedUtf8(bytes) ? bytes : undefined;
+  return receivedCloneBytes.has(bytes) && receivedCloneBuffers.has(buffer)
+    && !Object.isExtensible(bytes) && !Object.isExtensible(buffer)
+    ? bytes
+    : undefined;
+}
+
+function registerNodeWorkerEventStructuredClone(value: unknown): void {
+  const success = exactRecord(value, ["type", "attemptId", "generation", "revision", "result", "sources"]);
+  if (success?.type !== "SUCCESS") return;
+  const rows = exactArray(success.sources);
+  if (!rows) return;
+  const candidates: Array<Readonly<{ bytes: Uint8Array; buffer: ArrayBuffer }>> = [];
+  for (const row of rows) {
+    const record = exactRecord(row, ["canonicalPath", "normalizedUtf8"]);
+    const structure = record ? plainWholeByteStructure(record.normalizedUtf8) : undefined;
+    if (!structure) return;
+    candidates.push(structure);
+  }
+  for (const { bytes, buffer } of candidates) {
+    Object.preventExtensions(buffer);
+    Object.preventExtensions(bytes);
+    receivedCloneBuffers.add(buffer);
+    receivedCloneBytes.add(bytes);
+  }
+}
+
 export function prepareNodeWorkerSuccessForPublication(event: NodeWorkerSuccess): NodeWorkerSuccess {
   for (const source of event.sources) {
-    const bytes = plainWholeBytes(source.normalizedUtf8, "receiver");
-    if (!bytes) throw new Error("Worker source bytes are invalid");
-    Object.preventExtensions(bytes);
-    preparedSenderBytes.add(bytes);
+    if (!plainWholeBytes(source.normalizedUtf8, "sender")) throw new Error("Worker source bytes are invalid");
   }
   return event;
 }
@@ -209,11 +244,12 @@ function parseFailures(value: unknown): FailedFile[] | undefined {
   return sortedUniquePaths(failures) ? failures : undefined;
 }
 
-function parseSources(value: unknown, boundary: SourceByteBoundary): RetainedProjectSource[] | undefined {
+function parseSources(value: unknown, boundary: SourceByteBoundary): ParsedSources | undefined {
   const rows = exactArray(value);
   if (!rows) return undefined;
   const sources: RetainedProjectSource[] = [];
   const buffers = new Set<ArrayBuffer>();
+  const orderedBuffers: ArrayBuffer[] = [];
   let totalBytes = 0;
   for (const row of rows) {
     const record = exactRecord(row, ["canonicalPath", "normalizedUtf8"]);
@@ -222,7 +258,8 @@ function parseSources(value: unknown, boundary: SourceByteBoundary): RetainedPro
     if (typeof candidate !== "object" || candidate === null || !ArrayBuffer.isView(candidate)
       || candidate.byteLength > MAX_NORMALIZED_MODULE_BYTES) return undefined;
     const bytes = plainWholeBytes(candidate, boundary);
-    if (!bytes || buffers.has(bytes.buffer as ArrayBuffer)) return undefined;
+    const buffer = bytes?.buffer as ArrayBuffer | undefined;
+    if (!bytes || !buffer || buffers.has(buffer)) return undefined;
     let decoded: string;
     try { decoded = decoder.decode(bytes); } catch { return undefined; }
     if (decoded.startsWith("\uFEFF") || decoded.includes("\0") || decoded.includes("\r")) return undefined;
@@ -230,95 +267,128 @@ function parseSources(value: unknown, boundary: SourceByteBoundary): RetainedPro
     if (reencoded.byteLength !== bytes.byteLength || reencoded.some((byte, index) => byte !== bytes[index])) return undefined;
     totalBytes += bytes.byteLength;
     if (totalBytes > MAX_NORMALIZED_TOTAL_BYTES) return undefined;
-    buffers.add(bytes.buffer as ArrayBuffer);
+    buffers.add(buffer);
+    orderedBuffers.push(buffer);
     sources.push({ canonicalPath: record.canonicalPath, normalizedUtf8: new Uint8Array(bytes) });
   }
-  return sortedUniquePaths(sources) ? sources : undefined;
+  return sortedUniquePaths(sources) ? { sources, buffers: orderedBuffers } : undefined;
 }
 
-function validateSuccess(record: DataRecord, boundary: SourceByteBoundary): NodeWorkerValidation {
+function validateSuccess(record: DataRecord, boundary: SourceByteBoundary): InternalNodeWorkerValidation {
   const revision = validNodeRevision(record.revision) ? record.revision : undefined;
-  if (!correlation(record) || !revision) return { kind: "invalid", mapping: "provider" };
+  if (!correlation(record) || !revision) return { validation: { kind: "invalid", mapping: "provider" } };
   const identity = { attemptId: record.attemptId as string, generation: record.generation as number, revision };
   const result = exactRecord(record.result, ["city", "notAnalyzedFiles"]);
-  if (!result) return { kind: "invalid", mapping: "provider", ...identity };
+  if (!result) return { validation: { kind: "invalid", mapping: "provider", ...identity } };
   let city: ValidatedCity | null;
   if (result.city === null) city = null;
   else {
     try { city = validateCityPayload(result.city); }
-    catch { return { kind: "invalid", mapping: "city", ...identity }; }
+    catch { return { validation: { kind: "invalid", mapping: "city", ...identity } }; }
   }
   const failures = parseFailures(result.notAnalyzedFiles);
-  const sources = parseSources(record.sources, boundary);
-  if (!failures || !sources) return { kind: "invalid", mapping: "provider", ...identity };
+  const parsedSources = parseSources(record.sources, boundary);
+  if (!failures || !parsedSources) return { validation: { kind: "invalid", mapping: "provider", ...identity } };
+  const { sources, buffers } = parsedSources;
   const successfulPaths = city?.inspection.map(({ canonicalPath }) => canonicalPath) ?? [];
   if ((city === null && (successfulPaths.length !== 0 || failures.length === 0))
     || successfulPaths.length + failures.length > MAX_ADMITTED_MODULES) {
-    return { kind: "invalid", mapping: "provider", ...identity };
+    return { validation: { kind: "invalid", mapping: "provider", ...identity } };
   }
   const successful = new Set(successfulPaths);
   const failed = new Set(failures.map(({ canonicalPath }) => canonicalPath));
   if (successful.size !== successfulPaths.length || [...successful].some((path) => failed.has(path))) {
-    return { kind: "invalid", mapping: "provider", ...identity };
+    return { validation: { kind: "invalid", mapping: "provider", ...identity } };
   }
   const expectedSources = [...successfulPaths, ...failures
     .filter(({ category }) => category !== "Source text is not supported")
     .map(({ canonicalPath }) => canonicalPath)].sort(compareUnsignedUtf8);
   const sourcePaths = sources.map(({ canonicalPath }) => canonicalPath);
   if (expectedSources.length !== sourcePaths.length || expectedSources.some((path, index) => path !== sourcePaths[index])) {
-    return { kind: "invalid", mapping: "provider", ...identity };
+    return { validation: { kind: "invalid", mapping: "provider", ...identity } };
   }
   return {
-    kind: "valid",
-    event: {
-      type: "SUCCESS", attemptId: record.attemptId as string, generation: record.generation as number, revision,
-      result: { city, notAnalyzedFiles: failures }, sources,
+    validation: {
+      kind: "valid",
+      event: {
+        type: "SUCCESS", attemptId: record.attemptId as string, generation: record.generation as number, revision,
+        result: { city, notAnalyzedFiles: failures }, sources,
+      },
     },
+    sourceBuffers: buffers,
   };
 }
 
-export function validateNodeWorkerEvent(value: unknown, boundary: SourceByteBoundary = "receiver"): NodeWorkerValidation {
+function validateNodeWorkerEventInternal(
+  value: unknown,
+  boundary: SourceByteBoundary = "receiver",
+): InternalNodeWorkerValidation {
   const selected = exactRecord(value, ["type", "attemptId", "generation", "revision"]);
   if (selected?.type === "REVISION_SELECTED" && correlation(selected) && validNodeRevision(selected.revision)) {
-    return { kind: "valid", event: { type: "REVISION_SELECTED", attemptId: selected.attemptId as string, generation: selected.generation as number, revision: selected.revision } };
+    return { validation: { kind: "valid", event: { type: "REVISION_SELECTED", attemptId: selected.attemptId as string, generation: selected.generation as number, revision: selected.revision } } };
   }
   const success = exactRecord(value, ["type", "attemptId", "generation", "revision", "result", "sources"]);
   if (success?.type === "SUCCESS") return validateSuccess(success, boundary);
   const coded = exactRecord(value, ["type", "attemptId", "generation", "revision", "category", "code"]);
   if (coded?.type === "FAILURE" && correlation(coded) && validNodeRevision(coded.revision) && validCode(coded.category, coded.code)) {
-    return { kind: "valid", event: coded as NodeWorkerFailure };
+    return { validation: { kind: "valid", event: coded as NodeWorkerFailure } };
   }
   const post = exactRecord(value, ["type", "attemptId", "generation", "revision", "category"]);
   if (post?.type === "FAILURE" && correlation(post) && validNodeRevision(post.revision)
     && (post.category === "Provider/resolution failure" || post.category === "Repository exceeds Code City limits")) {
-    return { kind: "valid", event: post as NodeWorkerFailure };
+    return { validation: { kind: "valid", event: post as NodeWorkerFailure } };
   }
   const pre = exactRecord(value, ["type", "attemptId", "generation", "category"]);
   if (pre?.type === "FAILURE" && correlation(pre)
     && (pre.category === "Repository unavailable for anonymous access" || pre.category === "Revision unavailable"
       || pre.category === "Provider/resolution failure")) {
-    return { kind: "valid", event: pre as NodeWorkerFailure };
+    return { validation: { kind: "valid", event: pre as NodeWorkerFailure } };
   }
   const revision = typeof value === "object" && value !== null
     ? Object.getOwnPropertyDescriptor(value, "revision")?.value
     : undefined;
-  return { kind: "invalid", mapping: "provider", ...(validNodeRevision(revision) ? { revision } : {}) };
+  return { validation: { kind: "invalid", mapping: "provider", ...(validNodeRevision(revision) ? { revision } : {}) } };
+}
+
+export function validateNodeWorkerEvent(value: unknown, boundary: SourceByteBoundary = "receiver"): NodeWorkerValidation {
+  return validateNodeWorkerEventInternal(value, boundary).validation;
+}
+
+export function validateNodeWorkerStructuredCloneEvent(value: unknown): NodeWorkerValidation {
+  registerNodeWorkerEventStructuredClone(value);
+  return validateNodeWorkerEventInternal(value, "receiver").validation;
+}
+
+export function validateNodeWorkerEventForPublication(event: NodeWorkerEvent): Readonly<{
+  validation: NodeWorkerValidation;
+  transfer?: ArrayBuffer[];
+}> {
+  const parsed = validateNodeWorkerEventInternal(event, "sender");
+  if (parsed.validation.kind !== "valid" || parsed.validation.event.type !== "SUCCESS") {
+    return { validation: parsed.validation };
+  }
+  if (event.type !== "SUCCESS") return { validation: { kind: "invalid", mapping: "provider" } };
+  try {
+    const transfer: ArrayBuffer[] = [];
+    if (event.result.city) {
+      const geometry = event.result.city.geometry;
+      transfer.push(geometry.origins.buffer as ArrayBuffer, geometry.sizes.buffer as ArrayBuffer,
+        geometry.rgba.buffer as ArrayBuffer, geometry.bounds.buffer as ArrayBuffer);
+    }
+    transfer.push(...(parsed.sourceBuffers ?? []));
+    return new Set(transfer).size === transfer.length
+      ? { validation: parsed.validation, transfer }
+      : { validation: { kind: "invalid", mapping: "provider", attemptId: event.attemptId, generation: event.generation, revision: event.revision } };
+  } catch {
+    return { validation: { kind: "invalid", mapping: "provider", attemptId: event.attemptId, generation: event.generation, revision: event.revision } };
+  }
 }
 
 export function successTransferList(event: NodeWorkerSuccess): ArrayBuffer[] | undefined {
-  const validation = validateNodeWorkerEvent(event, "sender");
-  if (validation.kind !== "valid" || validation.event.type !== "SUCCESS") return undefined;
-  try {
-    const buffers: ArrayBuffer[] = [];
-    if (event.result.city) {
-      const geometry = event.result.city.geometry;
-      buffers.push(geometry.origins.buffer as ArrayBuffer, geometry.sizes.buffer as ArrayBuffer, geometry.rgba.buffer as ArrayBuffer, geometry.bounds.buffer as ArrayBuffer);
-    }
-    for (const source of event.sources) buffers.push(source.normalizedUtf8.buffer as ArrayBuffer);
-    return new Set(buffers).size === buffers.length ? buffers : undefined;
-  } catch {
-    return undefined;
-  }
+  const publication = validateNodeWorkerEventForPublication(event);
+  return publication.validation.kind === "valid" && publication.validation.event.type === "SUCCESS"
+    ? publication.transfer
+    : undefined;
 }
 
 export function validSuccessTransferList(event: NodeWorkerSuccess, transfer: readonly unknown[]): boolean {

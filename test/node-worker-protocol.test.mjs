@@ -9,10 +9,12 @@ registerHooks({
 });
 
 const { buildCity } = await import("../src/domain/city-model.ts");
-const { MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES, MAX_NORMALIZED_TOTAL_BYTES } = await import("../src/domain/source-admission.ts");
 const {
-  parseNodeWorkerCommand, prepareNodeWorkerSuccessForPublication, successTransferList,
-  validSuccessTransferList, validateNodeWorkerEvent,
+  MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES, MAX_NORMALIZED_TOTAL_BYTES, normalizeSourceText,
+} = await import("../src/domain/source-admission.ts");
+const {
+  parseNodeWorkerCommand, prepareNodeWorkerSuccessForPublication, successTransferList, validSuccessTransferList,
+  validateNodeWorkerEvent, validateNodeWorkerEventForPublication, validateNodeWorkerStructuredCloneEvent,
 } = await import("../src/edge/node/worker-protocol.ts");
 const { publishNodeWorkerEvent } = await import("../src/edge/node/analysis-worker.ts");
 
@@ -21,11 +23,21 @@ const SHA = "a".repeat(40);
 const REPOSITORY = { owner: "owner", repository: "repo", branch: null };
 const encoder = new TextEncoder();
 
+function fixedTransferBytes(source) {
+  const normalized = normalizeSourceText(source, "fixed-transfer");
+  assert.ok(normalized);
+  return normalized.normalizedUtf8;
+}
+
+function receive(value) {
+  return structuredClone(value);
+}
+
 function success(overrides = {}) {
   return {
     type: "SUCCESS", attemptId: ATTEMPT, generation: 7, revision: SHA,
     result: { city: buildCity([{ canonicalPath: "a.ts", S: 1, U: 0, M: 0 }]), notAnalyzedFiles: [] },
-    sources: [{ canonicalPath: "a.ts", normalizedUtf8: new Uint8Array(encoder.encode("const a = 1;\n")) }],
+    sources: [{ canonicalPath: "a.ts", normalizedUtf8: fixedTransferBytes("const a = 1;\n") }],
     ...overrides,
   };
 }
@@ -39,7 +51,7 @@ function failedSourceEnvelope(byteLengths) {
     },
     sources: paths.map((canonicalPath, index) => ({
       canonicalPath,
-      normalizedUtf8: new Uint8Array(byteLengths[index]).fill(120),
+      normalizedUtf8: fixedTransferBytes("x".repeat(byteLengths[index])),
     })),
   });
 }
@@ -51,7 +63,7 @@ function assertSenderAndReceiverAccept(event, label) {
     postMessage(message, transfer) { received = structuredClone(message, { transfer }); },
   }, prepared);
   assert.equal(received.type, "SUCCESS", `${label}: sender`);
-  assert.equal(validateNodeWorkerEvent(received).kind, "valid", `${label}: receiver`);
+  assert.equal(validateNodeWorkerStructuredCloneEvent(received).kind, "valid", `${label}: receiver`);
 }
 
 function assertSenderAndReceiverReject(event, label) {
@@ -59,7 +71,7 @@ function assertSenderAndReceiverReject(event, label) {
   let posted;
   publishNodeWorkerEvent({ postMessage(message) { posted = message; } }, prepared);
   assert.equal(posted.type, "FAILURE", `${label}: sender`);
-  assert.equal(validateNodeWorkerEvent(structuredClone(prepared)).kind, "invalid", `${label}: receiver`);
+  assert.equal(validateNodeWorkerStructuredCloneEvent(receive(prepared)).kind, "invalid", `${label}: receiver`);
 }
 
 function inherited(value) { return Object.assign(Object.create(value), value); }
@@ -115,7 +127,7 @@ test("every Node event variant is exact and failure code/category cross-products
 });
 
 test("success validation enforces city, failure, path-union, source bytes, order, and size contracts", () => {
-  assert.equal(validateNodeWorkerEvent(success()).kind, "valid");
+  assert.equal(validateNodeWorkerStructuredCloneEvent(receive(success())).kind, "valid");
   const mixed = success({
     result: {
       city: buildCity([{ canonicalPath: "a.ts", S: 1, U: 0, M: 0 }]),
@@ -129,13 +141,13 @@ test("success validation enforces city, failure, path-union, source bytes, order
       { canonicalPath: "c.ts", normalizedUtf8: encoder.encode("c") },
     ],
   });
-  assert.equal(validateNodeWorkerEvent(mixed).kind, "valid");
-  assert.equal(validateNodeWorkerEvent({ ...mixed, result: { city: null, notAnalyzedFiles: mixed.result.notAnalyzedFiles } }).kind, "invalid");
+  assert.equal(validateNodeWorkerStructuredCloneEvent(receive(mixed)).kind, "valid");
+  assert.equal(validateNodeWorkerStructuredCloneEvent(receive({ ...mixed, result: { city: null, notAnalyzedFiles: mixed.result.notAnalyzedFiles } })).kind, "invalid");
   const allFailed = success({
     result: { city: null, notAnalyzedFiles: [{ canonicalPath: "a.ts", category: "Syntax could not be analyzed" }] },
     sources: [{ canonicalPath: "a.ts", normalizedUtf8: encoder.encode("a") }],
   });
-  assert.equal(validateNodeWorkerEvent(allFailed).kind, "valid");
+  assert.equal(validateNodeWorkerStructuredCloneEvent(receive(allFailed)).kind, "valid");
 
   const badUtf8 = new Uint8Array([0xff]);
   const partialBacking = new Uint8Array([1, 2]);
@@ -159,7 +171,7 @@ test("success validation enforces city, failure, path-union, source bytes, order
     { canonicalPath: "a.ts", normalizedUtf8: reused }, { canonicalPath: "b.ts", normalizedUtf8: new Uint8Array(reused.buffer) },
   ] }));
   const invalidCity = success(); invalidCity.result.city.geometry.sizes[0] = 999;
-  assert.equal(validateNodeWorkerEvent(invalidCity).mapping, "city");
+  assert.equal(validateNodeWorkerStructuredCloneEvent(receive(invalidCity)).mapping, "city");
 });
 
 test("source envelopes enforce exact count and byte boundaries for sender and receiver without a memory promise", () => {
@@ -191,17 +203,17 @@ test("source association rejects order, duplicate, missing, and extra rows at se
       ],
     },
     sources: [
-      { canonicalPath: "a.ts", normalizedUtf8: encoder.encode("a") },
-      { canonicalPath: "c.ts", normalizedUtf8: encoder.encode("c") },
+      { canonicalPath: "a.ts", normalizedUtf8: fixedTransferBytes("a") },
+      { canonicalPath: "c.ts", normalizedUtf8: fixedTransferBytes("c") },
     ],
   });
   assertSenderAndReceiverReject(success({ ...base, sources: [...base.sources].reverse() }), "out-of-order sources");
   assertSenderAndReceiverReject(success({ ...base, sources: [base.sources[0], {
-    canonicalPath: "a.ts", normalizedUtf8: encoder.encode("duplicate"),
+    canonicalPath: "a.ts", normalizedUtf8: fixedTransferBytes("duplicate"),
   }] }), "duplicate source path");
   assertSenderAndReceiverReject(success({ ...base, sources: [base.sources[0]] }), "missing source path");
   assertSenderAndReceiverReject(success({ ...base, sources: [
-    base.sources[0], { canonicalPath: "b.ts", normalizedUtf8: encoder.encode("extra") }, base.sources[1],
+    base.sources[0], { canonicalPath: "b.ts", normalizedUtf8: fixedTransferBytes("extra") }, base.sources[1],
   ] }), "extra text-failed source path");
   assertSenderAndReceiverAccept(base, "exact source union");
 });
@@ -218,7 +230,7 @@ test("sender validation rejects normalized-away mutations and transfers every ci
   publishNodeWorkerEvent({ postMessage(message, transfer) { clone = structuredClone(message, { transfer }); } }, event);
   assert.equal(event.result.city.geometry.origins.byteLength, 0);
   assert.equal(event.sources[0].normalizedUtf8.byteLength, 0);
-  assert.equal(validateNodeWorkerEvent(clone).kind, "valid");
+  assert.equal(validateNodeWorkerStructuredCloneEvent(clone).kind, "valid");
 
   for (const source of [Buffer.from("x"), new (class extends Uint8Array {})([120])]) {
     let posted;
@@ -226,6 +238,53 @@ test("sender validation rejects normalized-away mutations and transfers every ci
     assert.equal(posted.type, "FAILURE");
     assert.equal(posted.category, "Provider/resolution failure");
   }
+});
+
+test("publication derives transfer membership from the same source validation snapshot", () => {
+  const event = prepareNodeWorkerSuccessForPublication(success());
+  const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+  const original = Object.getOwnPropertyDescriptor(typedArrayPrototype, "some");
+  assert.ok(original && "value" in original);
+  let validationPasses = 0;
+  Object.defineProperty(typedArrayPrototype, "some", {
+    ...original,
+    value(...arguments_) {
+      validationPasses += 1;
+      return Reflect.apply(original.value, this, arguments_);
+    },
+  });
+  try {
+    publishNodeWorkerEvent({ postMessage(_message, transfer) { assert.equal(transfer.length, 5); } }, event);
+    assert.equal(validationPasses, 1);
+  } finally {
+    Object.defineProperty(typedArrayPrototype, "some", original);
+  }
+});
+
+test("publication preparation rejects own view properties and non-pristine byte identities", () => {
+  const ownViewMutations = [];
+  for (const descriptor of [
+    { value: true, enumerable: true },
+    { value: true, enumerable: false },
+    { get: () => true, enumerable: true },
+  ]) {
+    const bytes = encoder.encode("x");
+    Object.defineProperty(bytes, "extra", { configurable: true, ...descriptor });
+    ownViewMutations.push(bytes);
+  }
+  const symbol = encoder.encode("x");
+  symbol[Symbol("extra")] = true;
+  ownViewMutations.push(symbol, Buffer.from("x"), new (class extends Uint8Array {})([120]), new Proxy(encoder.encode("x"), {}));
+
+  for (const normalizedUtf8 of ownViewMutations) {
+    const event = success({ sources: [{ canonicalPath: "a.ts", normalizedUtf8 }] });
+    assert.throws(() => prepareNodeWorkerSuccessForPublication(event), /source bytes are invalid/u);
+    assert.equal(validateNodeWorkerEvent(event).kind, "invalid");
+  }
+
+  const pristine = success();
+  assert.equal(prepareNodeWorkerSuccessForPublication(pristine), pristine);
+  assert.equal(validateNodeWorkerEventForPublication(pristine).validation.kind, "valid");
 });
 
 test("structured cloning can normalize sender identity and backing-buffer properties", () => {
@@ -243,10 +302,10 @@ test("structured cloning can normalize sender identity and backing-buffer proper
 
   for (const normalizedUtf8 of normalizedSenders) {
     const sender = success({ sources: [{ canonicalPath: "a.ts", normalizedUtf8 }] });
-    assert.equal(validateNodeWorkerEvent(sender).kind, "invalid", "worker-side value is rejected");
-    const clone = structuredClone(sender);
+    assert.equal(validateNodeWorkerEventForPublication(sender).validation.kind, "invalid", "worker-side value is rejected");
+    const clone = receive(sender);
     assert.equal(Object.getPrototypeOf(clone.sources[0].normalizedUtf8), Uint8Array.prototype);
     assert.equal(Reflect.ownKeys(clone.sources[0].normalizedUtf8.buffer).length, 0);
-    assert.equal(validateNodeWorkerEvent(clone).kind, "valid", "receiver can validate only the observable clone");
+    assert.equal(validateNodeWorkerStructuredCloneEvent(clone).kind, "valid", "receiver can validate only the observable clone");
   }
 });

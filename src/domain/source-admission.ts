@@ -41,6 +41,8 @@ const PATH_CONTROL = /\p{Cc}/u;
 const DRIVE_PATH = /^[A-Za-z]:/;
 const textEncoder = new TextEncoder();
 const fixedExcludedSegments = new Set<string>(FIXED_EXCLUDED_SEGMENTS);
+const fixedTransferNormalizedBytes = new WeakSet<Uint8Array>();
+const fixedTransferNormalizedBuffers = new WeakSet<ArrayBuffer>();
 
 type ValidatedEntry = Readonly<{
   canonicalPath: string;
@@ -209,11 +211,42 @@ export type NormalizedSourceText = Readonly<{
   normalizedUtf8: Uint8Array;
 }>;
 
-export function normalizeSourceText(decodedSource: string): NormalizedSourceText | undefined {
+export type NormalizedSourceByteOwnership = "mutable" | "fixed-transfer";
+
+export function isFixedTransferNormalizedUtf8(value: unknown): value is Uint8Array {
+  try {
+    if (typeof value !== "object" || value === null || !ArrayBuffer.isView(value)
+      || Object.getPrototypeOf(value) !== Uint8Array.prototype) return false;
+    const bytes = value as Uint8Array;
+    const buffer = bytes.buffer as ArrayBuffer;
+    return Object.getPrototypeOf(buffer) === ArrayBuffer.prototype
+      && bytes.byteOffset === 0
+      && bytes.byteLength === buffer.byteLength
+      && (buffer as ArrayBuffer & { resizable?: boolean }).resizable !== true
+      && fixedTransferNormalizedBytes.has(bytes)
+      && fixedTransferNormalizedBuffers.has(buffer)
+      && !Object.isExtensible(bytes)
+      && !Object.isExtensible(buffer);
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeSourceText(
+  decodedSource: string,
+  ownership: NormalizedSourceByteOwnership = "mutable",
+): NormalizedSourceText | undefined {
   let normalizedSource = decodedSource.startsWith("\uFEFF") ? decodedSource.slice(1) : decodedSource;
   if (normalizedSource.includes("\0")) return undefined;
   normalizedSource = normalizedSource.replace(/\r\n?/g, "\n");
   const normalizedUtf8 = new Uint8Array(textEncoder.encode(normalizedSource));
+  if (ownership === "fixed-transfer") {
+    const buffer = normalizedUtf8.buffer as ArrayBuffer;
+    Object.preventExtensions(buffer);
+    Object.preventExtensions(normalizedUtf8);
+    fixedTransferNormalizedBuffers.add(buffer);
+    fixedTransferNormalizedBytes.add(normalizedUtf8);
+  }
   return { normalizedSource, normalizedUtf8 };
 }
 

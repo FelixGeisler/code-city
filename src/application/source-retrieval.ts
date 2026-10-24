@@ -7,6 +7,7 @@ import {
   normalizeSourceText,
   prepareSourceInventory,
   type AdmittedModule,
+  type NormalizedSourceByteOwnership,
   type AdmissionCode,
   type ProjectedTreeEntry,
   type SourceCandidate,
@@ -130,6 +131,7 @@ export async function acquireProjectSources(
   gateway: ImmutableRawSourceGateway,
   observe: (ownership: RetrievalOwnership) => void = () => {},
   additionalExclusions: readonly string[] = Object.freeze([]),
+  normalizedByteOwnership: NormalizedSourceByteOwnership = "mutable",
 ): Promise<ProjectSourceAcquisitionResult> {
   if (!validObjectId(selected)) return providerFailure();
   if (signal.aborted) return { kind: "cancelled" };
@@ -184,7 +186,7 @@ export async function acquireProjectSources(
         notAnalyzedFiles.push({ canonicalPath: candidate.canonicalPath, category: "Source text is not supported" });
         continue;
       }
-      const normalized = normalizeSourceText(decodedSource);
+      const normalized = normalizeSourceText(decodedSource, normalizedByteOwnership);
       if (!normalized) {
         notAnalyzedFiles.push({ canonicalPath: candidate.canonicalPath, category: "Source text is not supported" });
         continue;
