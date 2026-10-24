@@ -61,6 +61,21 @@ inspection alignment, deterministic presentation projection, and safe values.
 Only that validated, source-free city can reach semantic publication and the
 presenter.
 
+== Inactive standalone perimeter
+
+The isolated `src/edge/node/` graph contains four repository-internal building
+blocks: exact operator-configuration parsing, version-1 fixture-manifest and
+public-byte validation, a bounded body-reader primitive, and native `node:http`
+ingress/response handling. The perimeter preloads only declared public fixture
+bytes, derives one canonical origin after binding, and exposes no package entry
+or configurable handler/plugin surface. Its fixed reserved paths have no
+production handlers, so they create no session, attempt, provider, or worker
+state.
+
+This graph is mandatory in CI through `npm run typecheck:node`, but it is not
+reachable from the active Vite application or current `npm start` package
+server.
+
 == Accepted target boundary
 
 The target replaces the worker's authoritative acquisition and analysis role

@@ -15,7 +15,9 @@ const files = {
   architectureNav: path.join(architectureRoot, "nav.adoc"),
   decisions: path.join(architectureRoot, "pages", "09-architecture-decisions.adoc"),
   constraints: path.join(architectureRoot, "pages", "02-architecture-constraints.adoc"),
+  buildingBlocks: path.join(architectureRoot, "pages", "05-building-block-view.adoc"),
   runtime: path.join(architectureRoot, "pages", "06-runtime-view.adoc"),
+  deployment: path.join(architectureRoot, "pages", "07-deployment-view.adoc"),
   policy: path.join(requirementsRoot, "pages", "standalone-m5-operating-policy.adoc"),
   requirementsNav: path.join(requirementsRoot, "nav.adoc"),
   product: path.join(requirementsRoot, "pages", "index.adoc"),
@@ -114,11 +116,13 @@ test("the accepted standalone policy is authoritative, complete, and linked", as
 });
 
 test("arc42 records structure without duplicating the authoritative policy", async () => {
-  const [constraints, runtime] = await Promise.all([
+  const [constraints, buildingBlocks, runtime, deployment] = await Promise.all([
     readFile(files.constraints, "utf8"),
+    readFile(files.buildingBlocks, "utf8"),
     readFile(files.runtime, "utf8"),
+    readFile(files.deployment, "utf8"),
   ]);
-  const architecture = compact(`${constraints}\n${runtime}`);
+  const architecture = compact(`${constraints}\n${buildingBlocks}\n${runtime}\n${deployment}`);
 
   for (const fact of [
     "package-supported Node.js runtime",
@@ -132,8 +136,12 @@ test("arc42 records structure without duplicating the authoritative policy", asy
     assert.match(architecture, new RegExp(fact.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"), fact);
   }
   assert.match(architecture, /loopback-first[\s\S]*trusted-LAN/u);
-  assert.match(architecture, /not implemented or deployed[\s\S]*no\s+Raspberry Pi performance, concurrency, memory, or deployment qualification/u);
-  assert.match(runtime, /Detailed request and event shapes, lifecycle states, session-loss detection,/u);
+  assert.match(architecture, /implemented as inactive[\s\S]*not implemented[\s\S]*no\s+Raspberry Pi performance, concurrency, memory, or deployment qualification/u);
+  assert.match(compact(runtime), /inactive perimeter validates all operator values and supplied manifest bytes before listening/u);
+  assert.match(runtime, /Session and event payloads, lifecycle states, session-loss detection,/u);
+  assert.match(compact(buildingBlocks), /isolated `src\/edge\/node\/` graph contains four repository-internal building blocks/u);
+  assert.match(compact(deployment), /inactive native-HTTP modules[\s\S]*neither included in the Pages artifact nor selected by `npm start`/u);
+  assert.match(compact(deployment), /type-checks the isolated Node graph[\s\S]*unchanged `npm run verify`/u);
   assert.doesNotMatch(architecture, /\*Temporary custody:|\*Unsaved lifetime:|Rejected for M5:/u);
 });
 
@@ -145,9 +153,10 @@ test("requirements distinguish current browser, standalone M5, and whole-core Sa
   const compactProduct = compact(product);
   const compactCity = compact(city);
 
-  assert.match(compactProduct, /standalone M5 slice is accepted but not implemented/u);
-  assert.match(compactProduct, /currently implemented product is a static browser application with no server runtime or persistence/u);
-  assert.match(compactProduct, /Neither source claims deployment or Raspberry Pi qualification/u);
+  assert.match(compactProduct, /standalone M5 slice is accepted and implementation has begun/u);
+  assert.match(compactProduct, /inactive native-HTTP perimeter/u);
+  assert.match(compactProduct, /active product remains a static browser application with no active server runtime or persistence/u);
+  assert.match(compactProduct, /not wired to `npm start`, packaged, deployed, or used by the browser product/u);
   assert.match(compactCity, /Save and reopen remain approved whole-core outcomes/u);
   assert.match(compactCity, /Standalone M5 retains temporary source and results only in process memory and discards them on explicit discard, replacement, detected session loss, or graceful shutdown/u);
   assert.match(compactCity, /Save and reopen are deferred from M5, not revoked/u);

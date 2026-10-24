@@ -263,10 +263,10 @@ test("the declared byte-fidelity attributes remain exact and effective", async (
   }
 });
 
-test("exactly three strict no-emit TypeScript configs isolate main and worker libraries", async () => {
+test("exactly four strict no-emit TypeScript configs isolate main, worker, and inactive Node libraries", async () => {
   const rootEntries = await readdir(projectRoot);
   const configFiles = rootEntries.filter((name) => /^tsconfig(?:\.[^.]+)?\.json$/.test(name)).sort();
-  assert.deepEqual(configFiles, ["tsconfig.base.json", "tsconfig.main.json", "tsconfig.worker.json"]);
+  assert.deepEqual(configFiles, ["tsconfig.base.json", "tsconfig.main.json", "tsconfig.node.json", "tsconfig.worker.json"]);
 
   const base = await readJson("tsconfig.base.json");
   assert.equal(base.compilerOptions.strict, true);
@@ -293,6 +293,22 @@ test("exactly three strict no-emit TypeScript configs isolate main and worker li
   assert(!worker.compilerOptions.lib.includes("dom"));
   assert.deepEqual(worker.compilerOptions.types, []);
   assert.deepEqual(worker.files.map((file) => file.replaceAll("\\", "/")), ["./src/edge/processing-worker.ts"]);
+
+  const node = showTypeScriptConfig("tsconfig.node.json");
+  assert.equal(node.compilerOptions.strict, true);
+  assert.equal(node.compilerOptions.noEmit, true);
+  assert.equal(node.compilerOptions.isolatedModules, true);
+  assert.deepEqual(node.compilerOptions.lib, ["es2024"]);
+  assert.deepEqual(node.compilerOptions.types, ["node"]);
+  assert(!node.compilerOptions.lib.includes("dom"));
+  assert(!node.compilerOptions.lib.includes("webworker"));
+  assert.deepEqual(node.files.map((file) => file.replaceAll("\\", "/")), [
+    "./src/edge/node/body-reader.ts",
+    "./src/edge/node/config.ts",
+    "./src/edge/node/fixture-manifest.ts",
+    "./src/edge/node/http-perimeter.ts",
+    "./src/edge/node/wire-observer.ts",
+  ]);
 });
 
 test("the Vite application is strictly layered, policy-closed, and has one static module worker", async () => {
@@ -322,6 +338,11 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/github-revision-gateway.ts",
     "edge/github-source-gateway.ts",
     "edge/main.ts",
+    "edge/node/body-reader.ts",
+    "edge/node/config.ts",
+    "edge/node/fixture-manifest.ts",
+    "edge/node/http-perimeter.ts",
+    "edge/node/wire-observer.ts",
     "edge/processing-worker.ts",
     "edge/semantic-publication.ts",
     "edge/shell.css",
@@ -716,6 +737,7 @@ test("commands preserve the canonical package audit sequence and CI separates re
     "test:package": "node tools/audit-package.mjs",
     "docs:build": "antora antora-playbook.yml",
     verify: "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build",
+    "typecheck:node": "tsc -p tsconfig.node.json",
   });
 
   const ci = await readText(".github/workflows/ci.yml");
@@ -728,9 +750,11 @@ test("commands preserve the canonical package audit sequence and CI separates re
     const install = workflow.indexOf("npm ci --ignore-scripts");
     const closure = workflow.indexOf("npm ls --all");
     const audit = workflow.indexOf("npm audit --audit-level=high");
+    const nodeTypecheck = workflow.indexOf("npm run typecheck:node");
     const verify = workflow.indexOf("npm run verify");
-    assert(install >= 0 && install < closure && closure < audit && audit < verify);
+    assert(install >= 0 && install < closure && closure < audit && audit < nodeTypecheck && nodeTypecheck < verify);
     assert.equal((workflow.match(/npm audit --audit-level=high/gu) ?? []).length, 1);
+    assert.equal((workflow.match(/npm run typecheck:node/gu) ?? []).length, 1);
     assert.doesNotMatch(workflow, /check-security-audit|npm audit[^\n]*(?:--omit=dev|--production|\|\||continue-on-error)/u);
   }
   assert.doesNotMatch(ci, /upload-artifact|deploy-pages|configure-pages|environment:|pages:\s*write|id-token:\s*write|contents:\s*write/i);
