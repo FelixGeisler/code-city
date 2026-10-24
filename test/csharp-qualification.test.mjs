@@ -528,7 +528,7 @@ test("production admission selects the exact qualified C# package asset without 
     assert.equal(selectGrammarFamily(pathValue), "csharp", pathValue);
   }
   const pins = {
-    "package.json": "de508b142a6067744e6f09ce21846c2d4e612d24b08b7fc77836bab3f34f7321",
+    "package.json": "b25546a2df560e0c3b9e9bd924015945697c16b12e5e00673716a419e4081977",
     "package-lock.json": "a5c687fa928640528b067f51f8720745ee3f4a9fff29201d04c9c0e78d32e09f",
     "src/domain/base-metrics.ts": "72503f7b527a5fc443edf5986ee447f365827ecccad7eeacabcaaf3684d9286a",
   };
