@@ -45,6 +45,7 @@ export async function inspectDependencyClosure(rootDirectory) {
   const expectedDevDependencies = {
     "@antora/cli": "3.2.0",
     "@antora/site-generator": "3.2.0",
+    "@types/node": "24.19.2",
     typescript: "7.0.2",
     vite: "8.3.4",
   };
@@ -133,6 +134,18 @@ export async function inspectDependencyClosure(rootDirectory) {
       integrity: "sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==",
       license: "BSD-3-Clause",
     },
+    "@types/node": {
+      version: "24.19.2",
+      resolved: "https://registry.npmjs.org/@types/node/-/node-24.19.2.tgz",
+      integrity: "sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==",
+      license: "MIT",
+    },
+    "undici-types": {
+      version: "7.24.6",
+      resolved: "https://registry.npmjs.org/undici-types/-/undici-types-7.24.6.tgz",
+      integrity: "sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==",
+      license: "MIT",
+    },
   };
   for (const [name, expected] of Object.entries(expectedRenewedRecords)) {
     const record = lock.packages[`node_modules/${name}`];
@@ -150,7 +163,23 @@ export async function inspectDependencyClosure(rootDirectory) {
     "handlebars transitive declarations differ from 4.7.10",
   );
   invariant(!lock.packages["node_modules/source-map-js"].dependencies, "source-map-js 1.2.2 unexpectedly adds a dependency");
-  invariant(registryPackageCount === 206, "The lockfile package inventory changed");
+  const nodeTypes = lock.packages["node_modules/@types/node"];
+  invariant(
+    nodeTypes.dev === true
+      && JSON.stringify(nodeTypes.dependencies) === JSON.stringify({ "undici-types": ">=7.24.0 <7.24.7" })
+      && !nodeTypes.optionalDependencies
+      && !nodeTypes.peerDependencies,
+    "@types/node development closure differs from accepted evidence",
+  );
+  const undiciTypes = lock.packages["node_modules/undici-types"];
+  invariant(
+    undiciTypes.dev === true
+      && !undiciTypes.dependencies
+      && !undiciTypes.optionalDependencies
+      && !undiciTypes.peerDependencies,
+    "undici-types development closure differs from accepted evidence",
+  );
+  invariant(registryPackageCount === 208, "The lockfile package inventory changed");
 
   const parserRuntime = lock.packages["node_modules/web-tree-sitter"];
   invariant(
