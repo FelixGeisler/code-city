@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import { MessageChannel, Worker } from "node:worker_threads";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -66,6 +66,8 @@ registerHooks({ resolve(specifier, context, nextResolve) {
 const { runNodeAnalysisWorker } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/edge/node/analysis-worker.js")).href)});
 const { createSyntaxObservationWriter } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/domain/base-metrics.js")).href)});
 const SHA = "a".repeat(40);
+workerData.control?.unref();
+const entered = (phase) => workerData.control?.postMessage({ phase });
 const regular = (path, sha = SHA) => ({ path, mode: "100644", type: "blob", ...(sha === undefined ? {} : { sha }) });
 const inventory = {
   success: [["a.ts", "const a = 1;\\n"]],
@@ -77,7 +79,10 @@ const inventory = {
 const bytes = new TextEncoder();
 runNodeAnalysisWorker(parentPort, {
   async revisionGateway(_repository, signal) {
-    if (workerData.scenario === "providerWait") await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    if (workerData.scenario === "providerWait") {
+      entered("providerWait");
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    }
     if (signal.aborted) return { kind: "empty" };
     if (workerData.scenario === "resolutionRepository") return { kind: "http", status: 404 };
     if (workerData.scenario === "resolutionRevision") return { kind: "empty" };
@@ -107,7 +112,7 @@ runNodeAnalysisWorker(parentPort, {
     async project(_family, source) {
       if (source === "syntax") throw new Error("syntax");
       if (source === "metrics") return { observations: { [Symbol.iterator]() { throw new Error("metrics"); } }, release() {} };
-      if (source === "busy") for (;;) {}
+      if (source === "busy") { entered("parserBusy"); for (;;) {} }
       if (workerData.scenario === "metricFailure") return { observations: createSyntaxObservationWriter().finish(), release() { throw new Error("release"); } };
       return { observations: createSyntaxObservationWriter().finish(), release() {} };
     },
@@ -121,6 +126,7 @@ import { parentPort, workerData } from "node:worker_threads";
 import { registerHooks } from "node:module";
 registerHooks({ resolve(specifier, context, nextResolve) { return nextResolve(/^\\.\\.?\\//u.test(specifier) && !/\\.[a-z]+$/iu.test(specifier) ? specifier + ".js" : specifier, context); } });
 const { publishNodeWorkerEvent } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/edge/node/analysis-worker.js")).href)});
+const { prepareNodeWorkerSuccessForPublication } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/edge/node/worker-protocol.js")).href)});
 const { buildCity } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/domain/city-model.js")).href)});
 const SHA = "a".repeat(40);
 const encoder = new TextEncoder();
@@ -167,7 +173,7 @@ parentPort.on("message", (command) => {
       event.result.city.geometry.rgba.buffer, event.result.city.geometry.bounds.buffer,
       event.sources[0].normalizedUtf8.buffer,
     ];
-    publishNodeWorkerEvent(parentPort, event);
+    publishNodeWorkerEvent(parentPort, prepareNodeWorkerSuccessForPublication(event));
     parentPort.postMessage({ type: "DETACHED", distinct: new Set(before).size, byteLengths: before.map((buffer) => buffer.byteLength) });
   } else if (workerData.mode.startsWith("publish-")) {
     publishNodeWorkerEvent(parentPort, event);
@@ -186,6 +192,30 @@ function start(bundle, scenario, release = () => {}) {
     repository: REPOSITORY, generation: 3, workerUrl: bundle,
     workerFactory: (url) => new Worker(url, { workerData: { scenario, mode: scenario } }), release,
   });
+}
+
+function startAtBarrier(bundle, scenario, release = () => {}) {
+  const { port1, port2 } = new MessageChannel();
+  const reached = new Promise((resolve, reject) => {
+    port1.once("message", (message) => {
+      try {
+        assert.deepEqual(message, { phase: scenario });
+        resolve();
+      } catch (error) {
+        reject(error);
+      } finally {
+        port1.close();
+      }
+    });
+  });
+  const attempt = startNodeWorkerAttempt({
+    repository: REPOSITORY, generation: 3, workerUrl: bundle,
+    workerFactory: (url) => new Worker(url, {
+      workerData: { scenario, mode: scenario, control: port2 }, transferList: [port2],
+    }),
+    release,
+  });
+  return { attempt, reached };
 }
 
 async function collectWorkerMessages(bundle, mode) {
@@ -312,8 +342,8 @@ test("provider cancellation and parser-time termination join and release exactly
   const { analysis } = await compiledWorkerFixture(t);
   for (const scenario of ["providerWait", "parserBusy"]) {
     let releases = 0;
-    const attempt = start(analysis, scenario, () => { releases += 1; });
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    const { attempt, reached } = startAtBarrier(analysis, scenario, () => { releases += 1; });
+    await reached;
     await attempt.cancel();
     assert.deepEqual(await attempt.result, { type: "CANCELLED" });
     await attempt.cancel();
@@ -323,7 +353,8 @@ test("provider cancellation and parser-time termination join and release exactly
 
 test("a busy analysis worker leaves the parent timer and a small native HTTP response responsive", async (t) => {
   const { analysis } = await compiledWorkerFixture(t);
-  const attempt = start(analysis, "parserBusy");
+  const { attempt, reached } = startAtBarrier(analysis, "parserBusy");
+  await reached;
   const server = http.createServer((_request, response) => response.end("ok"));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());

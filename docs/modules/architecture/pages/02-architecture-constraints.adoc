@@ -5,8 +5,9 @@
 * The active application is a static TypeScript package built with Vite and
   runs in a browser main context plus one module worker. It has no active
   application server or persistence runtime. An inactive shared continuation
-  core and an isolated Node.js type graph containing the native-HTTP perimeter
-  are not connected to the Vite entry or package.
+  core, its dedicated Node.js worker boundary and closed internal worker
+  protocol, and the native-HTTP perimeter are not connected to the Vite entry
+  or package.
 * The current provider is anonymous public GitHub. The browser resolves the
   explicit branch head, or the default-branch head when no branch was supplied,
   and retrieves source through validated immutable commit and root tree
@@ -62,10 +63,12 @@ accepted constraints, not current capabilities.
 
 == Unresolved design
 
-For standalone M5, detailed request and event protocols, a public API,
-authentication, Internet exposure, deployment topology, calibrated capacity
-values, and device qualification remain unselected. The accepted design does not authorize private
-repositories or FLOW/ADO integration.
+For standalone M5, the later HTTP/session/browser request and event protocols,
+a public API, authentication, Internet exposure, deployment topology,
+calibrated capacity values, and device qualification remain unselected. The
+inactive Node worker's internal command/event protocol is implemented. The
+accepted design does not authorize private repositories or FLOW/ADO
+integration.
 
 For the whole-core target, Save persistence technology, portable exchange
 representation, format and I/O, deletion, backup, and recovery remain

@@ -9,8 +9,10 @@ registerHooks({
 });
 
 const { buildCity } = await import("../src/domain/city-model.ts");
+const { MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES, MAX_NORMALIZED_TOTAL_BYTES } = await import("../src/domain/source-admission.ts");
 const {
-  parseNodeWorkerCommand, successTransferList, validSuccessTransferList, validateNodeWorkerEvent,
+  parseNodeWorkerCommand, prepareNodeWorkerSuccessForPublication, successTransferList,
+  validSuccessTransferList, validateNodeWorkerEvent,
 } = await import("../src/edge/node/worker-protocol.ts");
 const { publishNodeWorkerEvent } = await import("../src/edge/node/analysis-worker.ts");
 
@@ -26,6 +28,38 @@ function success(overrides = {}) {
     sources: [{ canonicalPath: "a.ts", normalizedUtf8: new Uint8Array(encoder.encode("const a = 1;\n")) }],
     ...overrides,
   };
+}
+
+function failedSourceEnvelope(byteLengths) {
+  const paths = byteLengths.map((_, index) => `file-${String(index).padStart(4, "0")}.ts`);
+  return success({
+    result: {
+      city: null,
+      notAnalyzedFiles: paths.map((canonicalPath) => ({ canonicalPath, category: "Syntax could not be analyzed" })),
+    },
+    sources: paths.map((canonicalPath, index) => ({
+      canonicalPath,
+      normalizedUtf8: new Uint8Array(byteLengths[index]).fill(120),
+    })),
+  });
+}
+
+function assertSenderAndReceiverAccept(event, label) {
+  const prepared = prepareNodeWorkerSuccessForPublication(event);
+  let received;
+  publishNodeWorkerEvent({
+    postMessage(message, transfer) { received = structuredClone(message, { transfer }); },
+  }, prepared);
+  assert.equal(received.type, "SUCCESS", `${label}: sender`);
+  assert.equal(validateNodeWorkerEvent(received).kind, "valid", `${label}: receiver`);
+}
+
+function assertSenderAndReceiverReject(event, label) {
+  const prepared = prepareNodeWorkerSuccessForPublication(event);
+  let posted;
+  publishNodeWorkerEvent({ postMessage(message) { posted = message; } }, prepared);
+  assert.equal(posted.type, "FAILURE", `${label}: sender`);
+  assert.equal(validateNodeWorkerEvent(structuredClone(prepared)).kind, "invalid", `${label}: receiver`);
 }
 
 function inherited(value) { return Object.assign(Object.create(value), value); }
@@ -110,10 +144,9 @@ test("success validation enforces city, failure, path-union, source bytes, order
   const subclass = new (class extends Uint8Array {})(encoder.encode("x"));
   const detached = encoder.encode("x"); structuredClone(detached.buffer, { transfer: [detached.buffer] });
   const buffer = Buffer.from("x");
-  const extraBytes = encoder.encode("x"); extraBytes.extra = true;
   const accessorRow = { canonicalPath: "a.ts", normalizedUtf8: encoder.encode("x") };
   Object.defineProperty(accessorRow, "canonicalPath", { enumerable: true, get: () => "a.ts" });
-  const candidates = [badUtf8, partial, subclass, detached, buffer, extraBytes, new Proxy(encoder.encode("x"), {})];
+  const candidates = [badUtf8, partial, subclass, detached, buffer, new Proxy(encoder.encode("x"), {})];
   if (typeof SharedArrayBuffer === "function") candidates.push(new Uint8Array(new SharedArrayBuffer(1)));
   if (ArrayBuffer.prototype.resize) candidates.push(new Uint8Array(new ArrayBuffer(1, { maxByteLength: 2 })));
   for (const normalizedUtf8 of candidates) assertProviderInvalid(success({ sources: [{ canonicalPath: "a.ts", normalizedUtf8 }] }));
@@ -129,8 +162,52 @@ test("success validation enforces city, failure, path-union, source bytes, order
   assert.equal(validateNodeWorkerEvent(invalidCity).mapping, "city");
 });
 
+test("source envelopes enforce exact count and byte boundaries for sender and receiver without a memory promise", () => {
+  assertSenderAndReceiverAccept(failedSourceEnvelope(Array(MAX_ADMITTED_MODULES).fill(0)), "maximum source count");
+  assertSenderAndReceiverReject(failedSourceEnvelope(Array(MAX_ADMITTED_MODULES + 1).fill(0)), "source count overflow");
+
+  assertSenderAndReceiverAccept(failedSourceEnvelope([MAX_NORMALIZED_MODULE_BYTES]), "maximum row bytes");
+  assertSenderAndReceiverReject(failedSourceEnvelope([MAX_NORMALIZED_MODULE_BYTES + 1]), "row byte overflow");
+
+  const fullRows = MAX_NORMALIZED_TOTAL_BYTES / MAX_NORMALIZED_MODULE_BYTES;
+  assert.equal(Number.isInteger(fullRows), true);
+  assertSenderAndReceiverAccept(
+    failedSourceEnvelope(Array(fullRows).fill(MAX_NORMALIZED_MODULE_BYTES)),
+    "maximum total bytes",
+  );
+  assertSenderAndReceiverReject(
+    failedSourceEnvelope([...Array(fullRows).fill(MAX_NORMALIZED_MODULE_BYTES), 1]),
+    "total byte overflow",
+  );
+});
+
+test("source association rejects order, duplicate, missing, and extra rows at sender and receiver", () => {
+  const base = success({
+    result: {
+      city: buildCity([{ canonicalPath: "a.ts", S: 1, U: 0, M: 0 }]),
+      notAnalyzedFiles: [
+        { canonicalPath: "b.ts", category: "Source text is not supported" },
+        { canonicalPath: "c.ts", category: "Syntax could not be analyzed" },
+      ],
+    },
+    sources: [
+      { canonicalPath: "a.ts", normalizedUtf8: encoder.encode("a") },
+      { canonicalPath: "c.ts", normalizedUtf8: encoder.encode("c") },
+    ],
+  });
+  assertSenderAndReceiverReject(success({ ...base, sources: [...base.sources].reverse() }), "out-of-order sources");
+  assertSenderAndReceiverReject(success({ ...base, sources: [base.sources[0], {
+    canonicalPath: "a.ts", normalizedUtf8: encoder.encode("duplicate"),
+  }] }), "duplicate source path");
+  assertSenderAndReceiverReject(success({ ...base, sources: [base.sources[0]] }), "missing source path");
+  assertSenderAndReceiverReject(success({ ...base, sources: [
+    base.sources[0], { canonicalPath: "b.ts", normalizedUtf8: encoder.encode("extra") }, base.sources[1],
+  ] }), "extra text-failed source path");
+  assertSenderAndReceiverAccept(base, "exact source union");
+});
+
 test("sender validation rejects normalized-away mutations and transfers every city/source buffer once", () => {
-  const event = success();
+  const event = prepareNodeWorkerSuccessForPublication(success());
   const expected = successTransferList(event);
   assert.equal(expected.length, 5);
   assert.equal(validSuccessTransferList(event, expected), true);

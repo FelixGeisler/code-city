@@ -75,6 +75,25 @@ async function remainsPending(promise, milliseconds = 10) {
   ]);
 }
 
+function workerMessageBarrier(predicate) {
+  let worker;
+  let resolveReached;
+  const reached = new Promise((resolve) => { resolveReached = resolve; });
+  return {
+    capture(created) {
+      worker = created;
+      const listener = (value) => {
+        if (!predicate(value)) return;
+        created.off("message", listener);
+        resolveReached(value);
+      };
+      created.on("message", listener);
+    },
+    reached,
+    worker: () => worker,
+  };
+}
+
 test("terminal values remain provisional until a joined normal exit", async (t) => {
   const url = await faultWorker(t);
   const attempt = run(url, "normal-delay");
@@ -170,13 +189,15 @@ test("invalid start, constructor, listener, and post failures release exactly on
   assert.equal((await listener.result).category, "Provider/resolution failure");
   assertNoAttemptListeners(laterListenerWorker);
 
+  let resolveFirstListenerJoin;
+  const firstListenerJoin = new Promise((resolve) => { resolveFirstListenerJoin = resolve; });
   class ExitListenerFailureWorker extends EventEmitter {
     on(name, listener) {
       if (name === "exit") throw new Error("first listener");
       return super.on(name, listener);
     }
     postMessage() { throw new Error("must not post"); }
-    terminate() { return Promise.resolve(1); }
+    terminate() { return firstListenerJoin; }
   }
   let firstListenerReleases = 0;
   const firstListenerWorker = new ExitListenerFailureWorker();
@@ -184,6 +205,9 @@ test("invalid start, constructor, listener, and post failures release exactly on
     repository: REPOSITORY, generation: 4, workerFactory: () => firstListenerWorker,
     release() { firstListenerReleases += 1; },
   });
+  assert.equal(await remainsPending(firstListener.result), true);
+  assert.equal(firstListenerReleases, 0);
+  resolveFirstListenerJoin(1);
   assert.deepEqual(await firstListener.result, {
     type: "FAILURE", attemptId: firstListener.attemptId, generation: 4, category: "Provider/resolution failure",
   });
@@ -205,28 +229,28 @@ test("messageerror is terminally invalid and waits for the registered exit join"
 test("cancellation clears provisional source/result ownership, removes listeners, and releases once", async (t) => {
   const url = await faultWorker(t);
   let releases = 0;
-  let worker;
-  const attempt = run(url, "success-cancel", () => { releases += 1; }, (created) => { worker = created; });
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  const barrier = workerMessageBarrier((value) => value?.type === "SUCCESS");
+  const attempt = run(url, "success-cancel", () => { releases += 1; }, barrier.capture);
+  await barrier.reached;
   await attempt.cancel();
   assert.deepEqual(await attempt.result, { type: "CANCELLED" });
   await attempt.cancel();
   assert.equal(releases, 1);
-  assertNoAttemptListeners(worker);
+  assertNoAttemptListeners(barrier.worker());
 });
 
 test("replacement cancels and joins the old worker; generated attempt identities are fresh and canonical", async (t) => {
   const url = await faultWorker(t);
   let releases = 0;
-  let firstWorker;
-  const first = run(url, "normal-delay", () => { releases += 1; }, (created) => { firstWorker = created; });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  const barrier = workerMessageBarrier((value) => value?.type === "FAILURE");
+  const first = run(url, "normal-delay", () => { releases += 1; }, barrier.capture);
+  await barrier.reached;
   await first.cancel();
   const second = run(url, "normal-delay", () => { releases += 1; });
   assert.notEqual(first.attemptId, second.attemptId);
   assert.match(first.attemptId, /^[A-Za-z0-9_-]{22}$/u);
   assert.deepEqual(await first.result, { type: "CANCELLED" });
-  assertNoAttemptListeners(firstWorker);
+  assertNoAttemptListeners(barrier.worker());
   assert.equal((await second.result).type, "FAILURE");
   assert.equal(releases, 2);
 });

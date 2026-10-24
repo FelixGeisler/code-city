@@ -8,6 +8,7 @@ import { createGithubRawSourceGateway } from "../github-source-gateway";
 import { createNodeTreeSitterAdapter } from "./parser-assets";
 import {
   parseNodeWorkerCommand,
+  prepareNodeWorkerSuccessForPublication,
   successTransferList,
   validateNodeWorkerEvent,
   type NodeWorkerEvent,
@@ -28,7 +29,7 @@ function providerFailure(attemptId: string, generation: number, revision?: strin
 }
 
 export function publishNodeWorkerEvent(port: Pick<MessagePort, "postMessage">, event: NodeWorkerEvent): void {
-  const validation = validateNodeWorkerEvent(event);
+  const validation = validateNodeWorkerEvent(event, "sender");
   if (validation.kind !== "valid") {
     if (validation.attemptId === undefined || validation.generation === undefined) {
       throw new Error("Worker event correlation is invalid");
@@ -108,11 +109,11 @@ export function runNodeAnalysisWorker(port: MessagePort, dependencies: NodeAnaly
           category: analysis.category, code: analysis.code,
         });
       } else {
-        const success: NodeWorkerSuccess = {
+        const success = prepareNodeWorkerSuccessForPublication({
           type: "SUCCESS", attemptId: command.attemptId, generation: command.generation, revision,
           result: { city: analysis.result.city, notAnalyzedFiles: analysis.result.notAnalyzedFiles },
           sources: analysis.result.sources,
-        };
+        } satisfies NodeWorkerSuccess);
         publishNodeWorkerEvent(port, success);
       }
       finish();
