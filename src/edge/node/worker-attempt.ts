@@ -13,7 +13,7 @@ import {
 export type JoinedNodeWorkerTerminal = NodeWorkerFailure | ValidatedNodeWorkerSuccess;
 export type JoinedNodeWorkerResult = JoinedNodeWorkerTerminal | Readonly<{ type: "CANCELLED" }>;
 
-type WorkerLike = Pick<Worker, "on" | "postMessage" | "terminate">;
+type WorkerLike = Pick<Worker, "on" | "off" | "postMessage" | "terminate">;
 export type NodeWorkerFactory = (url: URL) => WorkerLike;
 
 export type NodeWorkerAttempt = Readonly<{
@@ -55,13 +55,8 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
   let invalid = false;
   let cancelled = false;
   let joined = false;
+  let exitListenerRegistered = false;
   let cancelJoin: Promise<void> | undefined;
-
-  const invalidate = (): void => {
-    if (joined || invalid) return;
-    invalid = true;
-    try { void worker?.terminate(); } catch { /* exit remains the join boundary */ }
-  };
 
   const finishWithoutWorker = (): void => {
     release();
@@ -86,17 +81,50 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
     return { attemptId, generation, result, async cancel() {} };
   }
 
-  const onExit = (code: number): void => {
+  function cleanupListeners(): void {
+    const current = worker;
+    if (!current) return;
+    try { current.off("exit", onExit); } catch { /* cleanup is best-effort after the join */ }
+    try { current.off("message", onMessage); } catch { /* cleanup is best-effort after the join */ }
+    try { current.off("messageerror", onMessageError); } catch { /* cleanup is best-effort after the join */ }
+    try { current.off("error", onError); } catch { /* cleanup is best-effort after the join */ }
+  }
+
+  function onExit(code: number): void {
     if (joined) return;
     joined = true;
+    const terminal = provisional;
+    provisional = undefined;
+    const completion: JoinedNodeWorkerResult = cancelled
+      ? { type: "CANCELLED" }
+      : code !== 0 || invalid || !terminal
+        ? providerFailure(attemptId, generation, selectedRevision)
+        : terminal;
+    selectedRevision = undefined;
+    cleanupListeners();
+    worker = undefined;
     release();
-    if (cancelled) resolveResult({ type: "CANCELLED" });
-    else if (code !== 0 || invalid || !provisional) resolveResult(providerFailure(attemptId, generation, selectedRevision));
-    else resolveResult(provisional);
-  };
+    resolveResult(completion);
+  }
 
-  const onMessage = (value: unknown): void => {
-    if (joined || cancelled || invalid || provisional) { invalidate(); return; }
+  function terminateInvalid(): void {
+    if (joined || invalid) return;
+    invalid = true;
+    provisional = undefined;
+    const current = worker;
+    if (!current) { onExit(1); return; }
+    try {
+      const termination = current.terminate();
+      if (!exitListenerRegistered) {
+        void termination.then(onExit, () => onExit(1));
+      }
+    } catch {
+      if (!exitListenerRegistered) onExit(1);
+    }
+  }
+
+  function onMessage(value: unknown): void {
+    if (joined || cancelled || invalid || provisional) { terminateInvalid(); return; }
     const parsed = validateNodeWorkerEvent(value);
     if (parsed.kind !== "valid") {
       if (parsed.mapping === "city" && parsed.attemptId === attemptId && parsed.generation === generation
@@ -107,30 +135,34 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
         };
         return;
       }
-      invalidate();
+      terminateInvalid();
       return;
     }
     const event: ValidatedNodeWorkerEvent = parsed.event;
-    if (event.attemptId !== attemptId || event.generation !== generation) { invalidate(); return; }
+    if (event.attemptId !== attemptId || event.generation !== generation) { terminateInvalid(); return; }
     if (event.type === "REVISION_SELECTED") {
-      if (selectedRevision !== undefined) { invalidate(); return; }
+      if (selectedRevision !== undefined) { terminateInvalid(); return; }
       selectedRevision = event.revision;
       return;
     }
     if ("revision" in event) {
-      if (selectedRevision === undefined || event.revision !== selectedRevision) { invalidate(); return; }
-    } else if (selectedRevision !== undefined) { invalidate(); return; }
+      if (selectedRevision === undefined || event.revision !== selectedRevision) { terminateInvalid(); return; }
+    } else if (selectedRevision !== undefined) { terminateInvalid(); return; }
     provisional = event;
-  };
+  }
+
+  function onMessageError(): void { terminateInvalid(); }
+  function onError(): void { terminateInvalid(); }
 
   try {
     worker.on("exit", onExit);
+    exitListenerRegistered = true;
     worker.on("message", onMessage);
-    worker.on("messageerror", invalidate);
-    worker.on("error", invalidate);
+    worker.on("messageerror", onMessageError);
+    worker.on("error", onError);
     worker.postMessage(startCommand);
   } catch {
-    invalidate();
+    terminateInvalid();
   }
 
   const cancel = (): Promise<void> => {
@@ -138,6 +170,7 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
     cancelJoin = (async () => {
       if (joined) return;
       cancelled = true;
+      provisional = undefined;
       const stop: NodeWorkerCommand = { type: "STOP", attemptId, generation };
       try { worker?.postMessage(stop); } catch { /* termination still owns release */ }
       try { await worker?.terminate(); } catch { /* the registered exit event remains authoritative */ }

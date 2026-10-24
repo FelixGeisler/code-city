@@ -151,11 +151,25 @@ test("sender validation rejects normalized-away mutations and transfers every ci
   }
 });
 
-test("structured cloning can normalize sender identity, so the receiver check does not claim sender observability", () => {
+test("structured cloning can normalize sender identity and backing-buffer properties", () => {
+  const normalizedSenders = [];
   const senderBuffer = Buffer.allocUnsafeSlow(1); senderBuffer[0] = 120;
-  const sender = success({ sources: [{ canonicalPath: "a.ts", normalizedUtf8: senderBuffer }] });
-  assert.equal(validateNodeWorkerEvent(sender).kind, "invalid", "worker-side value is rejected");
-  const clone = structuredClone(sender);
-  assert.equal(Object.getPrototypeOf(clone.sources[0].normalizedUtf8), Uint8Array.prototype);
-  assert.equal(validateNodeWorkerEvent(clone).kind, "valid", "receiver can validate only the observable clone");
+  normalizedSenders.push(senderBuffer, new (class extends Uint8Array {})([120]));
+
+  for (const key of ["extra", Symbol("extra"), "accessor"]) {
+    const bytes = encoder.encode("x");
+    Object.defineProperty(bytes.buffer, key, key === "accessor"
+      ? { configurable: true, enumerable: true, get: () => true }
+      : { configurable: true, enumerable: true, value: true });
+    normalizedSenders.push(bytes);
+  }
+
+  for (const normalizedUtf8 of normalizedSenders) {
+    const sender = success({ sources: [{ canonicalPath: "a.ts", normalizedUtf8 }] });
+    assert.equal(validateNodeWorkerEvent(sender).kind, "invalid", "worker-side value is rejected");
+    const clone = structuredClone(sender);
+    assert.equal(Object.getPrototypeOf(clone.sources[0].normalizedUtf8), Uint8Array.prototype);
+    assert.equal(Reflect.ownKeys(clone.sources[0].normalizedUtf8.buffer).length, 0);
+    assert.equal(validateNodeWorkerEvent(clone).kind, "valid", "receiver can validate only the observable clone");
+  }
 });

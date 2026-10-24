@@ -162,7 +162,7 @@ function plainWholeBytes(value: unknown): Uint8Array | undefined {
     if (Object.getPrototypeOf(bytes.buffer) !== ArrayBuffer.prototype || bytes.byteOffset !== 0
       || bytes.byteLength !== bytes.buffer.byteLength) return undefined;
     const buffer = bytes.buffer as ArrayBuffer & { resizable?: boolean };
-    if (buffer.resizable === true) return undefined;
+    if (buffer.resizable === true || Reflect.ownKeys(Object.getOwnPropertyDescriptors(buffer)).length !== 0) return undefined;
     buffer.slice(0, 0);
     const keys = Reflect.ownKeys(bytes);
     if (keys.length !== bytes.length) return undefined;

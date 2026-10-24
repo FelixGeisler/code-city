@@ -89,12 +89,14 @@ closed command/event protocol, transfer validation, and a parent-owned joined
 lifecycle. The perimeter preloads only declared public fixture
 bytes, derives one canonical origin after binding, and exposes no package entry
 or configurable handler/plugin surface. Its fixed reserved paths have no
-production handlers, so they create no session, attempt, provider, or worker
-state.
+production handlers, so the HTTP side creates no session, attempt, provider,
+or worker state and does not invoke the inactive application core.
 
 This graph is mandatory in CI through `npm run typecheck:node`, but it is not
 reachable from the active Vite application or current `npm start` package
-server. It does not invoke the inactive application core.
+server. The worker side invokes the inactive application core only when an
+internal parent starts an analysis attempt; no HTTP or package integration can
+start one yet.
 
 == Accepted target boundary
 

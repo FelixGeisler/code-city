@@ -29,10 +29,17 @@ parentPort.on("message", (command) => {
   if (command.type !== "START") return;
   const selected = { type: "REVISION_SELECTED", attemptId: command.attemptId, generation: command.generation, revision: SHA };
   const failure = { type: "FAILURE", attemptId: command.attemptId, generation: command.generation, revision: SHA, category: "Provider/resolution failure" };
+  const success = {
+    type: "SUCCESS", attemptId: command.attemptId, generation: command.generation, revision: SHA,
+    result: { city: null, notAnalyzedFiles: [{ canonicalPath: "a.ts", category: "Syntax could not be analyzed" }] },
+    sources: [{ canonicalPath: "a.ts", normalizedUtf8: new TextEncoder().encode("x") }],
+  };
   if (workerData.mode === "pre-nonzero") { parentPort.postMessage({ type: "FAILURE", attemptId: command.attemptId, generation: command.generation, category: "Revision unavailable" }); setTimeout(() => process.exit(7), 30); return; }
   parentPort.postMessage(selected);
   if (workerData.mode === "normal-delay") { parentPort.postMessage(failure); setTimeout(() => parentPort.close(), 40); return; }
   if (workerData.mode === "nonzero") { parentPort.postMessage(failure); setTimeout(() => process.exit(9), 40); return; }
+  if (workerData.mode === "success-nonzero") { parentPort.postMessage(success); setTimeout(() => process.exit(9), 40); return; }
+  if (workerData.mode === "success-cancel") { parentPort.postMessage(success); setInterval(() => {}, 1_000); return; }
   if (workerData.mode === "missing") { parentPort.close(); return; }
   if (workerData.mode === "malformed") { parentPort.postMessage({ type: "SUCCESS", attemptId: command.attemptId, generation: command.generation, revision: SHA }); return; }
   if (workerData.mode === "invalid-city") { parentPort.postMessage({ type: "SUCCESS", attemptId: command.attemptId, generation: command.generation, revision: SHA, result: { city: {}, notAnalyzedFiles: [] }, sources: [] }); parentPort.close(); return; }
@@ -45,11 +52,20 @@ parentPort.on("message", (command) => {
   return pathToFileURL(file);
 }
 
-function run(url, mode, release = () => {}) {
+function run(url, mode, release = () => {}, capture = () => {}) {
   return startNodeWorkerAttempt({
     repository: REPOSITORY, generation: 11, workerUrl: url,
-    workerFactory: (entry) => new Worker(entry, { workerData: { mode } }), release,
+    workerFactory: (entry) => {
+      const worker = new Worker(entry, { workerData: { mode } });
+      capture(worker);
+      return worker;
+    },
+    release,
   });
+}
+
+function assertNoAttemptListeners(worker) {
+  for (const event of ["exit", "message", "messageerror", "error"]) assert.equal(worker.listenerCount(event), 0, event);
 }
 
 async function remainsPending(promise, milliseconds = 10) {
@@ -71,13 +87,17 @@ test("terminal values remain provisional until a joined normal exit", async (t) 
 
 test("every nonzero exit overrides provisional success/failure semantics after the join", async (t) => {
   const url = await faultWorker(t);
-  for (const mode of ["nonzero", "pre-nonzero"]) {
-    const attempt = run(url, mode);
+  for (const mode of ["nonzero", "success-nonzero", "pre-nonzero"]) {
+    let worker;
+    const attempt = run(url, mode, () => {}, (created) => { worker = created; });
     assert.equal(await remainsPending(attempt.result), true, mode);
     const terminal = await attempt.result;
-    assert.deepEqual(terminal, mode === "nonzero"
-      ? { type: "FAILURE", attemptId: attempt.attemptId, generation: 11, revision: SHA, category: "Provider/resolution failure" }
-      : { type: "FAILURE", attemptId: attempt.attemptId, generation: 11, category: "Provider/resolution failure" });
+    assert.deepEqual(terminal, mode === "pre-nonzero"
+      ? { type: "FAILURE", attemptId: attempt.attemptId, generation: 11, category: "Provider/resolution failure" }
+      : { type: "FAILURE", attemptId: attempt.attemptId, generation: 11, revision: SHA, category: "Provider/resolution failure" });
+    assert.equal(Object.hasOwn(terminal, "result"), false, mode);
+    assert.equal(Object.hasOwn(terminal, "sources"), false, mode);
+    assertNoAttemptListeners(worker);
   }
 });
 
@@ -93,12 +113,14 @@ test("an observably invalid present city maps to the coded city failure only aft
 test("malformed, missing, duplicate, late, stale, and crashing workers map only to joined provider failure", async (t) => {
   const url = await faultWorker(t);
   for (const mode of ["missing", "malformed", "duplicate", "late-selected", "stale", "error"]) {
-    const attempt = run(url, mode);
+    let worker;
+    const attempt = run(url, mode, () => {}, (created) => { worker = created; });
     const terminal = await attempt.result;
     assert.equal(terminal.type, "FAILURE", mode);
     assert.equal(terminal.category, "Provider/resolution failure", mode);
     assert.equal(terminal.attemptId, attempt.attemptId, mode);
     assert.equal(terminal.generation, 11, mode);
+    assertNoAttemptListeners(worker);
   }
 });
 
@@ -143,8 +165,31 @@ test("invalid start, constructor, listener, and post failures release exactly on
     postMessage() { throw new Error("must not post"); }
     terminate() { queueMicrotask(() => this.emit("exit", 1)); return Promise.resolve(1); }
   }
-  const listener = startNodeWorkerAttempt({ repository: REPOSITORY, generation: 3, workerFactory: () => new ListenerFailureWorker() });
+  const laterListenerWorker = new ListenerFailureWorker();
+  const listener = startNodeWorkerAttempt({ repository: REPOSITORY, generation: 3, workerFactory: () => laterListenerWorker });
   assert.equal((await listener.result).category, "Provider/resolution failure");
+  assertNoAttemptListeners(laterListenerWorker);
+
+  class ExitListenerFailureWorker extends EventEmitter {
+    on(name, listener) {
+      if (name === "exit") throw new Error("first listener");
+      return super.on(name, listener);
+    }
+    postMessage() { throw new Error("must not post"); }
+    terminate() { return Promise.resolve(1); }
+  }
+  let firstListenerReleases = 0;
+  const firstListenerWorker = new ExitListenerFailureWorker();
+  const firstListener = startNodeWorkerAttempt({
+    repository: REPOSITORY, generation: 4, workerFactory: () => firstListenerWorker,
+    release() { firstListenerReleases += 1; },
+  });
+  assert.deepEqual(await firstListener.result, {
+    type: "FAILURE", attemptId: firstListener.attemptId, generation: 4, category: "Provider/resolution failure",
+  });
+  await firstListener.cancel();
+  assert.equal(firstListenerReleases, 1);
+  assertNoAttemptListeners(firstListenerWorker);
 });
 
 test("messageerror is terminally invalid and waits for the registered exit join", async () => {
@@ -157,16 +202,31 @@ test("messageerror is terminally invalid and waits for the registered exit join"
   assert.equal((await attempt.result).category, "Provider/resolution failure");
 });
 
+test("cancellation clears provisional source/result ownership, removes listeners, and releases once", async (t) => {
+  const url = await faultWorker(t);
+  let releases = 0;
+  let worker;
+  const attempt = run(url, "success-cancel", () => { releases += 1; }, (created) => { worker = created; });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  await attempt.cancel();
+  assert.deepEqual(await attempt.result, { type: "CANCELLED" });
+  await attempt.cancel();
+  assert.equal(releases, 1);
+  assertNoAttemptListeners(worker);
+});
+
 test("replacement cancels and joins the old worker; generated attempt identities are fresh and canonical", async (t) => {
   const url = await faultWorker(t);
   let releases = 0;
-  const first = run(url, "normal-delay", () => { releases += 1; });
+  let firstWorker;
+  const first = run(url, "normal-delay", () => { releases += 1; }, (created) => { firstWorker = created; });
   await new Promise((resolve) => setTimeout(resolve, 10));
   await first.cancel();
   const second = run(url, "normal-delay", () => { releases += 1; });
   assert.notEqual(first.attemptId, second.attemptId);
   assert.match(first.attemptId, /^[A-Za-z0-9_-]{22}$/u);
   assert.deepEqual(await first.result, { type: "CANCELLED" });
+  assertNoAttemptListeners(firstWorker);
   assert.equal((await second.result).type, "FAILURE");
   assert.equal(releases, 2);
 });
