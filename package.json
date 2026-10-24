@@ -20,14 +20,16 @@
     "start": "node tools/serve-package.mjs",
     "test:package": "node tools/audit-package.mjs",
     "docs:build": "antora antora-playbook.yml",
-    "verify": "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build"
+    "verify": "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build",
+    "typecheck:node": "tsc -p tsconfig.node.json"
   },
   "overrides": {
     "js-yaml": "5.4.2"
   },
   "devDependencies": {
-    "@antora/cli": "3.2.0",
+    "@antora/cli": "3.2.1",
     "@antora/site-generator": "3.2.1",
+    "@types/node": "24.19.2",
     "typescript": "7.0.2",
     "vite": "8.3.4"
   },

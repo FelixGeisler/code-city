@@ -43,8 +43,9 @@ export async function inspectDependencyClosure(rootDirectory) {
   );
 
   const expectedDevDependencies = {
-    "@antora/cli": "3.2.0",
+    "@antora/cli": "3.2.1",
     "@antora/site-generator": "3.2.1",
+    "@types/node": "24.19.2",
     typescript: "7.0.2",
     vite: "8.3.4",
   };
@@ -98,9 +99,9 @@ export async function inspectDependencyClosure(rootDirectory) {
       license: "MIT",
     },
     "@antora/cli": {
-      version: "3.2.0",
-      resolved: "https://registry.npmjs.org/@antora/cli/-/cli-3.2.0.tgz",
-      integrity: "sha512-bJ5Vl+FMH52xm2jxdcbrEUN3aeoIYj5NGzLGsVwIPewM0RXee0kckbToAFnU0EK0Uw07cBomiJ5hwVELex0/ug==",
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/cli/-/cli-3.2.1.tgz",
+      integrity: "sha512-E7HWvT/WUZtMaFR8blH0wehXlgju5Cu4aJf3vcNliXvm/DRZhxlsW851gVn8yuGNZe+LdFDVEsUYJ/yuEbw1Ag==",
       license: "MPL-2.0",
     },
     "@antora/site-generator": {
@@ -133,6 +134,18 @@ export async function inspectDependencyClosure(rootDirectory) {
       integrity: "sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==",
       license: "BSD-3-Clause",
     },
+    "@types/node": {
+      version: "24.19.2",
+      resolved: "https://registry.npmjs.org/@types/node/-/node-24.19.2.tgz",
+      integrity: "sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==",
+      license: "MIT",
+    },
+    "undici-types": {
+      version: "7.24.6",
+      resolved: "https://registry.npmjs.org/undici-types/-/undici-types-7.24.6.tgz",
+      integrity: "sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==",
+      license: "MIT",
+    },
   };
   for (const [name, expected] of Object.entries(expectedRenewedRecords)) {
     const record = lock.packages[`node_modules/${name}`];
@@ -146,6 +159,24 @@ export async function inspectDependencyClosure(rootDirectory) {
   }
 
   const expectedHighClosure = {
+    "@antora/cli": {
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/cli/-/cli-3.2.1.tgz",
+      integrity: "sha512-E7HWvT/WUZtMaFR8blH0wehXlgju5Cu4aJf3vcNliXvm/DRZhxlsW851gVn8yuGNZe+LdFDVEsUYJ/yuEbw1Ag==",
+      dependencies: { "@antora/logger": "3.2.1", "@antora/playbook-builder": "3.2.1", "@antora/user-require-helper": "~3.0", commander: "~14.0" },
+    },
+    "@antora/logger": {
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/logger/-/logger-3.2.1.tgz",
+      integrity: "sha512-qdgDvXOaSuNEJah5s0BKeuSwIi0/uRWgl1ffRb2jKjKQiyaDYk603Tzpkai81gBybuCqSm04wx4V0+gIlYnlJw==",
+      dependencies: { "@antora/expand-path-helper": "~3.0", pino: "~10.3" },
+    },
+    "@antora/playbook-builder": {
+      version: "3.2.1",
+      resolved: "https://registry.npmjs.org/@antora/playbook-builder/-/playbook-builder-3.2.1.tgz",
+      integrity: "sha512-pY/HBU4p93jzYLMK0JO2vfvYTz15KBcw0mugnWFgjv6Vd/PCa5PvEvR5ZvnHqaPdNLT8heaHgpH3PfpFfNaEmA==",
+      dependencies: { "@iarna/toml": "~2.2", convict: "~6.2", "js-yaml": "~5.4", json5: "~2.2" },
+    },
     "@antora/content-aggregator": {
       version: "3.2.1",
       resolved: "https://registry.npmjs.org/@antora/content-aggregator/-/content-aggregator-3.2.1.tgz",
@@ -206,7 +237,50 @@ export async function inspectDependencyClosure(rootDirectory) {
     "handlebars transitive declarations differ from 4.7.10",
   );
   invariant(!lock.packages["node_modules/source-map-js"].dependencies, "source-map-js 1.2.2 unexpectedly adds a dependency");
-  invariant(registryPackageCount === 212, "The lockfile package inventory changed");
+  const nestedAntoraRecords = {
+    "node_modules/@antora/asciidoc-loader/node_modules/@antora/logger": "node_modules/@antora/logger",
+    "node_modules/@antora/content-aggregator/node_modules/@antora/logger": "node_modules/@antora/logger",
+    "node_modules/@antora/content-classifier/node_modules/@antora/logger": "node_modules/@antora/logger",
+    "node_modules/@antora/page-composer/node_modules/@antora/logger": "node_modules/@antora/logger",
+    "node_modules/@antora/site-generator/node_modules/@antora/logger": "node_modules/@antora/logger",
+    "node_modules/@antora/site-generator/node_modules/@antora/playbook-builder": "node_modules/@antora/playbook-builder",
+  };
+  for (const [nestedLocation, canonicalLocation] of Object.entries(nestedAntoraRecords)) {
+    invariant(
+      JSON.stringify(lock.packages[nestedLocation]) === JSON.stringify(lock.packages[canonicalLocation]),
+      `${nestedLocation} differs from the qualified Antora 3.2.1 record`,
+    );
+  }
+
+  const nodeTypes = lock.packages["node_modules/@types/node"];
+  invariant(
+    nodeTypes.dev === true
+      && JSON.stringify(nodeTypes.dependencies) === JSON.stringify({ "undici-types": ">=7.24.0 <7.24.7" })
+      && !nodeTypes.optionalDependencies
+      && !nodeTypes.peerDependencies,
+    "@types/node development closure differs from accepted evidence",
+  );
+  const undiciTypes = lock.packages["node_modules/undici-types"];
+  invariant(
+    undiciTypes.dev === true
+      && !undiciTypes.dependencies
+      && !undiciTypes.optionalDependencies
+      && !undiciTypes.peerDependencies,
+    "undici-types development closure differs from accepted evidence",
+  );
+  const expectedLibc = {
+    "node_modules/@rolldown/binding-linux-arm64-gnu": "glibc",
+    "node_modules/@rolldown/binding-linux-arm64-musl": "musl",
+    "node_modules/@rolldown/binding-linux-ppc64-gnu": "glibc",
+    "node_modules/@rolldown/binding-linux-s390x-gnu": "glibc",
+    "node_modules/@rolldown/binding-linux-x64-gnu": "glibc",
+    "node_modules/@rolldown/binding-linux-x64-musl": "musl",
+  };
+  for (const [location, libc] of Object.entries(expectedLibc)) {
+    invariant(JSON.stringify(lock.packages[location]?.libc) === JSON.stringify([libc]), `${location} libc metadata changed`);
+  }
+  invariant(!Object.hasOwn(lock.packages["node_modules/progress"], "peer"), "progress peer metadata changed");
+  invariant(registryPackageCount === 214, "The lockfile package inventory changed");
 
   const parserRuntime = lock.packages["node_modules/web-tree-sitter"];
   invariant(

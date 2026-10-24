@@ -17,15 +17,15 @@ import {
 } from "./fixtures/publication-workflow-seams.mjs";
 
 const WORKFLOW_DIRECTORY = ".github/workflows";
-const VERIFY_COMMANDS = ["npm ci --ignore-scripts", "npm ls --all", "npm audit --audit-level=high", "npm run verify"];
+const VERIFY_COMMANDS = ["npm ci --ignore-scripts", "npm ls --all", "npm audit --audit-level=high", "npm run typecheck:node", "npm run verify"];
 const PACKET_FILES = ["artifact.json", "smoke.json", "qualification.json", "capacity.json", "requests.json", "lifecycle.json", "index.json"];
 const ACTIONS = {
   checkout: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-  node: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+  node: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
   pagesUpload: "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b",
-  artifactUpload: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  artifactUpload: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
   deploy: "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346",
-  download: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+  download: "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
 };
 
 function exactKeys(value, expected, label) {
@@ -47,7 +47,7 @@ function setupStep(step) {
 function verifyPrefix(steps) {
   checkoutStep(steps[0]);
   setupStep(steps[1]);
-  assert.deepEqual(steps.slice(2, 6), VERIFY_COMMANDS.map((run) => ({ run })));
+  assert.deepEqual(steps.slice(2, 7), VERIFY_COMMANDS.map((run) => ({ run })));
 }
 
 async function parsedWorkflows() {
@@ -115,7 +115,7 @@ test("every workflow is parsed and CI has the exact pull-request-only topology",
   assert.equal(verify["runs-on"], "ubuntu-latest");
   assert.equal(verify["timeout-minutes"], 20);
   assert.deepEqual(verify.permissions, { contents: "read" });
-  assert.equal(verify.steps.length, 6);
+  assert.equal(verify.steps.length, 7);
   verifyPrefix(verify.steps);
 });
 
@@ -133,13 +133,13 @@ test("parsed publish workflow has exact triggers, jobs, permissions, steps, pins
   assert.deepEqual({ runner: verify["runs-on"], timeout: verify["timeout-minutes"], permissions: verify.permissions }, {
     runner: "ubuntu-latest", timeout: 20, permissions: { contents: "read" },
   });
-  assert.equal(verify.steps.length, 9);
+  assert.equal(verify.steps.length, 10);
   verifyPrefix(verify.steps);
-  exactKeys(verify.steps[6], ["name", "run"], "publication record step");
-  assert.equal(verify.steps[6].name, "Create and validate the publication record");
-  assert.match(verify.steps[6].run, /createPublicationRecord[\s\S]*validatePublicationRecord/u);
-  assert.deepEqual(verify.steps[7], { name: "Upload the Pages artifact", uses: ACTIONS.pagesUpload, with: { path: "dist" } });
-  assert.deepEqual(verify.steps[8], {
+  exactKeys(verify.steps[7], ["name", "run"], "publication record step");
+  assert.equal(verify.steps[7].name, "Create and validate the publication record");
+  assert.match(verify.steps[7].run, /createPublicationRecord[\s\S]*validatePublicationRecord/u);
+  assert.deepEqual(verify.steps[8], { name: "Upload the Pages artifact", uses: ACTIONS.pagesUpload, with: { path: "dist" } });
+  assert.deepEqual(verify.steps[9], {
     name: "Upload internal publication evidence",
     uses: ACTIONS.artifactUpload,
     with: {
