@@ -529,7 +529,7 @@ test("production admission selects the exact qualified C# package asset without 
   }
   const pins = {
     "package.json": "3261c143fb2f7a5da3ac977cce92839c429a81f4a7abd8b56e155b9eb0f8c090",
-    "package-lock.json": "a8eb650760b68f06f38c2ee4b5a745330baf68cc776341940fb754049f3be1cd",
+    "package-lock.json": "d8e211481c6b107a7f20e2d19f84cd7d0bcb8e8268812dd411d39430cf31a7c0",
     "src/domain/base-metrics.ts": "72503f7b527a5fc443edf5986ee447f365827ecccad7eeacabcaaf3684d9286a",
   };
   for (const [relativePath, expected] of Object.entries(pins)) assert.equal(sha256(await readFile(path.join(projectRoot, ...relativePath.split("/")))), expected, relativePath);
