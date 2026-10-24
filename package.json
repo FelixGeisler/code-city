@@ -23,7 +23,6 @@
     "verify": "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build"
   },
   "overrides": {
-    "braces": "3.0.3",
     "js-yaml": "5.4.2"
   },
   "devDependencies": {

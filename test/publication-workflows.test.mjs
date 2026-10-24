@@ -17,7 +17,7 @@ import {
 } from "./fixtures/publication-workflow-seams.mjs";
 
 const WORKFLOW_DIRECTORY = ".github/workflows";
-const VERIFY_COMMANDS = ["npm ci --ignore-scripts", "npm ls --all", "node tools/check-security-audit.mjs", "npm run verify"];
+const VERIFY_COMMANDS = ["npm ci --ignore-scripts", "npm ls --all", "npm audit --audit-level=high", "npm run verify"];
 const PACKET_FILES = ["artifact.json", "smoke.json", "qualification.json", "capacity.json", "requests.json", "lifecycle.json", "index.json"];
 const ACTIONS = {
   checkout: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
