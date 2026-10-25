@@ -222,6 +222,8 @@ test("the declared byte-fidelity attributes remain exact and effective", async (
     "vendor/tree-sitter-typescript/provenance.json text eol=lf",
     "vendor/tree-sitter-typescript/wasm/*.wasm -text",
     "index.html text eol=lf",
+    "publication/former-analyzer-assets-v1.json text eol=lf",
+    "publication/retirement-notice-v1/index.html text eol=lf",
     "",
   ].join("\n");
   const workingTree = (await readText(".gitattributes")).replaceAll("\r\n", "\n");
@@ -250,7 +252,13 @@ test("the declared byte-fidelity attributes remain exact and effective", async (
     "vendor/tree-sitter-typescript/wasm/tree-sitter-typescript.wasm",
     "vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm",
   ];
-  const lfPaths = [...csharpBytePinnedPaths, ...parserTextPaths, "index.html"];
+  const lfPaths = [
+    ...csharpBytePinnedPaths,
+    ...parserTextPaths,
+    "index.html",
+    "publication/former-analyzer-assets-v1.json",
+    "publication/retirement-notice-v1/index.html",
+  ];
   const output = execFileSync("git", ["check-attr", "text", "eol", "--", ...lfPaths, ...binaryPaths], { cwd: projectRoot, encoding: "utf8" });
   for (const relativePath of lfPaths) {
     assert.match(output, new RegExp(`${relativePath.replaceAll("/", "\\/")}: text: set`));
@@ -753,15 +761,15 @@ test("the maintainer parser builder is manual, pinned, bounded, offline during b
 test("commands preserve the canonical package audit sequence and CI separates review from publication", async () => {
   const packageManifest = await readJson("package.json");
   assert.deepEqual(packageManifest.scripts, {
-    dev: "vite",
-    typecheck: "tsc -p tsconfig.main.json && tsc -p tsconfig.worker.json",
+    dev: "node tools/develop-standalone.mjs",
+    typecheck: "tsc -p tsconfig.main.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.node.json",
     test: "node --test",
     "test:manifest": "node --test test/package-manifest.test.mjs test/publication-record.test.mjs",
     "collect:production-evidence": "node tools/collect-production-evidence.mjs",
-    build: "node tools/build-package.mjs",
-    "test:reproducibility": "node tools/check-reproducibility.mjs",
-    start: "node tools/serve-package.mjs",
-    "test:package": "node tools/audit-package.mjs",
+    build: "node tools/build-standalone.mjs && node tools/build-retirement-notice.mjs",
+    "test:reproducibility": "node tools/check-standalone-reproducibility.mjs && node tools/audit-cutover.mjs",
+    start: "node dist/server/standalone.mjs",
+    "test:package": "node tools/audit-standalone-package.mjs && node tools/check-standalone-signals.mjs && node tools/check-standalone-browser.mjs",
     "docs:build": "antora antora-playbook.yml",
     verify: "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build",
     "typecheck:node": "tsc -p tsconfig.node.json",
@@ -787,11 +795,8 @@ test("commands preserve the canonical package audit sequence and CI separates re
     const audit = workflow.indexOf("npm audit --audit-level=high");
     const nodeTypecheck = workflow.indexOf("npm run typecheck:node");
     const verify = workflow.indexOf("npm run verify");
-    const standalone = ["build", "audit", "reproducibility", "start", "package", "signals", "browser"]
-      .map((name) => workflow.indexOf(`npm run standalone:${name}`));
     assert(install >= 0 && install < closure && closure < audit && audit < nodeTypecheck && nodeTypecheck < verify);
-    assert(standalone.every((position) => position > verify));
-    assert(standalone.every((position, index) => index === 0 || standalone[index - 1] < position));
+    assert.doesNotMatch(workflow, /npm run standalone:/u);
     assert.equal((workflow.match(/npm audit --audit-level=high/gu) ?? []).length, 1);
     assert.equal((workflow.match(/npm run typecheck:node/gu) ?? []).length, 1);
     assert.doesNotMatch(workflow, /check-security-audit|npm audit[^\n]*(?:--omit=dev|--production|\|\||continue-on-error)/u);
@@ -841,11 +846,11 @@ test("README and agent guidance describe the current product and supported comma
   const readme = await readText("README.md");
   for (const expected of [
     "npm ci --ignore-scripts",
-    "npm run dev",
-    "http://localhost:5173/code-city/",
+    "npm run dev --",
+    "build/development/",
     "npm run build",
-    "npm run start",
-    "http://127.0.0.1:4173/code-city/",
+    "npm start --",
+    "--max-live-sessions",
     "npm run verify",
     "`main`",
   ]) {
@@ -856,5 +861,5 @@ test("README and agent guidance describe the current product and supported comma
   for (const expected of ["npm run typecheck", "npm run test", "npm run build", "npm run test:reproducibility", "npm run test:package", "npm run docs:build", "npm run verify"]) {
     assert(agents.includes(expected), `AGENTS.md is missing ${expected}`);
   }
-  assert.doesNotMatch(`${readme}\n${agents}`, /\bv2\b|\b2\.x\b|reimplementation|template|\bv1\b|\barchiv(?:e|al)\b|\bformer\b/i);
+  assert.doesNotMatch(`${readme}\n${agents}`, /\bv2\b|\b2\.x\b|reimplementation|template|\barchiv(?:e|al)\b/i);
 });

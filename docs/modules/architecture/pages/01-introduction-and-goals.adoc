@@ -1,18 +1,17 @@
 = Introduction and Goals
 
 Code City turns source facts from one immutable public GitHub revision into an
-interactive city. This architecture describes two different states and never
-treats one as the other:
+interactive city. The current implementation is the standalone M5 system
+selected by xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR
+0014]: one native Node.js HTTP service owns acquisition and analysis, one
+worker thread executes each admitted attempt, and a same-origin source-free
+browser owns presentation.
 
-* **Current implementation** is the browser-only application evidenced at
-  commit `38e620c915866394ca4967f418eec9d3f6ec979b`.
-* **Accepted target** is the server-owned analysis and saved-investigation
-  boundary in xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
-  and the xref:requirements:index.adoc[product requirements]. It is not yet
-  implemented.
-
-No server platform, API, storage, access mechanism, or target deployment has
-been selected. Those are **unresolved design** areas.
+The later whole-core target in
+xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
+adds saved investigations and deeper investigation behavior. It does not imply
+a public API, authentication, Internet service, private-source support, storage
+technology, or deployment topology.
 
 == Architecture goals
 
@@ -25,27 +24,28 @@ been selected. Those are **unresolved design** areas.
 and keep stale attempts from publishing.
 
 |Deterministic analysis
-|Keep product algorithms in the domain, isolate provider and browser details at
-the edge, and apply the requirement-owned admission and metric rules.
+|Keep product algorithms in domain/application code, isolate provider and
+parser integration at the Node edge, and apply requirement-owned admission and
+metric rules.
+
+|Bounded temporary ownership
+|Reserve explicit operator-set capacity before work, keep source-result
+association in process memory, join workers before release, and discard state
+on replacement, control, session loss, or shutdown.
 
 |Safe presentation
-|Treat repository content and worker messages as untrusted until validated,
-then publish one aligned, source-free city atomically.
-
-|Understandable evolution
-|Describe the running browser system directly and show the accepted target as a
-separate responsibility boundary, not as an amendment sequence.
+|Expose only manifest-public browser bytes and source-free validated results;
+keep server, worker, parser, manifest, and source bytes private.
 
 |Verifiable delivery
-|Build one reproducible static package and bind publication evidence to that
-package and commit.
+|Build one manifest-bound standalone artifact, reproduce every recorded byte,
+drive its actual server and browser, and publish it separately from the
+script-free Pages retirement notice.
 |===
 
 == Reading guide
 
-Chapters 3 through 7 explain context, components, runtime, and deployment.
-Chapter 8 indexes policies that cross those views. Chapter 9 links the decision
-records; the records remain the authority for rationale and history. Product
-algorithms, limits, controls, failures, and saved-investigation behavior remain
-in xref:requirements:source-and-metrics.adoc[Source and Metrics] and
-xref:requirements:city-and-failures.adoc[City and Failures].
+Chapters 3 through 7 explain context, components, runtime, and publication.
+Chapter 8 indexes crosscutting controls. Chapter 9 links the decision records.
+Product algorithms, limits, controls, failures, and saved-investigation behavior
+remain in the requirements module.

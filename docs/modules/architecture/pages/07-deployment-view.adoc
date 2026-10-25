@@ -1,49 +1,47 @@
 = Deployment View
 
-== Current deployed topology
+== Standalone application artifact
 
-image::deployment.svg[Current static GitHub Pages deployment with browser main context and one worker]
+The repository produces one canonical manifest-bound application artifact in
+`dist/`. It contains the source-free browser and private Node server, worker,
+and parser assets. The repository does not host or deploy that service. An
+operator may run the artifact on loopback, or deliberately on a trusted LAN for
+public GitHub source, by supplying the required port and capacity values.
 
-GitHub Pages serves one verified static package under the Code City base path.
-A user's browser runs the package in two execution contexts: the main context
-for controller, semantic UI, and WebGL2 presentation, and one module worker for
-GitHub acquisition, parsing, metrics, and city construction. Both are browser
-code from the same package. Public GitHub remains an external provider.
+No device, Internet, authentication, private-source, performance, concurrency,
+or memory deployment claim is made. Raspberry Pi qualification remains
+pending.
 
-There is no Node.js application process in production. Node.js, npm, Vite, and
-Antora remain build and verification tools. The inactive continuation core,
-worker, native-HTTP perimeter, and session runtime are neither connected to the
-active browser pipeline nor selected by `npm start`. They are packaged only in
-`build/standalone/`; that directory is not the Pages artifact and is not
-uploaded or deployed. A Pages artifact remains static content, not a Code City
-server runtime.
+== Verification path
 
-== Current publication path
+Pull-request CI performs locked install, dependency closure, high-severity
+security audit, the isolated Node type check, and `npm run verify`. That root
+gate runs type checking and tests, builds the canonical artifact once,
+reproduces its manifest and every recorded byte in an isolated directory,
+drives the actual packaged server/worker/parser/browser, verifies signal
+shutdown, audits the notice and former-asset inventory, and builds the docs.
+It does not publish.
 
-The pull-request `CI` workflow installs the locked dependency closure, performs
-the security audit, type-checks the isolated Node graph, and runs the unchanged
-`npm run verify`. It then runs seven additive standalone gates: build, direct
-manifest audit, isolated reproducibility, packaged startup, package audit,
-signal shutdown, and installed-Chrome packaged-browser evidence. It does not
-publish.
+== Main publication path
 
-On a push to `main`, the `Publish` workflow repeats those gates, creates the
-legacy canonical package and publication record, uploads the reviewed `dist`
-Pages artifact, and deploys that artifact. The inactive standalone artifact is
-verified but not uploaded. The legacy package manifest and publication tooling
-continue to own Pages artifact identity and publication evidence; tool versions
-remain in the package and lock files.
+A protected-main push repeats the same gates and creates a publication record
+bound to `dist/package-manifest.json`, the exact commit, and the workflow run.
+It uploads the exact audited `dist/` directory as the standalone artifact.
 
-The workflow's production-evidence job is conditional on its explicit issue-
-state eligibility check. When eligible, the collector verifies deployment and
-production assets before recording observations. Therefore the workflow defines
-a verified evidence path; it does not imply that production evidence is
-collected for every merge.
+The same workflow separately uploads `build/pages/`, which contains only the
+exact audited versioned retirement `index.html`, to the existing Pages deploy
+path. The notice contains no script, analyzer, worker, parser, grammar, form,
+provider request, or application client. GitHub Pages therefore hosts no Code
+City service.
 
-== Accepted target
+The former in-browser analyzer JavaScript, browser-worker, and parser/grammar
+WASM URLs are versioned in
+`publication/former-analyzer-assets-v1.json`. They are the live-404 subject for
+the subsequent cleanup gate. The existing Pages and hosted-observation
+machinery remains until that exact live evidence is collected; its presence
+does not make the retirement notice an analyzer.
 
-The target requires server capability for acquisition, analysis, retained
-source-result association, and saved investigations. No server node appears in
-the current deployment diagram because none is deployed. Platform, process,
-storage, access, ingress, network, resource, and deployment choices remain
-unresolved.
+== Later deployment design
+
+Release hosting, server ingress, device operation, identity, private providers,
+and saved-investigation storage remain unselected.

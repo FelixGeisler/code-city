@@ -6,23 +6,27 @@
 |===
 |Risk or debt |Current consequence |Existing containment
 
-|Browser and anonymous-provider coupling
-|Availability, CORS, rate limits, and browser resource capacity can prevent an
-analysis.
-|Bounded requests, explicit failures, fixed processing envelope, no automatic
-retry, and complete-attempt rollback.
+|Service dependency on anonymous public GitHub
+|Provider availability, rate limits, or incomplete evidence can prevent
+complete acquisition.
+|The Node service uses fixed anonymous routes, bounded requests, exact evidence
+validation, explicit failures, the fixed processing envelope, and no automatic
+retry.
 
-|Whole-attempt file failure
-|One supported file's retrieval, text, syntax, or metric failure prevents all
-otherwise valid files from producing a city.
-|The failure is explicit and source-free; no partial result is presented. The
-accepted target replaces this with per-file continuation after complete
-acquisition.
+|Whole-analysis acquisition and shared-parser failures
+|Revision, complete-tree, blob-integrity or retrieval, processing-envelope, or
+shared-parser-initialization failure prevents a city.
+|These boundaries fail closed before publication. After complete acquisition,
+supported source-text, syntax, and metric failures continue per file with the
+three sanitized categories defined by the requirements.
 
-|Source-free result
-|Current inspection cannot show exact source or unit/contribution evidence.
-|The browser exposes only aligned paths and raw file metrics. Target retained
-source and drill-down remain unimplemented.
+|Source-free browser result
+|The server retains the exact analyzed source-result association in process
+memory, but current browser inspection cannot show source or unit/contribution
+evidence.
+|The browser receives only aligned paths, raw file metrics, and sanitized
+failed-file rows. Browser source view and drill-down remain future whole-core
+outcomes.
 
 |Shallow city grouping
 |Current city construction groups by at most the first two directory segments,
@@ -42,16 +46,15 @@ is not claimed as implemented.
 unimplemented.
 |===
 
-== Target delivery gap
+== Later whole-core delivery gaps
 
-The largest architectural gap is the move from browser-owned acquisition and
-analysis to server authority with retained source-result association and saved
-investigations. That gap includes per-file continuation, recursive hierarchy,
-unit facts and source drill-down, a sortable complete file inventory, explicit
+Standalone M5 has completed the move to server-owned acquisition and analysis,
+temporary retained source-result association, and per-file continuation. The
+remaining accepted whole-core outcomes are recursive hierarchy, source and
+unit/contribution drill-down, a sortable complete file inventory, explicit
 Save/reopen, and target camera behavior.
 
-These are accepted product outcomes, not evidence that a backend exists. Server,
 API, storage, access/security, retention operations, deletion, backup, ingress,
-deployment, recursive layout, and portable interchange remain unresolved. They
-must be decided before implementation that depends on them; this reset does not
-turn them into a plan.
+deployment, recursive layout, and portable interchange remain unresolved.
+These are future outcomes or design gaps, not claims about current standalone
+behavior, and must be decided before implementation depends on them.

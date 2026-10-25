@@ -1,9 +1,5 @@
 = Building Block View
 
-== Current browser system
-
-image::building-blocks.svg[Current browser main-context and worker building blocks with accepted target responsibility boundary]
-
 [cols="1,2,3",options="header"]
 |===
 |Stratum |Building block |Responsibility
@@ -11,111 +7,59 @@ image::building-blocks.svg[Current browser main-context and worker building bloc
 |Domain
 |Repository reference, source admission, metrics, complexity, city model,
 camera and picking policy
-|Pure validation and deterministic product decisions. It imports neither
-application nor edge code.
+|Pure validation and deterministic product decisions.
 
 |Application
-|Main controller
-|Captures attempts, generation-gates messages and semantic events, validates
-worker results, coordinates atomic publication, search, hover, selection,
-replacement, cancellation, failure, and cleanup.
+|Raw-source acquisition and project analysis
+|Validate complete inventory and source ownership, continue supported per-file
+failures, construct the city, and retain the exact successful source
+association for the current temporary result.
 
-|Application
-|Worker attempt, retrieval and metric services
-|Orders revision selection, complete acquisition, sequential normalization and
-processing, city construction, release of source, and one terminal outcome.
+|Node edge
+|GitHub gateways, parser adapter/assets, analysis worker
+|Perform anonymous public-GitHub reads, load pinned file-URL parser assets, run
+one isolated attempt, validate worker protocol values, and transfer owned
+buffers.
 
-|Edge: main context
-|Browser entry, semantic publication, city presenter
-|Connects the form and worker; stages inert DOM content; renders WebGL2;
-translates browser input into semantic events; owns visual resources.
+|Node edge
+|Session runtime and native HTTP perimeter
+|Validate operator configuration and manifest bytes, serve only public package
+records, own sessions/generations/capacity/control/loss/shutdown, and join
+workers before release.
 
-|Edge: one worker
-|Processing worker, GitHub gateways, Tree-sitter adapter
-|Owns current provider requests and parsing integrations while delegating
-validation and policy to application/domain code.
+|Browser edge
+|Standalone controller and city presenter
+|Open one same-origin session, send Analyze/Cancel/Discard, validate source-free
+events, suppress stale state, and render the city.
+
+|Delivery
+|Builder, manifest, audits, notice, inventory, workflows
+|Create deterministic canonical bytes, reproduce and drive the actual package,
+bind artifact upload, and deploy the separate retirement notice.
 |===
 
 [[data-boundaries]]
-== Current data boundaries
+== Data boundaries
 
-`START` carries a validated repository reference with an optional explicit
-branch, a generation, and the atomically captured, sorted additional exclusions
-into the worker. GitHub edge adapters project bounded provider evidence. After
-branch or default-head selection, commit and raw-source requests use the
-selected immutable commit ID. Commit evidence supplies a validated same-width
-root tree ID for the recursive-tree request. Application and domain preparation
-must validate the complete inventory before it is trusted or used for filtering
-and reads.
+The browser sends raw repository URL and exclusion text only to same-origin
+command routes. It receives session identifiers, generations, revision IDs,
+source-free cities, sanitized failed-file rows, and lifecycle events. It never
+receives source, parser trees, provider payloads, or raw diagnostics.
 
-Normalized source exists only inside the worker pipeline. Files are fetched and
-normalized sequentially; syntax and metric processing starts after the complete
-admitted set exists and then releases each source as it is processed. City
-construction produces canonical-order geometry and inspection facts. The
-worker transfers only geometry buffers and the aligned `{canonicalPath, S, U,
-M}` inspection facts. It transfers no source body, parser tree, provider object,
-or diagnostic.
+The parent sends validated attempt commands into one worker and accepts a
+terminal result only after exact protocol validation and normal joined exit.
+Parser runtime and grammar bytes are private artifact records loaded from file
+URLs by the worker. The HTTP perimeter exposes only `public/index.html`,
+`public/browser.css`, and `public/browser.js`.
 
-The controller independently validates exact protocol shape, geometry,
-inspection alignment, deterministic presentation projection, and safe values.
-Only that validated, source-free city can reach semantic publication and the
-presenter.
+== Ownership and cleanup
 
-== Inactive shared application core
+The session runtime atomically owns live-session, active-attempt, body-reader,
+command-byte, and retained-source capacity. Replacement and control operations
+make work ineligible before termination and join. Session loss and shutdown use
+the same idempotent cleanup boundary. Successful current source/result state is
+released by Discard, replacement, loss, or shutdown.
 
-`source-retrieval` now also exposes a raw-source acquisition path that owns
-inventory completion, pre-read candidate validation, text normalization,
-normalized limits, failed text rows, and retained bytes. `project-analysis`
-owns one shared parser initialization, per-file syntax and metric continuation,
-projection release, successful-fact city construction, and canonical union and
-source invariants. The GitHub edge supplies verified raw bytes through an
-additive capability; its existing decoded-source facade remains compatible.
-
-These blocks are not reachable from the current browser worker, protocol,
-controller, or browser entry. An inactive Node edge owns their worker-thread
-execution, source/result transfer, hostile message validation, termination, and
-exit join. The inactive session runtime connects this worker edge to the
-inactive HTTP perimeter while remaining unreachable from the active browser
-package. A separate reproducible standalone artifact now contains these blocks
-and an inactive source-free browser client. No Save/reopen, source-view,
-private-source, active cutover, deployment, or device block is implemented yet.
-
-== Inactive standalone perimeter
-
-The isolated `src/edge/node/` graph contains repository-internal native-HTTP
-and worker building blocks. The HTTP side provides exact operator-configuration
-parsing, version-1 fixture-manifest and public-byte validation, a bounded
-body-reader primitive, and native `node:http` ingress/response handling. The
-worker side provides file-URL parser assets, one actual analysis worker, a
-closed command/event protocol, transfer validation, and a parent-owned joined
-lifecycle. The perimeter preloads only declared public browser
-bytes, derives one canonical origin after binding, and exposes no package entry
-or configurable plugin surface. Its repository-internal handler boundary now
-hosts the fixed session, analyze, cancel, and discard implementation when the
-inactive session runtime is constructed.
-
-The runtime creates 32-byte CSPRNG session identities, owns one persistent
-NDJSON response per live session, linearizes generation-scoped mutations,
-reserves worker and source capacity before creation, retains successful current
-source/results, and releases every counter only after joined cleanup. It treats
-blocked output conflicts and reported request/response/socket loss as session
-loss, and one SIGINT/SIGTERM path stops admission before joining all workers and
-closing responses. Tests alone substitute nonshipped worker and response
-barriers; no selector is exposed through runtime configuration or HTTP.
-
-This graph is mandatory in CI through `npm run typecheck:node`. Additive
-standalone gates then build `build/standalone/`, audit its complete manifest
-closure, reproduce every byte, start its generated CLI, exercise its packaged
-perimeter/worker/parser path with nonshipped constructor fixtures, and verify
-joined signal shutdown. The package now includes and exercises an inactive
-source-free browser client against that generated server and worker path. It
-remains unreachable from the active Vite application and current `npm start`
-package server; only activation and cutover remain deferred.
-
-== Accepted target boundary
-
-The target replaces the worker's authoritative acquisition and analysis role
-with server authority. The server also owns retained analyzed source and saved
-investigations; the browser owns presentation and investigation. This boundary
-requires server capability but does not define components, services, endpoints,
-stores, processes, or topology. Those details remain unresolved.
+Tests alone substitute deterministic providers and join barriers through
+nonshipped module hooks. Generated runtime bytes contain no fixture, provider,
+or fault selector.

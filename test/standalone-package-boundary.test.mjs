@@ -3,23 +3,18 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const packageManifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-const canonical = {
-  dev: "vite",
-  typecheck: "tsc -p tsconfig.main.json && tsc -p tsconfig.worker.json",
-  test: "node --test",
-  "test:manifest": "node --test test/package-manifest.test.mjs test/publication-record.test.mjs",
-  "collect:production-evidence": "node tools/collect-production-evidence.mjs",
-  build: "node tools/build-package.mjs",
-  "test:reproducibility": "node tools/check-reproducibility.mjs",
-  start: "node tools/serve-package.mjs",
-  "test:package": "node tools/audit-package.mjs",
-  "docs:build": "antora antora-playbook.yml",
-  verify: "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build",
-  "typecheck:node": "tsc -p tsconfig.node.json",
-};
 
-test("legacy root commands remain byte-for-byte unchanged and standalone commands are additive", () => {
-  for (const [name, command] of Object.entries(canonical)) assert.equal(packageManifest.scripts[name], command, name);
+test("root commands atomically activate the canonical standalone artifact", () => {
+  assert.equal(packageManifest.scripts.dev, "node tools/develop-standalone.mjs");
+  assert.equal(packageManifest.scripts.build, "node tools/build-standalone.mjs && node tools/build-retirement-notice.mjs");
+  assert.equal(packageManifest.scripts.start, "node dist/server/standalone.mjs");
+  assert.equal(packageManifest.scripts["test:reproducibility"], "node tools/check-standalone-reproducibility.mjs && node tools/audit-cutover.mjs");
+  assert.equal(packageManifest.scripts["test:package"], "node tools/audit-standalone-package.mjs && node tools/check-standalone-signals.mjs && node tools/check-standalone-browser.mjs");
+  assert.equal(packageManifest.scripts.verify, "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build");
+  assert.match(packageManifest.scripts.typecheck, /tsconfig\.main\.json[\s\S]*tsconfig\.worker\.json[\s\S]*tsconfig\.node\.json/u);
+});
+
+test("prepared standalone checks remain available without owning canonical root behavior", () => {
   assert.deepEqual(Object.fromEntries(Object.entries(packageManifest.scripts).filter(([name]) => name.startsWith("standalone:"))), {
     "standalone:build": "node tools/build-standalone.mjs",
     "standalone:audit": "node tools/audit-standalone.mjs",

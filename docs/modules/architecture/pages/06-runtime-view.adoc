@@ -1,140 +1,73 @@
 = Runtime View
 
-== Current Analyze attempt
+== Startup
 
-image::runtime.svg[Current browser analysis and atomic publication sequence]
+The generated CLI parses all operator arguments before listening. `--host`
+defaults to loopback. `--port` and all five capacities are required. A
+non-loopback host requires a canonical host. The runtime validates the exact
+version-1 package manifest, then verifies the length and SHA-256 digest of every
+public record before listening. It preloads only those verified public bytes,
+binds the native HTTP server, derives its canonical origin, and prints one
+`READY` line. Startup does not read or hash private server or parser records;
+the offline package audit verifies complete public/private manifest closure and
+every recorded byte before publication.
 
-. **Capture.** Analyze causes the controller to parse the repository and all
-  additional exclusions as one input snapshot. Invalid input creates no worker
-  or provider request. A valid replacement clears the old city and retires the
-  older generation.
-. **Select.** The one worker resolves the repository's then-current explicit
-  branch head, or its default-branch head when no branch was supplied, and
-  publishes the full immutable commit identity. An unavailable explicit branch
-  fails without fallback.
-. **Acquire completely.** The worker requests commit evidence by the selected
-  commit ID, validates the matching commit and same-width root tree ID, then
-  requests non-truncated recursive-tree evidence by that root tree ID. Edge
-  projection is provisional. Domain admission validates every record's raw and
-  canonical identity, kind, uniqueness, and every raw ancestor before
-  exclusions, suffix filtering, or content reads.
-. **Read sequentially.** Eligible blobs are fetched in canonical order by the
-  selected commit ID, checked against expected object identities, decoded,
-  normalized, and admitted one at a time. Branch text is not used in commit,
-  tree, or raw-source routes. Any current content or provider failure aborts the
-  complete attempt.
-. **Process sequentially.** After all admitted source is available, the worker
-  initializes syntax processing and derives metrics file by file, releasing
-  source and parser projections as it proceeds. Any current syntax or metric
-  failure aborts the complete attempt.
-. **Construct and transfer.** The domain builds one deterministic city. The
-  worker transfers aligned geometry and inspection facts, but no source.
-. **Publish atomically.** The controller validates the entire payload, stages
-  presenter resources and detached semantic content, rechecks generation
-  eligibility, and commits one city. A staging, commit, or current presentation
-  failure rolls the city back rather than exposing a partial result.
+== Analyze lifecycle
 
-The exact product failure mapping belongs to
-xref:requirements:city-and-failures.adoc[City and Failures].
+. The browser opens one persistent same-origin session response.
+. Analyze consumes one strictly increasing generation. The server fully reads,
+  decodes, and validates the command before changing lifecycle state.
+. Replacement joins and releases prior work. Capacity is reserved atomically
+  before worker creation.
+. The worker selects an immutable revision, validates the complete source
+  inventory, reads admitted blobs, initializes the parser once, continues
+  supported per-file failures, and constructs a deterministic city.
+. The parent validates the complete result and keeps it provisional until the
+  worker exits normally.
+. The session emits one complete JSON event per write. The browser validates
+  session and generation identity before changing displayed state.
 
-== Current interaction and lifetime
+Successful and all-files-failed results retain their exact normalized source
+association in process memory for every successfully analyzed file and every
+file that reached a syntax or metric failure. Source text rejected as
+unsupported is not retained. The current source-result association remains
+until Discard, replacement, detected session loss, or graceful shutdown. Both
+results expose Discard. The browser receives no source.
 
-The presenter converts keyboard, pointer, wheel, resize, and context-loss input
-to generation-scoped semantic events. The controller owns search matching,
-hover and selection state, inspection facts, and safe semantic text. Current
-path-search activation selects and automatically reveals a building by moving
-the camera; ordinary canvas selection does not. There is no source view.
+== Cancellation, replacement, loss, and shutdown
 
-Cancel aborts provider work while that work is abortable. Replacement and stale
-callbacks cannot publish. Worker completion drains provider and source
-ownership. Rollback, context loss, `pagehide`, or controller disposal removes
-listeners, semantic nodes, canvas state, worker ownership, and WebGL resources
-through idempotent cleanup.
+Cancel and Discard invalidate work, terminate and join an active worker, release
+ownership, and then emit their control event. Replacement emits no synthetic
+terminal event. Stale completion cannot restore discarded state.
 
-== Packaged but inactive standalone M5 runtime
+When the first complete NDJSON frame makes `res.write` return false, the runtime
+retains that blocked frame and waits for `drain`; the blocked write alone does
+not cause session loss. The session, any retained source, and their admission
+capacity remain owned while it waits. Another event or a mutating command while
+the frame is blocked initiates joined session loss without another write.
+Request abort, response close/error, owning-socket close, unrepresentable
+browser input, or an advanced command/protocol failure also loses the
+browser-owned temporary session. There is no reconnect or recovery.
 
-An inactive shared core now completes verified raw acquisition, records
-unsupported text per file, initializes the parser once, continues syntax and
-metric failures, and returns a deterministic city, failed-file rows, and
-retained normalized bytes. An inactive Node boundary executes one attempt in a
-dedicated worker, validates both the pre-send value and the received structured
-clone, transfers exact owned city/source buffers, and keeps terminal data
-provisional until code-0 worker exit is joined. It does not change the current
-browser sequence above and has no active browser or HTTP integration path.
+SIGINT and SIGTERM stop admission, invalidate work, join workers, discard
+retained state, close responses, and complete only with zero live sessions,
+active attempts, and retained source bytes.
 
-The inactive perimeter validates all operator values and supplied manifest
-bytes before listening. After binding it derives one canonical HTTP origin from
-the configured canonical host and actual port. Native HTTP ingress applies one
-fail-closed Host, target, method, Origin, media-type, expectation, framing, and
-bounded-body sequence. Static GET and HEAD serve only prevalidated public
-fixture bytes. Rejections close the connection without draining a body or
-dispatching later pipelined work. When the inactive session runtime is
-constructed, the reserved routes implement one persistent session response and
-separate analyze, cancel, and discard commands. Every command body completes,
-strictly decodes, and exactly parses before lifecycle or capacity changes.
+== Package and browser execution
 
-A valid Analyze first advances its generation and joins/releases any prior
-active or current state. It then atomically reserves one worker slot and the
-full 40 MiB source envelope before creating the dedicated `worker_threads`
-worker. A successful joined result shrinks that reservation to exact retained
-normalized bytes; failure releases it. Cancel and discard make work ineligible,
-terminate and join active work, release ownership, and only then emit their
-control event. Replacement emits no synthetic event, and stale completion
-cannot promote discarded state.
+The canonical artifact is `dist/`. `npm start -- <flags>` executes
+`dist/server/standalone.mjs`. `npm run dev -- <flags>` builds an independent
+artifact under `build/development/` and executes the same generated entry; it
+has no HMR or WebSocket behavior and does not write `dist/`.
 
-Each session writes one complete JSON line per `res.write`. One false return
-waits for `drain` without a lower frame limit. A second event or mutating command
-while blocked initiates session loss without another write. Reported request
-abort, response close/error, and owning-socket close use the same idempotent
-loss path. SIGINT and SIGTERM stop admission, invalidate work, join workers,
-discard retained state, close responses, and complete only with zero ownership
-counters. This same-process worker boundary does not sandbox source or guarantee
-survival of process or host out-of-memory failure.
+Installed-Chrome/CDP evidence drives the actual packaged browser, server,
+worker, parser assets, and same-origin protocol with deterministic nonshipped
+provider evidence. It covers success, continuation, replacement, cancellation,
+discard, loss, capacity, page loss, private-file `404`, and exact browser
+network closure without live GitHub.
 
-The xref:requirements:standalone-m5-operating-policy.adoc[standalone M5
-operating policy] owns temporary process-memory custody, session-loss and
-shutdown cleanup, loopback-first exposure, and finite operator-set admission.
-The internal session/event payloads, lifecycle states, and reported-loss
-handling are implemented by this inactive runtime. A deterministic builder now
-writes only `build/standalone/`: the source-free same-origin browser, private
-server and worker JavaScript, private parser runtime and four grammar assets,
-and one exact version-1 closure manifest. The browser opens one NDJSON owner,
-keeps session and generation state only in memory, validates exact events,
-gates late events by session and generation, and sends only Analyze, Cancel,
-and Discard commands. Session loss, advanced-Analyze protocol failure, and any
-Analyze `503` abort the owner and clear the displayed association; `422` shows
-`Invalid input`. Success and all-files-failed retain one explicit Discard
-control, while failed-file paths and categories remain inert text.
+== Deferred outcomes
 
-The generated CLI requires every capacity and the port while allowing only the
-host default, reports the assigned canonical origin, and uses native `fetch` in
-its production worker. Package tests inject deterministic providers or join
-barriers only through nonshipped constructor modules; generated runtime bytes
-contain no selector for them. Installed-Chrome/CDP evidence runs the actual
-packaged browser, server, worker, file-URL parser assets, and manifest serving,
-proves same-origin browser traffic and private-asset `404` behavior, and covers
-success, continuation outcomes, cancellation, replacement, discard, loss,
-non-reading ownership, and joined capacity reuse without live GitHub.
-
-Deployment values and calibrated capacity values remain later
-operator/deployment contracts. The standalone artifact is inactive: canonical
-`dist/`, root `dev`/`start`/`build`/`verify`, the browser entry, Pages upload,
-and production deployment remain unchanged. No Raspberry Pi behavior is
-qualified by this baseline.
-
-== Accepted whole-core runtime outcomes
-
-The inactive core implements continuation after eligible per-file text, syntax,
-or metric failures and reports each sanitized failed-file outcome. Active
-integration remains unimplemented. The whole-core target also recursively
-represents the successful hierarchy and provides a complete sortable
-successful-file inventory. Selection is shared between city and list and does
-not move the camera. Explicit unit drill-down shows exact analyzed source and
-owned contributions; the list, shared selection, source view, and contribution
-outcomes remain unimplemented.
-
-A completed whole-core analysis remains temporary until explicit Save. Save
-creates a new immutable server-owned snapshot. Reopen uses retained source and
-results without GitHub acquisition or reanalysis. These outcomes are accepted,
-but detailed request and transport flows, Save persistence, and whole-core
-cleanup and recovery flows have not been designed or implemented.
+Save/reopen, source view, authentication, private repositories, Internet
+service, calibrated deployment values, and Raspberry Pi qualification are not
+part of this runtime.

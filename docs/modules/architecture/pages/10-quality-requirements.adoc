@@ -1,62 +1,51 @@
 = Quality Requirements
 
-Product thresholds, formulas, controls, and proofs remain in the requirements
-and executable tests. These scenarios identify where architecture contributes.
-
 [cols="1,2,2,2",options="header"]
 |===
 |Quality |Scenario |Architectural response |Evidence location
 
 |Integrity
-|Provider evidence is malformed, incomplete, redirected, truncated, or changes
-identity.
-|Bounded gateways fail closed; complete inventory and blob identity checks occur
-before analysis; no partial city is published.
-|`src/edge/github-*-gateway.ts`, `src/domain/source-admission.ts`, source
-retrieval tests
+|Provider, command, worker, package, or event evidence is malformed,
+incomplete, stale, or changes identity.
+|Validate exact closed shapes and identities before state mutation or
+publication; fail closed.
+|source, worker, HTTP, session, browser, and manifest tests
 
 |Determinism
-|Equivalent accepted source facts are processed again.
-|Canonical ordering, pinned grammars, pure metric/city policies, and closed
-payload validation keep result meaning stable.
-|xref:requirements:source-and-metrics.adoc[Source and Metrics], domain and
-reproducibility tests
+|Equivalent accepted source facts or repository bytes are processed again.
+|Canonical ordering, pinned grammars, deterministic algorithms, a closed
+manifest, and isolated second-build comparison keep meaning and bytes stable.
+|domain tests and `npm run test:reproducibility`
 
 |Safety and privacy
-|Repository-controlled content crosses provider, worker, or UI boundaries.
-|Treat it as data, validate exact shapes, transfer a source-free result, publish
-paths as inert text, and expose sanitized failures only.
-|xref:requirements:city-and-failures.adoc[City and Failures], controller,
-protocol, publication, and package-policy tests
+|Repository-controlled content crosses provider, worker, HTTP, or UI
+boundaries.
+|Treat source as data, retain it only in process memory, transfer source-free
+results, publish paths as inert text, and return `404` for private artifact
+records.
+|operating policy, package audit, browser evidence
 
-|Atomicity
-|An attempt is replaced, cancelled, stale, or fails during presentation.
-|Generation gates, staged publication, rollback, and idempotent ownership cleanup
-leave either one complete current city or none.
-|`src/application/main-controller.ts`, worker-attempt and presenter tests
+|Lifecycle atomicity
+|An attempt is replaced, cancelled, stale, blocked, disconnected, or stopped.
+|Generation gates and parent-owned joined cleanup leave one complete current
+result or none and release capacity exactly once.
+|session runtime, shutdown, signal, and browser tests
 
-|Usability and accessibility
-|A keyboard or pointer user investigates a current city across supported viewport
-sizes.
-|Native semantic controls, keyboard selection, visible focus, inert inspection
-text, and responsive presentation accompany WebGL.
-|xref:requirements:city-and-failures.adoc[City and Failures], semantic and camera
-policy tests
+|Responsiveness
+|Parser work is busy while the HTTP service owns other sessions and small
+requests.
+|Run each admitted analysis in a dedicated worker thread; keep HTTP handling in
+the parent.
+|packaged browser and worker lifecycle evidence
 
 |Release reproducibility
 |A pull request or main publication is built.
-|The locked closure, unchanged canonical build, second-build comparison,
-package audit, inactive packaged-browser evidence, documentation build, and
-workflow-owned Pages bindings are
-verified. Separate mandatory gates also build the inactive standalone artifact,
-audit complete manifest closure without rebuilding, compare a second isolated
-build byte-for-byte, start and exercise the packaged server/worker/parser, and
-verify joined signal shutdown.
-|`package.json`, `.github/workflows/`, package, standalone-package, and
-publication tests
+|Locked install, closure and security audit, type checks, tests, one canonical
+build, byte reproduction, actual package/browser audit, docs build, and exact
+workflow upload bindings are mandatory.
+|`package.json`, `.github/workflows/`, standalone and publication tests
 |===
 
-The accepted target adds availability, confidentiality, retention, recovery,
-and capacity concerns for server-owned source and saved investigations. Their
-mechanisms and measurable scenarios require the unresolved target design; this
-chapter does not invent them.
+No Raspberry Pi performance, concurrency, memory, or deployment threshold is
+claimed. Authentication, Internet service, private-source confidentiality,
+saved-state retention, and recovery require later approved design.

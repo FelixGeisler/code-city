@@ -4,8 +4,7 @@ Status:: Accepted
 Human acceptance:: `SGTM`, receipt SHA-256 `bdf36f348863d90df01bf6795381e1e3a02daf217dd19a827f8f60292ef065bc`
 Accepted policy:: SHA-256 `a40e6c97c4dab3ef65e79a97ae4d2acef6863b1dcdfafd7e60e0ced980ac2565`
 
-This policy applies to the accepted, unimplemented standalone M5 slice. It does
-not describe the current browser-only implementation.
+This policy applies to the implemented standalone M5 slice.
 
 == Operating policy
 
@@ -27,8 +26,8 @@ not describe the current browser-only implementation.
   terminates and joins active workers, and discards all temporary state. Stale
   worker messages never restore discarded state. The accepted implementation
   issue must define observable session-loss detection and every terminal
-  transition. The Developer must not invent them. No transport protocol is
-  selected here.
+  transition. The implemented internal transport is the accepted native
+  same-origin HTTP session and command protocol; it is not a public API.
 * *Network exposure:* Listen on loopback by default. An operator may deliberately
   enable unauthenticated trusted-LAN exposure for public GitHub source only.
   This is not approval for Internet exposure, company authentication, private

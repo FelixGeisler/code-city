@@ -26,33 +26,35 @@ jobs:
     - run: npm audit --audit-level=high
     - run: npm run typecheck:node
     - run: npm run verify
-    - run: npm run standalone:build
-    - run: npm run standalone:audit
-    - run: npm run standalone:reproducibility
-    - run: npm run standalone:start
-    - run: npm run standalone:package
-    - run: npm run standalone:signals
-    - run: npm run standalone:browser
-    - name: Create and validate the publication record
+    - name: Create and validate the standalone publication record
       run: |
         node --input-type=module <<'NODE'
-        import { readFile, writeFile } from "node:fs/promises";
-        import { createPublicationRecord, validatePublicationRecord } from "./tools/publication-record.mjs";
-        const manifest = Uint8Array.from(await readFile("build/evidence/package-manifest.json"));
-        const record = createPublicationRecord({
+        import { mkdir, readFile, writeFile } from "node:fs/promises";
+        import { createStandalonePublicationRecord, validateStandalonePublicationRecord } from "./tools/standalone-publication-record.mjs";
+        const manifest = Uint8Array.from(await readFile("dist/package-manifest.json"));
+        const record = createStandalonePublicationRecord({
           repository: process.env.GITHUB_REPOSITORY,
           eventName: process.env.GITHUB_EVENT_NAME,
           eventSha: process.env.GITHUB_SHA,
           runId: Number(process.env.GITHUB_RUN_ID),
           runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
         }, manifest);
-        validatePublicationRecord(record, manifest);
+        validateStandalonePublicationRecord(record, manifest);
+        await mkdir("build/evidence", { recursive: true });
+        await writeFile("build/evidence/package-manifest.json", manifest, { flag: "wx" });
         await writeFile("build/evidence/publication-record.json", record, { flag: "wx" });
         NODE
-    - name: Upload the Pages artifact
+    - name: Upload the audited standalone artifact
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: code-city-standalone-${{ github.sha }}
+        path: dist
+        if-no-files-found: error
+        retention-days: 90
+    - name: Upload the audited retirement notice
       uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b
       with:
-        path: dist
+        path: build/pages
     - name: Upload internal publication evidence
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
@@ -175,8 +177,8 @@ jobs:
         import { createHash } from "node:crypto";
         import { lstat, readFile, readdir } from "node:fs/promises";
         import { execFileSync } from "node:child_process";
-        import { parsePackageManifest } from "./tools/package-manifest.mjs";
-        import { validatePublicationRecord } from "./tools/publication-record.mjs";
+        import { parseStandaloneManifest } from "./tools/standalone-manifest.mjs";
+        import { validateStandalonePublicationRecord } from "./tools/standalone-publication-record.mjs";
         const expectedNames = ["package-manifest.json", "publication-record.json"];
         if (process.env.GITHUB_EVENT_NAME !== "push" || process.env.GITHUB_REF !== "refs/heads/main") throw new Error("publication binding mismatch");
         if (!/^[0-9a-f]{40}$/u.test(process.env.GITHUB_SHA ?? "")) throw new Error("publication binding mismatch");
@@ -186,9 +188,9 @@ jobs:
         if (JSON.stringify(names) !== JSON.stringify(expectedNames)) throw new Error("publication binding mismatch");
         for (const name of names) if (!(await lstat(`build/publication/${name}`)).isFile()) throw new Error("publication binding mismatch");
         const manifest = Uint8Array.from(await readFile("build/publication/package-manifest.json"));
-        parsePackageManifest(manifest);
+        parseStandaloneManifest(manifest);
         const recordBytes = Uint8Array.from(await readFile("build/publication/publication-record.json"));
-        const record = validatePublicationRecord(recordBytes, manifest);
+        const record = validateStandalonePublicationRecord(recordBytes, manifest);
         const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
         if (record.repository !== process.env.GITHUB_REPOSITORY
             || record.eventName !== process.env.GITHUB_EVENT_NAME

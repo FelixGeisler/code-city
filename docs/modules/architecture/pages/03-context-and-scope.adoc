@@ -2,56 +2,52 @@
 
 == Current system context
 
-image::context.svg[Code City current context and accepted unimplemented target boundary]
-
-A user supplies a public GitHub repository URL and optional exact path
-exclusions to a static application served by GitHub Pages. The browser obtains
-package assets from Pages and repository metadata and source from GitHub. No
-Code City server participates in the current analysis.
+A user opens the browser served by a locally operated Code City standalone
+service, supplies one public GitHub repository URL and optional exact path
+exclusions, and explicitly starts analysis. The browser sends only same-origin
+session and command requests. The Node service reads public GitHub evidence,
+selects one immutable revision, owns source and analysis, and returns
+source-free events.
 
 [cols="1,2,2",options="header"]
 |===
 |Party |Sends to Code City |Receives from Code City
 
-|User
-|Repository URL, additional exclusions, explicit Analyze/Cancel and interaction
-commands
-|Status, selected commit, effective exclusions, city, path search, metric
-inspection, and browser-session interaction
-
-|GitHub Pages
-|Static package bytes
-|Package requests made by the browser
+|User browser
+|Repository URL, additional exclusions, Analyze, Cancel, Discard, and
+presentation interaction
+|Status, selected commit, source-free city, sanitized failed-file rows, and
+presentation state
 
 |Public GitHub
 |Provider responses to anonymous reads; no credentials or repository writes
-|Fixed-route requests for default or explicit branch resolution, commit,
-recursive tree, and encoded raw-file retrieval
+|Fixed-route requests for revision, commit, recursive tree, and encoded raw
+file retrieval
+
+|Operator
+|Required port and capacity values; optional host and canonical host
+|The bound canonical origin and shutdown diagnostics
 |===
 
-=== Current trust boundaries
+GitHub Pages is not the application service. It hosts only the versioned,
+script-free retirement notice for the former in-browser analyzer.
 
-The shipped package is trusted only after build and package verification.
-GitHub responses, repository paths, source bytes, worker messages, and browser
-input cross validation boundaries. Provider projection in `src/edge/` removes
-unneeded response shape but does not make data trusted. The application and
-domain layers still validate immutable identities, complete raw ancestry,
-canonical paths, kinds, content, and the source-free city payload before
-publication.
+== Trust boundaries
 
-Repository text reaches parsers as data. Canonical paths reach only inert UI
-text and validated controller facts; source does not cross back from the worker
-in the current result. The exact current failure and privacy rules are owned by
-xref:requirements:city-and-failures.adoc[City and Failures].
+Browser input, provider responses, repository paths, source bytes, worker
+messages, and generated package bytes cross validation boundaries. Provider
+projection is not trust. The service validates immutable identities, complete
+raw ancestry, canonical paths, content, internal protocol values, and
+source-free city payloads.
 
-== Accepted target context
+Source text reaches parsers as data inside the analysis worker and does not
+cross into browser events. Canonical paths and failure categories reach the
+browser only as validated inert data. The manifest and all private runtime
+files remain HTTP-inaccessible.
 
-The accepted target inserts a Code City server as the authority for acquisition,
-analysis, retained source-result association, and saved investigations. The
-browser becomes the presentation and investigation client, including exact
-analyzed-source viewing. This is a responsibility boundary only: there is no
-implemented server and no selected transport, API, storage, access mechanism,
-or deployment topology.
+== Later target context
 
-The target trust boundaries for retained source, users, and server operations
-cannot be drawn until those unresolved choices are approved.
+The whole-core target retains the same ownership boundary and adds explicit
+saved investigations and deeper source investigation. User identity,
+authorization, storage, public ingress, private providers, and deployment
+mechanisms remain unresolved.
