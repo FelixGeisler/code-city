@@ -44,6 +44,16 @@ async function logRows(harness) {
   return text.trim() ? text.trim().split("\n").map((line) => JSON.parse(line)) : [];
 }
 
+async function waitForLog(harness, start, predicate, label, milliseconds = 120_000) {
+  const end = Date.now() + milliseconds;
+  while (Date.now() < end) {
+    const rows = (await logRows(harness)).slice(start);
+    if (predicate(rows)) return rows;
+    await sleep(20);
+  }
+  throw new Error(`Timed out waiting for provider evidence: ${label}`);
+}
+
 function holdBodyReader(origin) {
   const url = new URL(origin);
   const socket = net.createConnection({ host: "127.0.0.1", port: Number(url.port) });
@@ -105,6 +115,11 @@ export async function checkStandaloneBrowser() {
   const manifest = await auditStandaloneArtifact(canonicalStandaloneRoot);
   const publicPaths = manifest.files.filter(({ role }) => role === "public").map(({ path: filePath }) => filePath);
   assert.deepEqual(publicPaths, ["public/browser.css", "public/browser.js", "public/index.html"]);
+  const packagedHtml = await readFile(path.join(canonicalStandaloneRoot, "public", "index.html"), "utf8");
+  assert.equal(packagedHtml.includes("/src/edge/standalone-browser-main.ts"), false);
+  assert.equal(packagedHtml.match(/href="\/browser\.css"/gu)?.length, 1);
+  assert.equal(packagedHtml.match(/src="\/browser\.js"/gu)?.length, 1);
+
   const temporary = await mkdtemp(path.join(os.tmpdir(), "code-city-standalone-browser-"));
   const profile = path.join(temporary, "chrome-profile");
   const harness = await writeStandaloneBrowserProviderHarness(path.join(temporary, "provider"));
@@ -124,13 +139,20 @@ export async function checkStandaloneBrowser() {
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
     const browserExceptions = [];
     const requests = [];
+    const responses = [];
     cdp.listeners.add((message) => {
       if (message.sessionId !== sessionId) return;
       if (message.method === "Runtime.exceptionThrown") browserExceptions.push(message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text);
       if (message.method === "Network.requestWillBeSent") requests.push({
+        requestId: message.params.requestId,
         url: message.params.request.url,
         method: message.params.request.method,
         postData: message.params.request.postData,
+      });
+      if (message.method === "Network.responseReceived") responses.push({
+        requestId: message.params.requestId,
+        url: message.params.response.url,
+        status: message.params.response.status,
       });
     });
     await Promise.all([
@@ -155,8 +177,29 @@ export async function checkStandaloneBrowser() {
       }
       throw new Error(`Timed out waiting for ${label}: ${JSON.stringify(await snapshot())}`);
     };
-    const submit = async () => evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(REPOSITORY)};document.querySelector('textarea[name=additional-exclusions]').value='';document.querySelector('form').requestSubmit();true`);
+    const waitForResponse = async (start, pathname, expectedStatus, milliseconds = 120_000) => {
+      const end = Date.now() + milliseconds;
+      while (Date.now() < end) {
+        const response = responses.slice(start).find(({ url, status }) => new URL(url).pathname === pathname && status === expectedStatus);
+        if (response) return response;
+        if (browserExceptions.length) throw new Error(`Browser exception while waiting for ${pathname} ${expectedStatus}: ${browserExceptions.join("; ")}`);
+        await sleep(20);
+      }
+      throw new Error(`Timed out waiting for ${pathname} response ${expectedStatus}`);
+    };
+    const submit = async (repositoryUrl = REPOSITORY, additionalExclusions = "") => evaluate(`(()=>{const repository=document.querySelector('input[name=repository]');const exclusions=document.querySelector('textarea[name=additional-exclusions]');repository.value=${JSON.stringify(repositoryUrl)};exclusions.value=${JSON.stringify(additionalExclusions)};const raw={repositoryUrl:repository.value,additionalExclusions:exclusions.value};document.querySelector('form').requestSubmit();return raw;})()`);
     const click = async (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).click();true`);
+    const browserCommand = async (target, value) => evaluate(`fetch(${JSON.stringify(target)},{method:'POST',headers:{'Content-Type':'application/json'},body:${JSON.stringify(JSON.stringify(value))},cache:'no-store',credentials:'omit',redirect:'error'}).then(async(response)=>{await response.arrayBuffer();return response.status;})`);
+    const analyzeRequests = () => requests.filter(({ url }) => url === `${origin}/_code-city/analyze`);
+    const latestAnalyze = () => JSON.parse(analyzeRequests().at(-1).postData);
+    const recoverSuccess = async (label) => {
+      await setMode(harness, "success");
+      await submit();
+      return waitFor((value) => value.canvases === 1 && value.commit === "a".repeat(40), label);
+    };
+    const installAnalyzeMutation = async (kind) => evaluate(`(()=>{const original=window.fetch.bind(window);window.fetch=(input,init)=>{if(input!=='/_code-city/analyze')return original(input,init);window.fetch=original;const next={...init};if(${JSON.stringify(kind)}==='bad-shape')next.body='{}';if(${JSON.stringify(kind)}==='missing-session'){const value=JSON.parse(next.body);value.sessionId='A'.repeat(43);next.body=JSON.stringify(value);}if(${JSON.stringify(kind)}==='wrong-media'){const headers=new Headers(next.headers);headers.set('Content-Type','text/plain');next.headers=headers;}return original(input,next);};return true;})()`);
+    const installDelayedControlResponse = async (target) => evaluate(`(()=>{const original=window.fetch.bind(window);let release;const gate=new Promise((resolve)=>{release=resolve;});window.__codeCityReleaseControl=release;window.__codeCityControlStatus=null;window.__codeCityControlSettled=false;window.fetch=(input,init)=>{if(input!==${JSON.stringify(target)})return original(input,init);window.fetch=original;const pending=(async()=>{const response=await original(input,init);window.__codeCityControlStatus=response.status;await gate;window.__codeCityControlSettled=true;return response;})();window.__codeCityControlPromise=pending.then((response)=>response.status);return pending;};return true;})()`);
+    const releaseDelayedControlResponse = async () => evaluate(`window.__codeCityReleaseControl();window.__codeCityControlPromise`);
 
     await cdp.send("Page.navigate", { url: `${origin}/` }, sessionId);
     await waitFor((value) => value.ready === "complete", "browser startup");
@@ -165,10 +208,42 @@ export async function checkStandaloneBrowser() {
     await submit();
     let state = await waitFor((value) => value.canvases === 1 && value.discard[0] === "Discard current analysis", "ordinary success");
     assert.equal(state.commit, "a".repeat(40));
-    await sleep(250);
-    assert.deepEqual(await snapshot(), state, "retained result changed during idle time");
+    assert.equal((await request(origin, "/browser.css")).status, 200);
+    assert.deepEqual(await snapshot(), state, "retained result changed while the session remained idle");
+
+    let current = latestAnalyze();
+    assert.equal(await browserCommand("/_code-city/cancel", { sessionId: current.sessionId, generation: current.generation }), 204);
+    assert.deepEqual(await snapshot(), state, "no-op cancel discarded retained success");
+
+    const invalidRaw = await submit("  invalid repository  ", "raw\r\nvalue ");
+    const invalidRequest = latestAnalyze();
+    assert.equal(invalidRequest.repositoryUrl, invalidRaw.repositoryUrl);
+    assert.equal(invalidRequest.additionalExclusions, invalidRaw.additionalExclusions);
+    state = await waitFor((value) => value.feedback === "Invalid input" && value.canvases === 0 && value.commit === "" && value.discard.length === 0, "consumed raw 422");
+    assert.equal(await browserCommand("/_code-city/discard", { sessionId: invalidRequest.sessionId, generation: invalidRequest.generation }), 204);
+    assert.deepEqual(await snapshot(), state, "repeat discard after consumed 422 emitted an event or restored old UI");
+
+    state = await recoverSuccess("success after consumed 422");
+    const beforeUnrepresentable = analyzeRequests().length;
+    await evaluate(`(()=>{const input=document.querySelector('input[name=repository]');Object.defineProperty(input,'value',{configurable:true,value:Symbol('unrepresentable')});document.querySelector('form').requestSubmit();return true;})()`);
+    await waitFor((value) => value.status === "Provider/resolution failure" && value.canvases === 0 && value.commit === "" && value.discard.length === 0, "unrepresentable input closure");
+    assert.equal(analyzeRequests().length, beforeUnrepresentable, "unrepresentable input reached the Analyze endpoint");
+    await evaluate(`(()=>{const input=document.querySelector('input[name=repository]');delete input.value;return true;})()`);
+    state = await recoverSuccess("success after unrepresentable input closure");
+
+    current = latestAnalyze();
+    await installDelayedControlResponse("/_code-city/discard");
     await click("[data-actions] button");
-    await waitFor((value) => value.canvases === 0 && value.commit === "" && value.discard.length === 0, "discard");
+    await waitFor((value) => value.canvases === 0 && value.commit === "" && value.discard.length === 0, "discard event before response delivery");
+    assert.deepEqual(await evaluate(`({status:window.__codeCityControlStatus,settled:window.__codeCityControlSettled})`), { status: 204, settled: false });
+    assert.equal(await releaseDelayedControlResponse(), 204);
+    assert.equal(await browserCommand("/_code-city/discard", { sessionId: current.sessionId, generation: current.generation }), 204);
+    assert.deepEqual(await snapshot(), { ...state, status: "", feedback: "", commit: "", canvases: 0, failed: [], discard: [] });
+
+    state = await recoverSuccess("success after repeated no-state discard");
+    const retained = latestAnalyze();
+    assert.equal(await browserCommand("/_code-city/discard", { sessionId: retained.sessionId, generation: retained.generation - 1 }), 409);
+    assert.deepEqual(await snapshot(), state, "stale repeated discard changed retained current state");
 
     await setMode(harness, "mixed");
     await submit();
@@ -183,25 +258,31 @@ export async function checkStandaloneBrowser() {
     let logStart = (await logRows(harness)).length;
     await setMode(harness, "block-provider");
     await submit();
-    while ((await logRows(harness)).slice(logStart).every(({ event }) => event !== "revision-start")) await sleep(20);
+    await waitForLog(harness, logStart, (rows) => rows.some(({ event }) => event === "revision-start"), "provider start before cancellation");
+    current = latestAnalyze();
+    await installDelayedControlResponse("/_code-city/cancel");
     await click("[data-status] button");
-    await waitFor((value) => value.status === "Cancelled", "provider cancellation");
-    assert((await logRows(harness)).slice(logStart).some(({ event }) => event === "revision-start"));
+    state = await waitFor((value) => value.status === "Cancelled", "cancel event before response delivery");
+    assert.deepEqual(await evaluate(`({status:window.__codeCityControlStatus,settled:window.__codeCityControlSettled})`), { status: 204, settled: false });
+    assert.equal(await releaseDelayedControlResponse(), 204);
+    assert.equal(await browserCommand("/_code-city/cancel", { sessionId: current.sessionId, generation: current.generation }), 204);
+    assert.deepEqual(await snapshot(), state, "repeat no-op cancel emitted an event");
 
     logStart = (await logRows(harness)).length;
     await setMode(harness, "block-provider");
     await submit();
-    while ((await logRows(harness)).slice(logStart).every(({ event }) => event !== "revision-start")) await sleep(20);
+    await waitForLog(harness, logStart, (rows) => rows.some(({ event }) => event === "revision-start"), "provider start before replacement");
     await setMode(harness, "success");
     await submit();
-    await waitFor((value) => value.canvases === 1 && value.commit === "a".repeat(40), "replacement success");
-    const generations = requests.filter(({ url }) => url === `${origin}/_code-city/analyze`).map(({ postData }) => JSON.parse(postData).generation);
+    state = await waitFor((value) => value.canvases === 1 && value.commit === "a".repeat(40), "replacement success");
+    assert.deepEqual(await snapshot(), state, "stale replaced attempt published after replacement success");
+    const generations = analyzeRequests().map(({ postData }) => JSON.parse(postData).generation);
     assert(generations.every((generation, index) => index === 0 || generation > generations[index - 1]), "Analyze generations were not strictly increasing");
 
     logStart = (await logRows(harness)).length;
     await setMode(harness, "busy-parser");
     await submit();
-    while ((await logRows(harness)).slice(logStart).filter(({ event }) => event === "source").length < 8) await sleep(20);
+    await waitForLog(harness, logStart, (rows) => rows.filter(({ event }) => event === "source").length >= 8, "busy parser sources");
     const responsive = await Promise.race([
       request(origin, "/browser.css"),
       sleep(5_000).then(() => ({ status: 0 })),
@@ -209,23 +290,78 @@ export async function checkStandaloneBrowser() {
     assert.equal(responsive.status, 200, "actual busy analysis blocked a small HTTP response");
     await click("[data-status] button");
     await waitFor((value) => value.status === "Cancelled", "parser cancellation");
-    await setMode(harness, "success");
+    await recoverSuccess("joined worker-slot reuse");
+
+    for (const scenario of [
+      { status: 400, mutation: "bad-shape", label: "Analyze 400" },
+      { status: 404, mutation: "missing-session", label: "Analyze 404" },
+      { status: 415, mutation: "wrong-media", label: "Analyze 415" },
+    ]) {
+      const responseStart = responses.length;
+      await installAnalyzeMutation(scenario.mutation);
+      await submit();
+      await waitFor((value) => value.status === "Provider/resolution failure" && value.canvases === 0 && value.commit === "", `${scenario.label} loss policy`);
+      await waitForResponse(responseStart, "/_code-city/analyze", scenario.status);
+      await recoverSuccess(`success after ${scenario.label}`);
+    }
+
+    let responseStart = responses.length;
+    await submit(REPOSITORY, "x".repeat(5000));
+    await waitFor((value) => value.status === "Provider/resolution failure" && value.canvases === 0 && value.commit === "", "Analyze 413 loss policy");
+    await waitForResponse(responseStart, "/_code-city/analyze", 413);
+    state = await recoverSuccess("success after Analyze 413");
+
+    current = latestAnalyze();
+    assert.equal(await browserCommand("/_code-city/analyze", {
+      sessionId: current.sessionId,
+      generation: current.generation + 2,
+      repositoryUrl: "invalid",
+      additionalExclusions: "",
+    }), 422);
+    responseStart = responses.length;
     await submit();
-    await waitFor((value) => value.canvases === 1, "joined worker-slot reuse");
+    await waitFor((value) => value.status === "Provider/resolution failure" && value.canvases === 0 && value.commit === "", "Analyze 409 loss policy");
+    await waitForResponse(responseStart, "/_code-city/analyze", 409);
+    await recoverSuccess("success after Analyze 409");
 
     logStart = (await logRows(harness)).length;
     await setMode(harness, "block-provider");
     await submit();
-    while ((await logRows(harness)).slice(logStart).every(({ event }) => event !== "revision-start")) await sleep(20);
+    await waitForLog(harness, logStart, (rows) => rows.some(({ event }) => event === "revision-start"), "provider start before reader capacity loss");
     const held = [holdBodyReader(origin), holdBodyReader(origin)];
     await Promise.all(held.map(({ ready }) => ready));
     await setMode(harness, "success");
+    responseStart = responses.length;
     await submit();
     await waitFor((value) => value.status === "Code City capacity is unavailable." && value.canvases === 0 && value.commit === "", "reader 503 loss policy");
+    await waitForResponse(responseStart, "/_code-city/analyze", 503);
     for (const { socket } of held) socket.destroy();
-    await setMode(harness, "success");
-    await submit();
-    await waitFor((value) => value.canvases === 1, "explicit post-loss session creation");
+    await recoverSuccess("explicit post-loss session creation");
+
+    const allowedRequests = new Set([
+      "GET /",
+      "GET /browser.css",
+      "GET /browser.js",
+      "POST /_code-city/session",
+      "POST /_code-city/analyze",
+      "POST /_code-city/cancel",
+      "POST /_code-city/discard",
+    ]);
+    for (const observed of requests.filter(({ url }) => /^https?:/u.test(url))) {
+      const url = new URL(observed.url);
+      assert.equal(url.origin, origin, `browser made a cross-origin request: ${observed.url}`);
+      assert.equal(allowedRequests.has(`${observed.method} ${url.pathname}`), true, `browser requested a non-application path: ${observed.method} ${url.pathname}`);
+    }
+    for (const forbiddenPath of [
+      "/server/standalone.mjs",
+      "/parser/web-tree-sitter.wasm",
+      "/package-manifest.json",
+      "/src/edge/github-source-gateway.ts",
+      "/src/edge/github-revision-gateway.ts",
+      "/src/edge/tree-sitter-assets.ts",
+    ]) {
+      assert.equal(requests.some(({ url }) => /^https?:/u.test(url) && new URL(url).pathname === forbiddenPath), false, `browser requested forbidden same-origin path ${forbiddenPath}`);
+    }
 
     await cdp.send("Page.navigate", { url: "about:blank" }, sessionId);
     await sleep(100);
@@ -249,12 +385,6 @@ export async function checkStandaloneBrowser() {
     for (const privatePath of ["/server/standalone.mjs", "/parser/web-tree-sitter.wasm", "/package-manifest.json"]) {
       assert.equal((await request(origin, privatePath)).status, 404, `${privatePath} escaped private serving`);
     }
-    const unexpectedNetwork = requests.filter(({ url }) => !url.startsWith(origin));
-    assert.deepEqual(unexpectedNetwork, [], "browser made a cross-origin request");
-    const requestedPaths = new Set(requests.map(({ url }) => new URL(url).pathname));
-    for (const privatePath of ["/server/standalone.mjs", "/parser/web-tree-sitter.wasm", "/package-manifest.json"]) {
-      assert.equal(requestedPaths.has(privatePath), false, `browser requested private path ${privatePath}`);
-    }
     assert.equal(browserExceptions.length, 0, `Browser exceptions: ${browserExceptions.join("; ")}`);
 
     sendGracefulSignal(processUnderTest, "SIGTERM");
@@ -262,7 +392,12 @@ export async function checkStandaloneBrowser() {
     await expectCleanExit(processUnderTest);
     process.stdout.write(`${JSON.stringify({
       chrome: { category: discovery.category, version: chromeVersion },
-      scenarios: ["success", "mixed", "all-files-failed", "provider-cancel", "replacement", "parser-cancel", "join-reuse", "reader-503", "pagehide", "non-reading-owner"],
+      scenarios: [
+        "success", "retained-noop-cancel", "raw-422-cleanup", "unrepresentable-input", "discard-event-first",
+        "discard-repeat-no-state", "discard-stale", "mixed", "all-files-failed", "cancel-event-first", "cancel-repeat-noop",
+        "replacement-stale-suppression", "parser-cancel", "join-reuse", "analyze-400", "analyze-404", "analyze-409",
+        "analyze-413", "analyze-415", "reader-503", "pagehide", "non-reading-owner", "exact-network-allowlist",
+      ],
       browserRequests: requests.length,
       providerEvents: (await logRows(harness)).length,
       publicFiles: publicPaths,
@@ -286,8 +421,13 @@ export async function checkStandaloneBrowser() {
 
 const invokedPath = process.argv[1] && path.resolve(process.argv[1]);
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  await Promise.race([
-    checkStandaloneBrowser(),
-    new Promise((_, reject) => setTimeout(() => reject(new Error("Standalone browser evidence exceeded its watchdog")), WATCHDOG_MS)),
-  ]);
+  let watchdog;
+  try {
+    await Promise.race([
+      checkStandaloneBrowser(),
+      new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error("Standalone browser evidence exceeded its watchdog")), WATCHDOG_MS); }),
+    ]);
+  } finally {
+    if (watchdog !== undefined) clearTimeout(watchdog);
+  }
 }

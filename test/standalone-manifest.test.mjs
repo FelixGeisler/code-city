@@ -3,7 +3,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/pr
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
-import { buildStandaloneArtifact } from "../tools/build-standalone.mjs";
+import { buildStandaloneArtifact, packageStandaloneBrowserHtml } from "../tools/build-standalone.mjs";
 import { auditStandaloneArtifact, parseStandaloneManifest, serializeStandaloneManifest, validateStandaloneManifest, writeStandaloneManifest } from "../tools/standalone-manifest.mjs";
 
 const builtFixtureRoot = await mkdtemp(path.join(os.tmpdir(), "code-city-standalone-built-fixture-"));
@@ -25,6 +25,23 @@ function record(filePath, overrides = {}) {
 function manifest(files = [record("public/index.html")]) {
   return { version: 1, files };
 }
+
+test("standalone browser packaging replaces LF and CRLF source entries with packaged artifact references", async () => {
+  const template = await readFile(new URL("../standalone.html", import.meta.url), "utf8");
+  const lf = template.replaceAll("\r\n", "\n");
+  const crlf = lf.replaceAll("\n", "\r\n");
+  for (const [name, input] of [["LF", lf], ["CRLF", crlf]]) {
+    const html = packageStandaloneBrowserHtml(input);
+    assert.equal(html.includes("\r"), false, name);
+    assert.equal(html.includes('/src/edge/standalone-browser-main.ts'), false, name);
+    assert.equal(html.match(/href="\/browser\.css"/gu)?.length, 1, name);
+    assert.equal(html.match(/src="\/browser\.js"/gu)?.length, 1, name);
+  }
+  const packaged = await readFile(path.join(builtArtifactRoot, "public", "index.html"), "utf8");
+  assert.equal(packaged.includes('/src/edge/standalone-browser-main.ts'), false);
+  assert.equal(packaged.match(/href="\/browser\.css"/gu)?.length, 1);
+  assert.equal(packaged.match(/src="\/browser\.js"/gu)?.length, 1);
+});
 
 test("standalone builder emits the exact role layout and canonical closed manifest", async () => {
   const built = await auditStandaloneArtifact(builtArtifactRoot);

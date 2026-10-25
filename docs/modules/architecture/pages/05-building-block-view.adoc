@@ -107,9 +107,10 @@ This graph is mandatory in CI through `npm run typecheck:node`. Additive
 standalone gates then build `build/standalone/`, audit its complete manifest
 closure, reproduce every byte, start its generated CLI, exercise its packaged
 perimeter/worker/parser path with nonshipped constructor fixtures, and verify
-joined signal shutdown. The graph is still not reachable from the active Vite
-application or current `npm start` package server. Browser integration and
-activation remain later work.
+joined signal shutdown. The package now includes and exercises an inactive
+source-free browser client against that generated server and worker path. It
+remains unreachable from the active Vite application and current `npm start`
+package server; only activation and cutover remain deferred.
 
 == Accepted target boundary
 

@@ -48,6 +48,19 @@ async function emittedFiles(directory, prefix = "") {
   return files;
 }
 
+const SOURCE_BROWSER_ENTRY = '  <script type="module" src="/src/edge/standalone-browser-main.ts"></script>\n';
+const PACKAGED_BROWSER_ENTRY = '  <link rel="stylesheet" href="/browser.css">\n  <script type="module" src="/browser.js"></script>\n';
+
+export function packageStandaloneBrowserHtml(template) {
+  const normalized = template.replaceAll("\r\n", "\n");
+  if (normalized.split(SOURCE_BROWSER_ENTRY).length !== 2) throw new Error("Standalone browser template must contain exactly one source entry");
+  const html = normalized.replace(SOURCE_BROWSER_ENTRY, PACKAGED_BROWSER_ENTRY);
+  if (html.includes("/src/edge/standalone-browser-main.ts") || !html.includes('href="/browser.css"') || !html.includes('src="/browser.js"')) {
+    throw new Error("Standalone browser package entry replacement failed");
+  }
+  return html;
+}
+
 async function buildBrowser(artifactRoot) {
   const publicRoot = path.join(artifactRoot, "public");
   await viteBuild({
@@ -71,11 +84,7 @@ async function buildBrowser(artifactRoot) {
     },
   });
   const template = await readFile(path.join(projectRoot, "standalone.html"), "utf8");
-  const html = template
-    .replace("  <script type=\"module\" src=\"/src/edge/standalone-browser-main.ts\"></script>\n", "  <link rel=\"stylesheet\" href=\"/browser.css\">\n  <script type=\"module\" src=\"/browser.js\"></script>\n")
-    .replaceAll("\r\n", "\n");
-  if (html === template) throw new Error("Standalone browser template entry was not replaced");
-  await writeFile(path.join(publicRoot, "index.html"), html, "utf8");
+  await writeFile(path.join(publicRoot, "index.html"), packageStandaloneBrowserHtml(template), "utf8");
   await writeFile(
     path.join(publicRoot, "browser.css"),
     (await readFile(path.join(projectRoot, "src", "edge", "standalone-browser-shell.css"), "utf8")).replaceAll("\r\n", "\n"),

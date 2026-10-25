@@ -126,6 +126,30 @@ test("browser event validation accepts only exact source-free schemas", () => {
   }), undefined);
 });
 
+test("browser city validation rejects numeric wire values that typed arrays would wrap or round", () => {
+  const rgba = plainCity();
+  rgba.geometry.rgba[0] += 256;
+  assert.equal(parseBrowserSessionEvent({
+    type: "ANALYSIS_SUCCEEDED", sessionId: SESSION, generation: 1, revision: REVISION, city: rgba, notAnalyzedFiles: [],
+  }), undefined);
+
+  for (const mutate of [
+    (city) => { city.geometry.origins[0] += 1e-8; },
+    (city) => { city.geometry.sizes[0] += 1e-8; },
+    (city) => { city.geometry.bounds[3] += 1e-8; },
+    (city) => { city.presentation.plates[0].minimum[0] += 1e-8; },
+    (city) => { city.presentation.plates[0].dimensions[0] += 1e-8; },
+    (city) => { city.presentation.sceneBounds[3] += 1e-8; },
+    (city) => { city.presentation.centre[0] += 1e-8; },
+  ]) {
+    const city = plainCity();
+    mutate(city);
+    assert.equal(parseBrowserSessionEvent({
+      type: "ANALYSIS_SUCCEEDED", sessionId: SESSION, generation: 1, revision: REVISION, city, notAnalyzedFiles: [],
+    }), undefined);
+  }
+});
+
 test("Analyze records positive generations and exact raw command values before independently ordered events and 202", async () => {
   const transport = fakeTransport();
   const view = fakeView();

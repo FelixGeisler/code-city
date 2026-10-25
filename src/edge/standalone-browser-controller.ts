@@ -140,16 +140,26 @@ function exactNumberArray(value: unknown, length?: number): number[] | undefined
   return rows as number[];
 }
 
+function exactFloat32Array(value: unknown, length: number): number[] | undefined {
+  const rows = exactNumberArray(value, length);
+  return rows && rows.every((entry) => Number.isFinite(entry) && Object.is(Math.fround(entry), entry)) ? rows : undefined;
+}
+
+function exactUint8Array(value: unknown, length: number): number[] | undefined {
+  const rows = exactNumberArray(value, length);
+  return rows && rows.every((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 255) ? rows : undefined;
+}
+
 export function parseBrowserCity(value: unknown): ValidatedCity | undefined {
   try {
     const city = exactRecord(value, ["geometry", "inspection", "presentation", "districts"]);
     const geometry = city && exactRecord(city.geometry, ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
     if (!geometry || geometry.kind !== "CODE_CITY_PRESENTATION" || !Number.isSafeInteger(geometry.count) || (geometry.count as number) < 1) return undefined;
     const count = geometry.count as number;
-    const origins = exactNumberArray(geometry.origins, count * 3);
-    const sizes = exactNumberArray(geometry.sizes, count * 3);
-    const rgba = exactNumberArray(geometry.rgba, count * 4);
-    const bounds = exactNumberArray(geometry.bounds, 6);
+    const origins = exactFloat32Array(geometry.origins, count * 3);
+    const sizes = exactFloat32Array(geometry.sizes, count * 3);
+    const rgba = exactUint8Array(geometry.rgba, count * 4);
+    const bounds = exactFloat32Array(geometry.bounds, 6);
     const inspectionRows = exactArray(city!.inspection);
     if (!origins || !sizes || !rgba || !bounds || !inspectionRows) return undefined;
     const inspection = inspectionRows.map((row) => {
@@ -170,14 +180,14 @@ export function parseBrowserCity(value: unknown): ValidatedCity | undefined {
     });
     const presentation = exactRecord(city!.presentation, ["plates", "sceneBounds", "centre"]);
     const plates = presentation && exactArray(presentation.plates);
-    const sceneBounds = presentation && exactNumberArray(presentation.sceneBounds, 6);
-    const centre = presentation && exactNumberArray(presentation.centre, 3);
+    const sceneBounds = presentation && exactFloat32Array(presentation.sceneBounds, 6);
+    const centre = presentation && exactFloat32Array(presentation.centre, 3);
     const districts = exactArray(city!.districts);
     if (!presentation || !plates || !sceneBounds || !centre || !districts) return undefined;
     const plainPlates = plates.map((plate) => {
       const record = exactRecord(plate, ["minimum", "dimensions"]);
-      const minimum = record && exactNumberArray(record.minimum, 3);
-      const dimensions = record && exactNumberArray(record.dimensions, 3);
+      const minimum = record && exactFloat32Array(record.minimum, 3);
+      const dimensions = record && exactFloat32Array(record.dimensions, 3);
       if (!minimum || !dimensions) throw new Error("invalid plate");
       return { minimum, dimensions };
     });
