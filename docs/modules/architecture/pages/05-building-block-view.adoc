@@ -28,9 +28,12 @@ records, own sessions/generations/capacity/control/loss/shutdown, and join
 workers before release.
 
 |Browser edge
-|Standalone controller and city presenter
+|Standalone controller, presentation-session coordinator, inventory, safe file
+inspector, and city presenter
 |Open one same-origin session, send Analyze/Cancel/Discard, validate source-free
-events, suppress stale state, and render the city.
+events, suppress stale state, and atomically compose the successful-file
+inventory, shared canonical-index selection, inspector, and unchanged city
+presenter. Filter, sort, and selection do not alter camera or geometry.
 
 |Delivery
 |Builder, manifest, audits, retirement evidence, workflows
@@ -45,14 +48,19 @@ Pages.
 
 The browser sends raw repository URL and exclusion text only to same-origin
 command routes. It receives session identifiers, generations, revision IDs,
-source-free cities, sanitized failed-file rows, and lifecycle events. It never
-receives source, parser trees, provider payloads, or raw diagnostics.
+source-free cities with aligned geometry and inspection facts, sanitized
+failed-file rows, and lifecycle events. The browser-local coordinator derives
+only filtered/sorted canonical-index projections and current selection from
+those facts. It never receives source, unit detail, parser trees, provider
+payloads, or raw diagnostics.
 
 The parent sends validated attempt commands into one worker and accepts a
 terminal result only after exact protocol validation and normal joined exit.
 Parser runtime and grammar bytes are private artifact records loaded from file
 URLs by the worker. The HTTP perimeter exposes only `public/index.html`,
-`public/browser.css`, and `public/browser.js`.
+`public/browser.css`, and `public/browser.js`. The browser bundle imports no
+legacy main controller or browser processing worker and introduces no storage,
+route, DTO, protocol, runtime, or dependency.
 
 == Ownership and cleanup
 

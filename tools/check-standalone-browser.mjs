@@ -163,6 +163,23 @@ export async function checkStandaloneBrowser() {
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `(()=>{
       window.__codeCityObservedSessionEvents=[];
       window.__codeCitySessionObservationError="";
+      window.__codeCityRenderEvidence={matrices:[],selections:[],uploads:0};
+      const originalGetContext=HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext=function(type,...args){
+        const context=originalGetContext.call(this,type,...args);
+        if(type!=="webgl2"||!context||context.__codeCityObserved)return context;
+        Object.defineProperty(context,"__codeCityObserved",{value:true});
+        const names=new WeakMap();
+        const getUniformLocation=context.getUniformLocation.bind(context);
+        context.getUniformLocation=(program,name)=>{const location=getUniformLocation(program,name);if(location)names.set(location,name);return location;};
+        const uniformMatrix4fv=context.uniformMatrix4fv.bind(context);
+        context.uniformMatrix4fv=(location,transpose,value)=>{if(names.get(location)==="u_clipFromTarget")window.__codeCityRenderEvidence.matrices.push([...value]);return uniformMatrix4fv(location,transpose,value);};
+        const uniform1i=context.uniform1i.bind(context);
+        context.uniform1i=(location,value)=>{if(names.get(location)==="u_selectionIndex")window.__codeCityRenderEvidence.selections.push(value);return uniform1i(location,value);};
+        const bufferData=context.bufferData.bind(context);
+        context.bufferData=(...values)=>{window.__codeCityRenderEvidence.uploads+=1;return bufferData(...values);};
+        return context;
+      };
       const originalFetch=window.fetch.bind(window);
       window.fetch=async(input,init)=>{
         const response=await originalFetch(input,init);
@@ -183,7 +200,7 @@ export async function checkStandaloneBrowser() {
                 if(newline<0)break;
                 const line=pending.slice(0,newline);
                 pending=pending.slice(newline+1);
-                if(line.length>0)window.__codeCityObservedSessionEvents.push(JSON.parse(line));
+                if(line.length>0){const event=JSON.parse(line);window.__codeCityObservedSessionEvents.push({type:event.type,sessionId:event.sessionId,generation:event.generation,revision:event.revision,successfulCount:event.city?.geometry?.count??0,failedCount:event.notAnalyzedFiles?.length??0});}
               }
             }
             pending+=decoder.decode();
@@ -209,7 +226,7 @@ export async function checkStandaloneBrowser() {
       }
       throw new Error(`Timed out waiting for observed session event: ${label}`);
     };
-    const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,failed:[...document.querySelectorAll('[data-failed-rows] li')].map((row)=>row.textContent),discard:[...document.querySelectorAll('[data-actions] button')].map((button)=>button.textContent)})`;
+    const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,discard:[...document.querySelectorAll('[data-actions] button')].map((button)=>button.textContent)})`;
     const snapshot = () => evaluate(snapshotExpression);
     const waitFor = async (predicate, label, milliseconds = 120_000) => {
       const end = Date.now() + milliseconds;
@@ -255,9 +272,76 @@ export async function checkStandaloneBrowser() {
     const firstAnalyze = latestAnalyze();
     assert.equal(firstAnalyze.generation, 1);
     assert.deepEqual(await waitForSessionEvent("SESSION_OPENED", undefined, firstAnalyze.sessionId, "initial session opening"), {
-      type: "SESSION_OPENED", sessionId: firstAnalyze.sessionId,
+      type: "SESSION_OPENED", sessionId: firstAnalyze.sessionId, successfulCount: 0, failedCount: 0,
     });
-    assert.equal((await waitForSessionEvent("ANALYSIS_SUCCEEDED", firstAnalyze.generation, firstAnalyze.sessionId, "ordinary success generation")).generation, 1);
+    const firstSuccessEvent = await waitForSessionEvent("ANALYSIS_SUCCEEDED", firstAnalyze.generation, firstAnalyze.sessionId, "ordinary success generation");
+    assert.equal(firstSuccessEvent.generation, 1);
+    assert.equal(firstSuccessEvent.successfulCount, 5);
+    const initialInventory = await evaluate(`(()=>{
+      const buttons=[...document.querySelectorAll('[data-analyzed-rows] button')];
+      const expected=[
+        ['src/literal[1].js',['S: 4','U: 2','M: 3']],
+        ['src/a space.js',['S: 2','U: 1','M: 1']],
+        ['src/Ω.js',['S: 2','U: 3','M: 1']],
+        ['src/Zeta.js',['S: 1','U: 1','M: 1']],
+        ['src/é.js',['S: 1','U: 2','M: 2']],
+      ];
+      const exact=buttons.length===expected.length&&buttons.every((button,index)=>{
+        const path=button.querySelector('bdi');
+        const metrics=[...button.querySelectorAll('[data-analyzed-metrics] span')].map(node=>node.textContent);
+        return button.type==='button'&&button.getAttribute('aria-pressed')==='false'&&path?.textContent===expected[index][0]
+          &&path.getAttribute('dir')==='auto'&&path.attributes.length===1&&path.children.length===0
+          &&JSON.stringify(metrics)===JSON.stringify(expected[index][1]);
+      });
+      const panel=document.querySelector('[data-analyzed-panel]').getBoundingClientRect();
+      const city=document.querySelector('[data-city]').getBoundingClientRect();
+      const matrix=globalThis.__codeCityRenderEvidence.matrices.at(-1);
+      globalThis.__codeCityInventoryBaseline={matrix:JSON.stringify(matrix),uploads:globalThis.__codeCityRenderEvidence.uploads};
+      return {exact,count:buttons.length,native:document.querySelector('[data-analyzed-query]').type==='search'&&document.querySelector('[data-analyzed-sort]').tagName==='SELECT',bounded:getComputedStyle(document.querySelector('[data-analyzed-panel]')).overflowY==='auto'&&panel.bottom<=city.top,matrix:matrix?.length===16};
+    })()`);
+    assert.deepEqual(initialInventory, { exact: true, count: 5, native: true, bounded: true, matrix: true });
+
+    const rowPoint = await evaluate(`(()=>{const button=document.querySelector('[data-analyzed-rows] button');button.scrollIntoView({block:'center'});const rectangle=button.getBoundingClientRect();return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2};})()`);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: rowPoint.x, y: rowPoint.y, button: "left", clickCount: 1 }, sessionId);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: rowPoint.x, y: rowPoint.y, button: "left", clickCount: 1 }, sessionId);
+    assert.deepEqual(await evaluate(`(()=>{
+      const button=document.querySelector('[data-analyzed-rows] button');
+      const inspector=document.querySelector('[data-inspector]');
+      const sameCamera=globalThis.__codeCityInventoryBaseline.matrix===JSON.stringify(globalThis.__codeCityRenderEvidence.matrices.at(-1));
+      return {pressed:button.getAttribute('aria-pressed')==='true',focused:document.activeElement===button,inspector:!inspector.hidden&&inspector.querySelector('[data-canonical-path]').textContent==='src/literal[1].js'&&inspector.querySelector('[data-source-lines]').textContent==='4'&&inspector.querySelector('[data-executable-units]').textContent==='2'&&inspector.querySelector('[data-maximum-complexity]').textContent==='3',cityIndex:globalThis.__codeCityRenderEvidence.selections.at(-1)===2,sameCamera,sameUploads:globalThis.__codeCityInventoryBaseline.uploads===globalThis.__codeCityRenderEvidence.uploads};
+    })()`), { pressed: true, focused: true, inspector: true, cityIndex: true, sameCamera: true, sameUploads: true });
+
+    assert.deepEqual(await evaluate(`(()=>{
+      const input=document.querySelector('[data-analyzed-query]');
+      const update=(value)=>{input.value=value;input.dispatchEvent(new InputEvent('input',{bubbles:true}));};
+      update(' space');
+      const whitespace=document.querySelectorAll('[data-analyzed-rows] button').length===1&&document.querySelector('[data-analyzed-rows] bdi').textContent==='src/a space.js'&&!document.querySelector('[data-inspector]').hidden&&document.querySelector('[data-canonical-path]').textContent==='src/literal[1].js';
+      update('Space');
+      const exactCase=document.querySelectorAll('[data-analyzed-rows] button').length===0&&document.querySelector('[data-analyzed-no-matches]').textContent==='No matching analyzed files.'&&!document.querySelector('[data-analyzed-no-matches]').hidden;
+      update('[1]');
+      const literal=document.querySelectorAll('[data-analyzed-rows] button').length===1&&document.querySelector('[data-analyzed-rows] button').getAttribute('aria-pressed')==='true';
+      update('');
+      const restored=document.querySelectorAll('[data-analyzed-rows] button').length===5;
+      return {whitespace,exactCase,literal,restored,sameCamera:globalThis.__codeCityInventoryBaseline.matrix===JSON.stringify(globalThis.__codeCityRenderEvidence.matrices.at(-1)),sameUploads:globalThis.__codeCityInventoryBaseline.uploads===globalThis.__codeCityRenderEvidence.uploads};
+    })()`), { whitespace: true, exactCase: true, literal: true, restored: true, sameCamera: true, sameUploads: true });
+
+    assert.deepEqual(await evaluate(`(()=>{
+      const select=document.querySelector('[data-analyzed-sort]');
+      const order=()=>[...document.querySelectorAll('[data-analyzed-rows] bdi')].map(node=>node.textContent);
+      const change=(value)=>{select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}));};
+      change('U');const units=JSON.stringify(order())===JSON.stringify(['src/Ω.js','src/literal[1].js','src/é.js','src/Zeta.js','src/a space.js']);
+      change('M');const complexity=JSON.stringify(order())===JSON.stringify(['src/literal[1].js','src/é.js','src/Zeta.js','src/a space.js','src/Ω.js']);
+      change('S');const source=JSON.stringify(order())===JSON.stringify(['src/literal[1].js','src/a space.js','src/Ω.js','src/Zeta.js','src/é.js']);
+      return {units,complexity,source,selection:[...document.querySelectorAll('[data-analyzed-rows] button')].filter(button=>button.getAttribute('aria-pressed')==='true').length===1,sameCamera:globalThis.__codeCityInventoryBaseline.matrix===JSON.stringify(globalThis.__codeCityRenderEvidence.matrices.at(-1)),sameUploads:globalThis.__codeCityInventoryBaseline.uploads===globalThis.__codeCityRenderEvidence.uploads};
+    })()`), { units: true, complexity: true, source: true, selection: true, sameCamera: true, sameUploads: true });
+
+    await evaluate("document.querySelector('[data-city] canvas').focus();true");
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowRight", code: "ArrowRight" }, sessionId);
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowRight", code: "ArrowRight" }, sessionId);
+    assert.deepEqual(await evaluate(`(()=>({inspector:document.querySelector('[data-canonical-path]').textContent==='src/é.js',pressed:[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.getAttribute('aria-pressed')==='true')?.querySelector('bdi').textContent==='src/é.js',cityIndex:globalThis.__codeCityRenderEvidence.selections.at(-1)===3,sameCamera:globalThis.__codeCityInventoryBaseline.matrix===JSON.stringify(globalThis.__codeCityRenderEvidence.matrices.at(-1)),sameUploads:globalThis.__codeCityInventoryBaseline.uploads===globalThis.__codeCityRenderEvidence.uploads}))()`), { inspector: true, pressed: true, cityIndex: true, sameCamera: true, sameUploads: true });
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" }, sessionId);
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" }, sessionId);
+    assert.equal(await evaluate("document.querySelector('[data-inspector]').hidden&&[...document.querySelectorAll('[data-analyzed-rows] button')].every(button=>button.getAttribute('aria-pressed')==='false')"), true);
     assert.equal((await request(origin, "/browser.css")).status, 200);
     assert.deepEqual(await snapshot(), state, "retained result changed while the session remained idle");
 
@@ -288,7 +372,7 @@ export async function checkStandaloneBrowser() {
     assert.equal(afterUnrepresentableCommand.generation, beforeUnrepresentableCommand.generation + 2, "unrepresentable Analyze did not consume its generation");
     assert.notEqual(afterUnrepresentableCommand.sessionId, beforeUnrepresentableCommand.sessionId, "explicit recovery reused the lost session");
     assert.deepEqual(await waitForSessionEvent("SESSION_OPENED", undefined, afterUnrepresentableCommand.sessionId, "post-loss explicit session opening"), {
-      type: "SESSION_OPENED", sessionId: afterUnrepresentableCommand.sessionId,
+      type: "SESSION_OPENED", sessionId: afterUnrepresentableCommand.sessionId, successfulCount: 0, failedCount: 0,
     });
     assert.equal((await waitForSessionEvent("ANALYSIS_SUCCEEDED", afterUnrepresentableCommand.generation, afterUnrepresentableCommand.sessionId, "post-loss success generation")).generation, afterUnrepresentableCommand.generation);
     assert.equal((await observedSessionEvents()).some(({ generation }) => generation === beforeUnrepresentableCommand.generation + 1), false, "unrepresentable Analyze emitted a session event");
@@ -300,7 +384,7 @@ export async function checkStandaloneBrowser() {
     assert.deepEqual(await evaluate(`({status:window.__codeCityControlStatus,settled:window.__codeCityControlSettled})`), { status: 204, settled: false });
     assert.equal(await releaseDelayedControlResponse(), 204);
     assert.equal(await browserCommand("/_code-city/discard", { sessionId: current.sessionId, generation: current.generation }), 204);
-    assert.deepEqual(await snapshot(), { ...state, status: "", feedback: "", commit: "", canvases: 0, failed: [], discard: [] });
+    assert.deepEqual(await snapshot(), { ...state, status: "", feedback: "", commit: "", canvases: 0, analyzed: 0, failed: 0, discard: [] });
 
     state = await recoverSuccess("success after repeated no-state discard");
     const retained = latestAnalyze();
@@ -309,13 +393,13 @@ export async function checkStandaloneBrowser() {
 
     await setMode(harness, "mixed");
     await submit();
-    state = await waitFor((value) => value.canvases === 1 && value.failed.length === 1, "mixed success");
-    assert.match(state.failed[0], /bad\.jsSyntax could not be analyzed/u);
+    state = await waitFor((value) => value.canvases === 1 && value.analyzed === 5 && value.failed === 1, "mixed success");
+    assert.equal(await evaluate("(()=>{const row=document.querySelector('[data-failed-rows] li');const path=row?.querySelector('bdi');const detail=row?.querySelector('span');return path?.textContent==='bad.js'&&path?.getAttribute('dir')==='auto'&&path.children.length===0&&detail?.textContent==='Syntax could not be analyzed';})()"), true);
 
     await setMode(harness, "all-failed");
     await submit();
-    state = await waitFor((value) => value.canvases === 0 && value.failed.length === 1 && value.discard.length === 1, "all files failed");
-    assert.match(state.failed[0], /bad\.jsSyntax could not be analyzed/u);
+    state = await waitFor((value) => value.canvases === 0 && value.analyzed === 0 && value.failed === 1 && value.discard.length === 1, "all files failed");
+    assert.equal(await evaluate("document.querySelector('[data-presentation]').hidden&&document.querySelectorAll('[data-inspector]').length===0"), true);
 
     let logStart = (await logRows(harness)).length;
     await setMode(harness, "block-provider");

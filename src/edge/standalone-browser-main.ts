@@ -1,10 +1,10 @@
-import { createCityPresenter, type CityPresenter } from "./city-presenter";
 import {
   createFetchSessionTransport,
   createStandaloneBrowserController,
   type BrowserFailedFile,
   type StandaloneBrowserView,
 } from "./standalone-browser-controller";
+import { createStandalonePresentationCoordinator } from "./standalone-presentation-session";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -21,18 +21,7 @@ const commit = requiredElement<HTMLOutputElement>("[data-commit]");
 const failed = requiredElement<HTMLElement>("[data-failed]");
 const failedRows = requiredElement<HTMLUListElement>("[data-failed-rows]");
 const actions = requiredElement<HTMLElement>("[data-actions]");
-const city = requiredElement<HTMLElement>("[data-city]");
-const cityReset = requiredElement<HTMLButtonElement>("[data-city-reset]");
-
-let presenter: CityPresenter<number> | undefined;
-
-function clearCity(): void {
-  presenter?.dispose();
-  presenter = undefined;
-  city.replaceChildren();
-  city.hidden = true;
-  cityReset.hidden = true;
-}
+const presentationRoot = requiredElement<HTMLElement>("[data-presentation]");
 
 function replaceStatus(message: string, action?: Readonly<{ label: string; run: () => void }>): void {
   const text = document.createElement("p");
@@ -58,6 +47,7 @@ function renderFailures(rows: readonly BrowserFailedFile[]): void {
   const items = rows.map(({ canonicalPath, category }) => {
     const item = document.createElement("li");
     const path = document.createElement("bdi");
+    path.setAttribute("dir", "auto");
     path.textContent = canonicalPath;
     const detail = document.createElement("span");
     detail.textContent = category;
@@ -79,39 +69,16 @@ function renderDiscard(discard: () => void): void {
   actions.replaceChildren(button);
 }
 
-function renderCity(model: Parameters<StandaloneBrowserView["succeeded"]>[0]): void {
-  clearCity();
-  city.hidden = false;
-  cityReset.hidden = false;
-  const next = createCityPresenter<number>({
-    host: city,
-    resetControl: cityReset,
-    isEligible: () => true,
-    failed: () => {
-      clearCity();
-      replaceStatus("Presentation failed (M1-PRES-1)");
-    },
-  });
-  const staged = next.stage(1, model.geometry, model.presentation, {
-    hoverIndex() {},
-    activationIndex() {},
-    selectionAction() {},
-    districtProjection() {},
-  });
-  if (staged.kind !== "staged") {
-    next.dispose();
+const presentation = createStandalonePresentationCoordinator({
+  documentTarget: document,
+  root: presentationRoot,
+  failed() {
+    feedback.textContent = "";
+    renderFailures([]);
+    actions.replaceChildren();
     replaceStatus("Presentation failed (M1-PRES-1)");
-    return;
-  }
-  const committed = next.commit(staged.token);
-  if (committed.kind !== "committed") {
-    next.dispose();
-    replaceStatus("Presentation failed (M1-PRES-1)");
-    return;
-  }
-  city.replaceChildren(staged.canvas as HTMLCanvasElement);
-  presenter = next;
-}
+  },
+});
 
 const view: StandaloneBrowserView = Object.freeze({
   clear() {
@@ -120,7 +87,7 @@ const view: StandaloneBrowserView = Object.freeze({
     commit.textContent = "";
     renderFailures([]);
     actions.replaceChildren();
-    clearCity();
+    presentation.clear();
   },
   working(cancel) {
     replaceStatus("Working", { label: "Cancel", run: cancel });
@@ -138,32 +105,36 @@ const view: StandaloneBrowserView = Object.freeze({
     commit.textContent = value;
   },
   failed(category, code, revision) {
-    clearCity();
+    presentation.clear();
     renderFailures([]);
     actions.replaceChildren();
     commit.textContent = revision ?? "";
     replaceStatus(code ? `${category} (${code})` : category);
   },
   cancelled() {
-    clearCity();
+    presentation.clear();
     renderFailures([]);
     actions.replaceChildren();
     commit.textContent = "";
     replaceStatus("Cancelled");
   },
-  succeeded(model, failures, revision, discard) {
+  succeeded(generation, model, failures, revision, discard) {
     status.replaceChildren();
     feedback.textContent = "";
     commit.textContent = revision;
-    renderFailures(failures);
-    renderCity(model);
-    renderDiscard(discard);
+    if (!presentation.publish(generation, model)) return;
+    try {
+      renderFailures(failures);
+      renderDiscard(discard);
+    } catch {
+      presentation.failCurrent();
+    }
   },
-  allFilesFailed(failures, revision, discard) {
+  allFilesFailed(_generation, failures, revision, discard) {
     status.replaceChildren();
     feedback.textContent = "";
     commit.textContent = revision;
-    clearCity();
+    presentation.clear();
     renderFailures(failures);
     renderDiscard(discard);
   },
@@ -174,5 +145,8 @@ form.addEventListener("submit", (event) => {
   event.preventDefault();
   controller.submit(repository.value, exclusions.value);
 });
-window.addEventListener("pagehide", () => controller.dispose(), { once: true });
+window.addEventListener("pagehide", () => {
+  controller.dispose();
+  presentation.dispose();
+}, { once: true });
 controller.start();

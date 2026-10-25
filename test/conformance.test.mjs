@@ -293,6 +293,7 @@ test("exactly four strict no-emit TypeScript configs isolate main, worker, and i
     "./src/edge/main.ts",
     "./src/edge/standalone-browser-main.ts",
     "./src/edge/standalone-browser-controller.ts",
+    "./src/edge/standalone-presentation-session.ts",
     "./src/edge/city-presenter.ts",
     "./src/application/city-payload.ts",
     "./src/domain/camera-picking-policy.ts",
@@ -383,6 +384,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/standalone-browser-controller.ts",
     "edge/standalone-browser-main.ts",
     "edge/standalone-browser-shell.css",
+    "edge/standalone-presentation-session.ts",
     "edge/tree-sitter-adapter.ts",
     "edge/tree-sitter-assets.ts",
   ]);

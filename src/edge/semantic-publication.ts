@@ -54,6 +54,7 @@ function selectedContent(
   identityLabel.textContent = "Canonical path";
   const path = documentTarget.createElement("bdi");
   path.dataset.canonicalPath = "";
+  path.setAttribute("dir", "auto");
   path.textContent = value.canonicalPath;
   identity.append(identityLabel, path);
 
@@ -112,6 +113,15 @@ function selectedContent(
     colourTitle,
     selectedColour,
   ];
+}
+
+export function replaceMetricInspectorContent(
+  documentTarget: SemanticDocument,
+  inspector: Pick<HTMLElement, "replaceChildren">,
+  fact: InspectionFact,
+  district: string,
+): void {
+  inspector.replaceChildren(...selectedContent(documentTarget, explainMetricFact(fact), district));
 }
 
 function complexityLegend(documentTarget: SemanticDocument): HTMLElement {
@@ -270,8 +280,7 @@ export function stageSemanticPublication(
         } else {
           const fact = inspection[selection]!;
           if (district === null) throw new Error("Selected district is absent");
-          const content = selectedContent(documentTarget, explainMetricFact(fact), district);
-          inspector.replaceChildren(...content);
+          replaceMetricInspectorContent(documentTarget, inspector, fact, district);
           inspector.hidden = false;
         }
         selectedIndex = selection;

@@ -198,9 +198,15 @@ transforms do not change band membership or the payload colour.
 
 == Current implemented standalone presentation
 
-The sections from Layout through Atomic lifecycle describe current source-free
-standalone browser behavior and test evidence. Two-segment grouping,
-search-triggered camera reveal, and the current absence of source viewing are
+The sections from Layout through Atomic lifecycle describe the active
+source-free standalone browser behavior except where a subsection is explicitly
+marked as a retained legacy semantic-publication reference. The active
+standalone publishes the successful-file inventory, shared selection, canvas,
+Reset control, and raw file-metric inspector. It does not mount the legacy
+contextual district row or persistent legend, and inventory interaction does
+not invoke the legacy search-triggered camera reveal or canvas focus. The
+presenter retains its existing camera navigation and numeric projection
+internals. Two-segment grouping and the current absence of source viewing are
 not the approved whole-core target.
 
 Current city construction and payload evidence is in `test/city-model.test.mjs`
@@ -273,18 +279,25 @@ Payload arrays remain in increasing canonical-path index order. Packing writes
 one computed position back to that index; it does not reorder identity,
 keyboard traversal, selection, inspection, or exact-tie ownership.
 
-== Contextual district row and retained numeric projection
+== Legacy contextual district row and retained presenter projection
 
-Every committed city reserves one `20px` normal-flow contextual row immediately
-after path search and before the city viewport. Its single label is initially
-hidden with empty text. Selected-building district wins over hovered-building
-district; without either context the label is hidden and its text is cleared.
-The controller derives the display name from the validated inspection fact by
-removing the filename and taking the first two directory segments, one segment
-when only one exists, or `/` at repository root. A real `_root` directory is
-therefore distinct from root.
+The contextual-row behavior in this subsection belongs to the retained legacy
+`createMainController` and semantic-publication path. It remains documented as
+historical reference for that implementation, but the active standalone
+presentation-session coordinator does not mount it. The active composition
+publishes the analyzed-file inventory immediately before the navigation
+instructions and city host.
 
-The row is `aria-hidden`, unfocusable, inline-start aligned, and
+A committed legacy semantic publication reserves one `20px` normal-flow
+contextual row immediately after path search and before the city viewport. Its
+single label is initially hidden with empty text. Selected-building district
+wins over hovered-building district; without either context the label is hidden
+and its text is cleared. The legacy controller derives the display name from
+the validated inspection fact by removing the filename and taking the first two
+directory segments, one segment when only one exists, or `/` at repository
+root. A real `_root` directory is therefore distinct from root.
+
+The legacy row is `aria-hidden`, unfocusable, inline-start aligned, and
 `pointer-events:none`. The label is `144px × 20px` when the actual canvas CSS
 width is at least `480px`, otherwise `104px × 20px`. It retains `6px` inline
 padding, `11px ui-monospace, SFMono-Regular, Consolas, monospace`, weight `650`,
@@ -296,11 +309,14 @@ shader/GPU value, observer value, or evidence field. There are no per-district
 label nodes, projected label visibility, collision layout, inspector exclusion,
 or label listener, observer, frame, retry, renderer, or GPU text.
 
-The existing numeric district-projection contract remains independent of this
-row. For each plate, derive the top-centre anchor and all four top corners directly
-from its numeric cell at `y=0`. Subtract the immutable `sceneBounds` centre and
-project each point with the exact float32 matrix used by the corresponding
-draw. For every row `k=0..3`, with `f=Math.fround`, evaluate:
+The city presenter's numeric district-projection contract remains implemented
+independently of that legacy row. The active standalone coordinator supplies a
+no-op `districtProjection` callback, so camera and resize validation still use
+the numeric snapshot but publish no district-row DOM. For each plate, derive
+the top-centre anchor and all four top corners directly from its numeric cell at
+`y=0`. Subtract the immutable `sceneBounds` centre and project each point with
+the exact float32 matrix used by the corresponding draw. For every row
+`k=0..3`, with `f=Math.fround`, evaluate:
 
 [source,text]
 ....
@@ -331,8 +347,9 @@ atomically before the generation- and captured-token-gated
 `districtProjection(generation,snapshot)` callback.
 
 Projection continues to update its byte- and key-compatible snapshot on the
-existing camera and resize paths, but no snapshot value controls contextual
-text, visibility, position, or dimensions.
+existing presenter camera and resize paths. In the active standalone no
+snapshot value is consumed for contextual text, visibility, position, or
+dimensions.
 
 == Scene and fixed face display
 
@@ -360,59 +377,74 @@ identifiable through its fixed transforms. There is no configurable lighting,
 normal or material input, texture, fog, shadow, blending, polygon offset,
 antialiasing promise, outline, or static edge pass.
 
-== Path search and reveal
+== Successful-file inventory and shared selection
 
-A committed city has one labelled native `input type="search"` in normal flow
-immediately above the city. Each exact input value is matched synchronously
-against every canonical module path with case-sensitive ECMAScript `includes`.
-There is no trimming, case folding, normalization, tokenization, ranking, glob,
-regular expression, source-text search, pagination, truncation, virtualization,
-or result cap below the existing 4,000-module envelope. Results retain
-canonical index order. Empty input shows no result region or no-match message;
-nonempty input shows `No matching modules.`, `1 matching module.`, or
-`<N> matching modules.` as applicable.
+A committed standalone city has one normal-flow section headed exactly
+`Analyzed files`. It contains every successful inspection fact as one semantic
+list item with a native `button type="button"`. Each button shows the exact
+canonical path and raw `S: <value>`, `U: <value>`, and `M: <value>`, and exposes
+`aria-pressed="true"` only for the shared selected canonical index.
 
-The count and complete native `button type="button"` list share one region with
-`max-block-size: min(13.75rem, 40vh)` and native vertical overflow. It cannot
-overlay the contextual district row, canvas, inspector, legend, or Reset
-control. Each button's
-only repository-derived content is an inner `<bdi dir="auto">` assigned via
-`textContent`. Paths and queries never enter attributes, IDs, classes, styles,
-URLs, object keys, logs, provider traffic, WebGL, telemetry, observers, or
-release evidence. Ordinary native text editing, scrolling, Enter/Space button
-activation, and Tab/Shift+Tab order apply; there are no input Enter, Escape,
-arrow-key, or roving-focus shortcuts and search is not autofocused.
+The section has a native `input type="search"` labelled `Filter by canonical
+path` and a native `select` labelled `Sort by` with `Source lines (S)`,
+`Executable units (U)`, and `Maximum complexity (M)`. A newly committed result
+starts with the exact empty query and S sort. The query is preserved exactly
+and matched against canonical paths with case-sensitive ECMAScript `includes`.
+There is no trimming, normalization, tokenization, ranking, regular-expression
+interpretation, or source-text search. Empty input includes every successful
+fact. Zero matches shows exactly `No matching analyzed files.` and no row
+buttons while retaining the city and any selection.
 
-Semantic publication owns only the native search nodes and listeners. It sends
-exact query and numeric canonical-index callbacks through current generation,
-publication-identity, query-snapshot, and current-result gates. The controller
-owns inspection facts, literal matching, result validation, selection, and
-failure decisions. A stale mismatch is inert. A malformed current activation
-or current search DOM failure revokes the city as `M1-PRES-1`.
+The list projection consists only of canonical geometry indices. It sorts the
+selected raw metric descending, then canonical path ascending with unsigned
+UTF-8 comparison. Filtering and sorting never reorder or rewrite geometry,
+inspection, instance buffers, picking identity, or canvas keyboard traversal.
+The complete list has no cap below the existing 4,000-module envelope and uses
+`max-block-size: min(13.75rem, 40vh)` with native vertical overflow. It remains
+in normal flow and cannot overlay the city, inspector, Reset control, or
+separate `Not analyzed files` list.
 
-Activating a current result always selects and reveals it, including an already
-selected result. Derive its real AABB directly from aligned geometry and set the
-camera target to the exact AABB centre. Retain azimuth, elevation, and basis,
-but set magnification to `1`. Re-evaluate the existing scene camera and, for all
-eight selected-AABB corners relative to immutable scene centre `C`, evaluate all
-four clip rows with the documented separate `Math.fround` products and
-left-associated sums. Every input, product, sum, clip value, quotient, and
-rounded NDC value must be finite; require `clipW>0` and strict
-`-1 < f(clipX/clipW), f(clipY/clipW), f(clipZ/clipW) < 1` independently. There
-is no epsilon, retry, fallback, second framing policy, animation, or buffer
-rewrite.
+Canonical paths already cross the existing provider-acquisition and source-free
+same-origin session boundaries as successful inspection facts or sanitized
+failed-file rows. The inventory query remains browser-local. Filtering, sorting,
+and selection introduce no additional provider or HTTP request. In the
+interaction layer, successful paths are published only in analyzed-list rows and
+the selected inspector, and failed paths only in the separate `Not analyzed
+files` list, using inert `<bdi dir="auto">` nodes assigned through `textContent`.
+Inventory interaction derives no path- or query-based attributes, IDs, classes,
+styles, URLs, object keys, logs, WebGL values, telemetry, or release evidence and
+sends no source payload. Ordinary native editing, select, scrolling, button
+activation, and Tab order apply. The controls are not autofocused and add no
+custom keyboard shortcuts.
 
-A successful activation invalidates pending hover, clears hover, ends gesture
-and capture, commits camera and district projection, applies selection, the selected district context, and the
-existing inspector, clears search, and then focuses the canvas. Any failure
-clears the complete city with no camera-only or selection-only final state.
-Search reveal does not queue hover from retained pointer coordinates. Search edit or clear changes no selection, hover,
-camera, or inspector; canvas selection does not reveal; Escape and empty canvas
-activation do not move the camera; Reset preserves search and selection while
-restoring `T=C`, overview orientation, and magnification `1`.
+The standalone presentation-session coordinator owns the presenter, inventory,
+and safe metric inspector for one generation. Control and row callbacks carry
+current generation, publication identity, exact query snapshot, exact sort
+snapshot, and canonical index. A stale mismatch is inert. A malformed callback
+that is otherwise current, or a current DOM, listener, presenter, or publication
+failure, clears the complete successful presentation as `M1-PRES-1` and
+disposes its presenter once through an idempotent boundary.
 
-Search/query/result state is current-session only and is cleared with every new
-attempt, rollback, replacement, failure, context loss, `pagehide`, or disposal.
+List activation changes only the shared canonical-index selection. It preserves
+hover, leaves focus on the native row button, updates the same building and
+metric inspector, and does not call camera reveal, canvas focus, Reset, camera
+framing, or animation. Selecting an already selected row retains selection.
+City pointer activation and Arrow/Home/End keyboard selection use the same
+canonical indices; those keys do not follow current list order. Unmodified
+Escape and empty city activation clear selection and the inspector.
+
+Filtering or sorting preserves selection, hover, inspector content, camera
+matrices, target, magnification, geometry, and instance-buffer order. A selected
+row filtered out remains selected and is pressed when it re-enters the
+projection. Reset preserves query, sort, selection, and inspector while keeping
+its existing transient-hover clear and exact overview behavior.
+
+Query, sort, hover, selection, inventory, inspector, and presenter ownership are
+current-session only. Analyze/Reanalyze start, invalid submission, cancellation,
+replacement, failure, discard, session loss, `pagehide`, and disposal clear
+them. A new success starts empty-query/S-sort/no-selection. An all-files-failed
+result publishes no successful inventory, city, or inspector and retains the
+complete separate failed-file list.
 
 == Camera and controls
 
@@ -710,10 +742,12 @@ readback, BVH, worker hop, or hidden capacity below 4,000 buildings.
 Activation picks synchronously at release. Empty activation clears selection.
 Hover never selects: movement inside retains only the latest position and runs
 at most one pick in the next animation frame. Gesture start clears hover.
-Gesture start and every accepted camera action, wheel, resize, Reset, and search
-reveal invalidate queued work, forget retained pointer coordinates, and clear
-hover. Gesture end or cancel never queues hover. Only a fresh eligible pointer
-movement can queue a pick, with at most the existing one animation frame.
+Gesture start and every accepted camera action, wheel, resize, and Reset
+invalidate queued work, forget retained pointer coordinates, and clear hover.
+Gesture end or cancel never queues hover. Only a fresh eligible pointer
+movement can queue a pick, with at most the existing one animation frame. The
+retained legacy presenter's search-reveal capability is not invoked by the
+active standalone coordinator.
 Pointer leave clears and invalidates hover. Replacement rejects work from old
 sessions.
 
@@ -749,38 +783,41 @@ picking.
 
 == Inspector and visual quality
 
-The inspector shows the full selected district as `District: <display name>` in
-one safe `<bdi dir="auto">`, without adding a live region or focus target. It
-also shows exact raw `S` as “source lines”, raw `U` as “executable units”, and
-raw `M` as “maximum executable-unit complexity”. It labels the result exactly as “Bounded displayed dimensions” and shows the
-resulting displayed height and equal displayed width/depth. It states exactly:
-“Height: square-root scale; S cap 1000; displayed height range 4..40.
-Footprint: log-compressed scale; U cap 100; displayed side range 3..18.” This
-wording distinguishes the globally bounded square-root height from the
-unchanged log-compressed footprint. A raw value above a cap remains shown even
-though its displayed dimension is capped. The inspector also shows the selected `M` palette range,
-exact base RGBA. The complete legend is not duplicated inside selected content.
+The active standalone inspector shows the full selected district as `District:
+<display name>` in one safe `<bdi dir="auto">`, without moving focus. It also
+shows exact raw `S` as “source lines”, raw `U` as “executable units”, and raw
+`M` as “maximum executable-unit complexity”. It labels the result exactly as
+“Bounded displayed dimensions” and shows the resulting displayed height and
+equal displayed width/depth. It states exactly: “Height: square-root scale; S
+cap 1000; displayed height range 4..40. Footprint: log-compressed scale; U cap
+100; displayed side range 3..18.” This wording distinguishes the globally
+bounded square-root height from the unchanged log-compressed footprint. A raw
+value above a cap remains shown even though its displayed dimension is capped.
+The inspector also shows the selected `M` palette range and exact base RGBA. The
+active standalone mounts no complete palette legend.
 
-Every committed city has one persistent, noninteractive legend labelled exactly
-“Complexity: low → high”. It presents six swatches in increasing `M` order with
-visible labels `M = 0`, `M = 1`, `M = 2–3`, `M = 4–7`, `M = 8–15`, and `M =
-16+`; these colours communicate complexity, not health, correctness, or safety.
-The legend commits atomically after the canvas and inspector, is absent before
-commit and after any rollback, invalidation, failure, context loss, replacement,
-or disposal, and never intercepts pointer input. It sits below the unchanged
-fixed-height city/canvas and reserves external space so it cannot overlap the
-inspector or Reset control. Its swatches use one row above `42rem`, three
-columns by two rows from `30rem` through `42rem`, and two columns by three rows
-below `30rem`; the label spans the grid.
+The retained legacy semantic publication has one persistent, noninteractive
+legend labelled exactly “Complexity: low → high”. It presents six swatches in
+increasing `M` order with visible labels `M = 0`, `M = 1`, `M = 2–3`, `M =
+4–7`, `M = 8–15`, and `M = 16+`; these colours communicate complexity, not
+health, correctness, or safety. In that legacy publication the legend commits
+atomically after the canvas and inspector, is absent before commit and after any
+rollback, invalidation, failure, context loss, replacement, or disposal, and
+never intercepts pointer input. It sits below the fixed-height city/canvas and
+reserves external space so it cannot overlap the inspector or Reset control.
+Its swatches use one row above `42rem`, three columns by two rows from `30rem`
+through `42rem`, and two columns by three rows below `30rem`; the label spans
+the grid. These details are historical reference and are not a claim that the
+active standalone mounts the legend.
 
 Visual quality is an M2 release requirement: the city remains the visual focus;
 controls look intentional and interaction is predictable; surface focus
-preserves metric-colour prominence; and the inspector and legend are clean,
-responsive, and readable. There is no numeric aesthetic threshold. This page records the
-requirement; issue https://github.com/FelixGeisler/code-city/issues/537[#537],
-Acceptance 6–8, solely owns representative screenshot review and its durable
-textual-only attestation under its accepted body SHA-256
-`f64751801dd6da6e3325ab3f14da4fef572768b14b7b0f7fb3cdbd8f47363846`
+preserves metric-colour prominence; and mounted inspection content is clean,
+responsive, and readable. There is no numeric aesthetic threshold. Issue
+https://github.com/FelixGeisler/code-city/issues/537[#537], Acceptance 6–8,
+solely owns the historical representative screenshot review, including its
+legacy legend, and its durable textual-only attestation under accepted body
+SHA-256 `f64751801dd6da6e3325ab3f14da4fef572768b14b7b0f7fb3cdbd8f47363846`
 and https://github.com/FelixGeisler/code-city/issues/537#issuecomment-5449870420[same-digest readiness].
 This documentation baseline captures no screenshot and makes no visual verdict.
 
@@ -791,15 +828,14 @@ geometry and inspection facts. The controller validates it once and creates
 non-aliasing geometry, inspection, and immutable numeric-presentation snapshots.
 The latter contains only plate minima/dimensions, `sceneBounds`, and centre; it
 has no group identity, path, label, anchor, projection, callback, or observer
-field. The controller stages presentation and detached semantic content,
-rechecks the current generation, commits the presenter, and performs one
-publication-root commit.
-Geometry, facts, revision, native search controls/listeners, canvas,
-reserved contextual district row, inspector container, persistent legend,
-direct committed projection snapshot, and empty query, results, hover,
-selection, and contextual text become current together. Semantic commit
-publishes search, then the contextual row, then the fixed city viewport before
-current ownership is assigned.
+field. The standalone presentation-session coordinator stages inventory and inspector
+content, attaches the fixed city host for dimension validation, stages and
+commits the presenter, applies the empty visual state, and commits the canvas in
+one synchronous publication transaction. Geometry, facts, revision, native
+query/sort controls and listeners, sorted canonical-index rows, canvas,
+inspector container, empty query, S sort, hover, and selection become current
+together. A failed transaction removes every candidate/current successful node
+and presenter resource before publishing `M1-PRES-1`.
 
 [cols="2,3,3,2",options="header"]
 |===
@@ -810,28 +846,33 @@ current ownership is assigned.
 |Commit staged canvas at exact overview
 |One complete city
 
-|Search edit or clear
-|Replace only exact query and canonical ordered results
-|No camera or visual mutation
+|Filter edit or clear
+|Replace only the exact query and filtered, selected-sort projection; preserve selection and inspector
+|No presenter call
 |Current city or `M1-PRES-1`
 
-|Search result activation
-|Validate publication/query/result; select, publish district context and inspect, then clear search
-|End gesture/capture, invalidate hover, reveal at magnification `1`, redraw/project, then focus canvas
+|Sort change
+|Replace only the selected sort and filtered projection; preserve canonical identity, selection, and inspector
+|No presenter call
+|Current city or `M1-PRES-1`
+
+|Inventory-row activation
+|Validate generation/publication/query/sort/index, retain query and sort, then update pressed row and inspector
+|Set visual selection only; preserve hover and camera; do not reveal or focus
 |Coherent current city or `M1-PRES-1`
 
 |Camera action
-|Preserve facts, query/results, selection, and selected context; clear transient hover without retained-coordinate recompute
-|Validate proposed state, redraw, project every district, atomically accept, then callback
-|Current city or `M1-PRES-1`
+|Preserve facts, query, sort, projected rows, selection, and inspector; clear transient hover without retained-coordinate recompute
+|Validate proposed state, redraw, update the numeric district snapshot, atomically accept, then invoke the active coordinator's no-op projection callback
+|Current city or `M1-PRES-1`; no contextual row is published
 
 |Resize
-|Preserve facts, selection, and selected context; clear transient hover without retained-coordinate recompute
-|Cancel gesture/frame, release capture, recompute fit and redraw
+|Preserve facts, query, sort, projected rows, selection, and inspector; clear transient hover without retained-coordinate recompute
+|Cancel gesture/frame, release capture, retain target/orientation/magnification, recompute the camera view and numeric district snapshot, and redraw; the no-op projection callback has no DOM effect
 |Current city or `M1-PRES-1`
 
 |Reset
-|Preserve facts, query/results, selection, and selected context; clear transient hover without retained-coordinate recompute
+|Preserve facts, query, sort, projected rows, selection, and inspector; clear transient hover without retained-coordinate recompute
 |Cancel gesture/frame, release capture, restore exact overview
 |Current city or `M1-PRES-1`
 
@@ -841,12 +882,12 @@ current ownership is assigned.
 |Current city
 
 |Empty activation or Escape
-|Preserve facts and hover; clear selection and inspector, then expose eligible hover context or empty context
+|Preserve facts, query, sort, projected rows, and hover; clear selection, pressed state, and inspector
 |Clear visual selection
 |Current city
 
 |New or invalid submission, cancellation, or attempt/city/provider failure
-|Clear facts, query/results/listeners, hover, selection, inspector, and legend first
+|Clear facts, query/sort/listeners, projected rows, hover, selection, and inspector first
 |Roll back candidate and dispose current session
 |Existing user state/category
 
@@ -861,7 +902,7 @@ current ownership is assigned.
 |Replacement only
 
 |Context loss
-|Clear facts, query/results/listeners, hover, selection, inspector, and legend first
+|Clear facts, query/sort/listeners, projected rows, hover, selection, and inspector first
 |Dispose; do not restore
 |`M1-PRES-1`
 
@@ -876,12 +917,13 @@ current ownership is assigned.
 |No displayed failure
 |===
 
-Presenter disposal is exactly-once and idempotent: invalidate frame work,
-release pointer capture, remove input, Reset, context-loss, lifecycle, and
-resize listeners, delete the one fill program, two VAOs, and four buffers,
-clear both instance staging arrays, numeric projection snapshots/callbacks,
-contextual-row and inspector nodes, camera, and visual state, and remove
-the canvas. After actual context loss, cleanup makes no WebGL
+Session cleanup is exactly-once and idempotent across the coordinator,
+publication, and presenter owners. It invalidates inventory state and frame
+work, releases pointer capture, removes query, sort, row, Reset, context-loss,
+lifecycle, and resize listeners, deletes the one fill program, two VAOs, and
+four buffers, clears both instance staging arrays, numeric projection
+snapshots/callbacks, inventory and inspector nodes, camera, and visual state,
+and removes the canvas. After actual context loss, cleanup makes no WebGL
 deletion or restoration call but still releases every JavaScript owner and
 reference.
 
@@ -916,15 +958,20 @@ Stale generations, sessions, tokens, callbacks, and frame epochs only clean up.
 There is no new category, raw diagnostic, retry, fallback, restoration, or
 partial city.
 
-Repository paths may reach only the controller's inert inspector text and
-semantic-publication result-button `bdi.textContent`; the approved grouped
-directory identity may reach only the contextual-row and selected-inspector
-`bdi.textContent`. No complete path or filename is added by district context. Source bodies, provider
-locators and values, parser values, credentials, raw
-diagnostics, telemetry, and persisted product state do not reach interaction,
-inspection, WebGL, or release evidence. The existing browser and production
-evidence observers access only required geometry and never clone, enumerate,
-hash, serialise, log, packetise, wrap, or retain inspection facts.
+Canonical paths already pass through the existing provider acquisition and the
+source-free same-origin session DTO: successful paths are inspection facts and
+sanitized failures are failed-file rows. Browser publication places those paths
+only in inert `<bdi dir="auto">` nodes assigned through `textContent` in the
+analyzed list, selected inspector, and separate `Not analyzed files` list. The
+inventory query remains browser-local, and filtering, sorting, or selection adds
+no provider or HTTP call. Interaction derives no path- or query-based attribute,
+object key, URL, log, WebGL value, telemetry, or evidence payload and sends no
+source payload. Source bodies, provider locators and values, parser values,
+credentials, raw diagnostics, telemetry, and persisted product state do not
+reach interaction, inspection, WebGL, or release evidence. Packaged-browser
+evidence compares controlled fixture values inside the page and returns only
+booleans, counts, and camera/buffer numeric proof; it does not retain or emit
+inspection facts.
 
 == Whole-core non-goals
 
@@ -973,10 +1020,21 @@ the city. A successful current result retains its exact analyzed-source
 association in process memory, while the browser receives only the source-free
 city and sanitized failed-file rows.
 
-Standalone M5 still has no browser source view, server persistence, portable
-interchange, recursive hierarchy, sortable successful-file inventory, or
-target camera policy. Its current two-segment presentation and camera behavior
-change no admission, syntax, raw metric, source limit, provider, privacy,
-failure-category, retry, fallback, input, or traversal policy. They add no GPU
-readback, BVH, alternate publication path, projection toggle, or camera-
-collision policy.
+Standalone M5 now exposes every successful fact through the browser-local
+searchable and three-way sortable inventory, with one shared canonical-index
+selection across rows, buildings, and the raw file-metric inspector. The active
+composition mounts no contextual district row and no persistent complexity
+legend. Selection, filtering, and sorting do not invoke search reveal, move or
+focus the camera, or alter the presenter's independent orbit, pan, zoom, resize,
+and Reset navigation. This implements only the file-level portions of
+CC-CORE-INV-01 and CC-CORE-INV-03. The retained legacy semantic row, legend,
+and search-reveal capabilities are historical implementation references, not
+current standalone behavior.
+
+Standalone M5 still has no browser source view, unit or contribution detail,
+server persistence, Save/reopen, portable interchange, or recursive hierarchy.
+Its current two-segment geometry, picking, and camera navigation behavior remain
+unchanged. The inventory changes no admission, syntax, metric formula, source
+limit, provider, privacy, failure-category, retry, fallback, or canonical city
+keyboard traversal policy and adds no GPU readback, BVH, alternate publication
+path, projection toggle, or camera-collision policy.

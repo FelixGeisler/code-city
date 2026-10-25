@@ -47,7 +47,9 @@ test("current-state requirements and architecture distinguish implemented M5 fro
   assert.match(source, /Standalone M5 implements server-owned source acquisition and analysis[\s\S]*supported per-file continuation[\s\S]*temporary source-result association/u);
   assert.match(city, /current standalone M5 implementation has server-owned acquisition and analysis in a dedicated Node\.js worker/u);
   assert.match(city, /successful current result retains its exact analyzed-source association in process memory[\s\S]*browser receives only the source-free city and sanitized failed-file rows/u);
+  assert.match(city, /now exposes every successful fact[\s\S]*searchable and three-way sortable inventory[\s\S]*shared canonical-index selection[\s\S]*do not invoke search reveal, move or focus the camera/u);
   assert.match(risks, /Standalone M5 has completed the move to server-owned acquisition and analysis[\s\S]*per-file continuation/u);
+  assert.match(risks, /now has the complete successful-file inventory and selection without camera movement/u);
   for (const category of [
     "Source text is not supported",
     "Syntax could not be analyzed",
@@ -66,7 +68,35 @@ test("current-state requirements and architecture distinguish implemented M5 fro
     /move from browser-owned acquisition and analysis to server authority/iu,
     /without claiming that a server is implemented or deployed/iu,
     /At `9bcf7c8`[\s\S]{0,200}per-file failure continuation/iu,
+    /sortable successful-file inventory, or target camera policy/iu,
+    /Path-search activation selects and moves the camera/iu,
   ]) assert.doesNotMatch(currentStateDocumentation, staleClaim);
+});
+
+test("active standalone inventory documentation excludes non-mounted legacy semantics", async () => {
+  const city = compact(await read("docs/modules/requirements/pages/city-and-failures.adoc"));
+
+  assert.match(city, /active standalone publishes the successful-file inventory, shared selection, canvas, Reset control, and raw file-metric inspector/iu);
+  assert.match(city, /active composition mounts no contextual district row and no persistent complexity legend/iu);
+  assert.match(city, /Selection, filtering, and sorting do not invoke search reveal, move or focus the camera/iu);
+  assert.match(city, /retained legacy semantic row, legend, and search-reveal capabilities are historical implementation references, not current standalone behavior/iu);
+  assert.match(city, /Camera action[\s\S]*active coordinator's no-op projection callback[\s\S]*no contextual row is published/iu);
+  assert.match(city, /Resize[\s\S]*retain target\/orientation\/magnification[\s\S]*no-op projection callback has no DOM effect/iu);
+  assert.match(city, /Canonical paths already cross the existing provider-acquisition and source-free same-origin session boundaries[\s\S]*inventory query remains browser-local[\s\S]*Filtering, sorting, and selection introduce no additional provider or HTTP request/iu);
+  assert.match(city, /successful paths are published only in analyzed-list rows and the selected inspector[\s\S]*failed paths only in the separate `Not analyzed files` list[\s\S]*inert `<bdi dir="auto">` nodes assigned through `textContent`/iu);
+  assert.match(city, /Canonical paths already pass through the existing provider acquisition and the source-free same-origin session DTO[\s\S]*analyzed list, selected inspector, and separate `Not analyzed files` list/iu);
+  assert.match(city, /Inventory interaction derives no path- or query-based[\s\S]*release evidence and sends no source payload/iu);
+  assert.match(city, /Interaction derives no path- or query-based[\s\S]*evidence payload and sends no source payload/iu);
+
+  for (const staleCurrentClaim of [
+    /Every committed city reserves one `20px` normal-flow contextual row/iu,
+    /Every committed city has one persistent, noninteractive legend/iu,
+    /accepted camera action, wheel, resize, Reset, and search reveal invalidate/iu,
+    /search-triggered camera reveal, and the current absence of source viewing are not the approved whole-core target/iu,
+    /Paths and queries never enter[\s\S]{0,160}provider traffic/iu,
+    /Repository paths may reach only inert inventory-row and selected-inspector/iu,
+    /Paths and queries do not enter[\s\S]{0,160}network traffic/iu,
+  ]) assert.doesNotMatch(city, staleCurrentClaim);
 });
 
 test("obsolete browser-only architecture diagrams remain removed", async () => {
