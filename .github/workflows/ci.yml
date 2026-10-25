@@ -25,3 +25,9 @@ jobs:
     - run: npm audit --audit-level=high
     - run: npm run typecheck:node
     - run: npm run verify
+    - run: npm run standalone:build
+    - run: npm run standalone:audit
+    - run: npm run standalone:reproducibility
+    - run: npm run standalone:start
+    - run: npm run standalone:package
+    - run: npm run standalone:signals

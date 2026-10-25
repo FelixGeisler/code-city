@@ -11,9 +11,6 @@ import {
 import type { RepositoryReference } from "../../domain/repository-reference";
 import type { NormalizedSourceText } from "../../domain/source-admission";
 import type { SyntaxProjectionCapability } from "../../application/base-metric-processing";
-import { createGithubRevisionGateway } from "../github-revision-gateway";
-import { createGithubRawSourceGateway } from "../github-source-gateway";
-import { createNodeTreeSitterAdapter } from "./parser-assets";
 import {
   parseNodeWorkerCommand,
   prepareNodeWorkerSuccessForPublication,
@@ -154,14 +151,6 @@ export function runNodeAnalysisWorker(port: MessagePort, dependencies: NodeAnaly
     if (active?.attemptId === command.attemptId && active.generation === command.generation) active.controller.abort();
   });
   port.start();
-}
-
-export function productionNodeAnalysisWorkerDependencies(): NodeAnalysisWorkerDependencies {
-  return {
-    revisionGateway: createGithubRevisionGateway(fetch),
-    sourceGateway: createGithubRawSourceGateway(fetch),
-    parser: createNodeTreeSitterAdapter(),
-  };
 }
 
 type ExactType<Left, Right> =

@@ -51,7 +51,7 @@ ownership. Rollback, context loss, `pagehide`, or controller disposal removes
 listeners, semantic nodes, canvas state, worker ownership, and WebGL resources
 through idempotent cleanup.
 
-== Partially implemented, inactive standalone M5 runtime
+== Packaged but inactive standalone M5 runtime
 
 An inactive shared core now completes verified raw acquisition, records
 unsupported text per file, initializes the parser once, continues syntax and
@@ -95,10 +95,20 @@ The xref:requirements:standalone-m5-operating-policy.adoc[standalone M5
 operating policy] owns temporary process-memory custody, session-loss and
 shutdown cleanup, loopback-first exposure, and finite operator-set admission.
 The internal session/event payloads, lifecycle states, and reported-loss
-handling are implemented by this inactive runtime. Deployment values and
-calibrated capacity values remain later operator/deployment contracts. The
-perimeter and runtime are not packaged, activated, or deployed, and no
-Raspberry Pi behavior is qualified by this baseline.
+handling are implemented by this inactive runtime. A deterministic builder now
+writes only `build/standalone/`: fixture public bytes, private server and worker
+JavaScript, private parser runtime and four grammar assets, and one exact
+version-1 closure manifest. The generated CLI requires every capacity and the
+port while allowing only the host default, reports the assigned canonical
+origin, and uses native `fetch` in its production worker. Package tests inject
+deterministic providers or join barriers only through nonshipped constructor
+modules; generated runtime bytes contain no selector for them.
+
+Deployment values and calibrated capacity values remain later
+operator/deployment contracts. The standalone artifact is inactive: canonical
+`dist/`, root `dev`/`start`/`build`/`verify`, the browser entry, Pages upload,
+and production deployment remain unchanged. No Raspberry Pi behavior is
+qualified by this baseline.
 
 == Accepted whole-core runtime outcomes
 

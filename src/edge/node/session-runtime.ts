@@ -54,8 +54,15 @@ export interface InactiveSessionRuntimeInput {
   readonly artifactRoot: string;
 }
 
+export interface InactiveSessionOwnershipCounters {
+  readonly liveSessions: number;
+  readonly activeAttempts: number;
+  readonly retainedSourceBytes: number;
+}
+
 export interface RunningInactiveSessionRuntime {
   readonly origin: string;
+  readonly ownershipCounters: () => InactiveSessionOwnershipCounters;
   readonly close: () => Promise<void>;
 }
 
@@ -485,8 +492,15 @@ export async function startInactiveSessionRuntime(input: InactiveSessionRuntimeI
   });
   const perimeter = await startInactiveHttpPerimeter({ ...input, handlers });
 
+  const ownershipCounters = (): InactiveSessionOwnershipCounters => Object.freeze({
+    liveSessions,
+    activeAttempts,
+    retainedSourceBytes,
+  });
+
   return Object.freeze({
     origin: perimeter.origin,
+    ownershipCounters,
     close(): Promise<void> {
       closePromise ??= (async () => {
         accepting = false;
@@ -494,7 +508,8 @@ export async function startInactiveSessionRuntime(input: InactiveSessionRuntimeI
         await Promise.all([...ownedSessions].map((session) => beginLoss(session)));
         perimeter.closeIdleConnections();
         await listenerClosed;
-        if (liveSessions !== 0 || activeAttempts !== 0 || retainedSourceBytes !== 0) {
+        const counters = ownershipCounters();
+        if (counters.liveSessions !== 0 || counters.activeAttempts !== 0 || counters.retainedSourceBytes !== 0) {
           throw new Error("Standalone runtime shutdown did not release all ownership");
         }
       })();
@@ -509,7 +524,10 @@ export function installInactiveSessionShutdownSignals(runtime: RunningInactiveSe
     if (entered) return;
     entered = true;
     void runtime.close().then(
-      () => { process.exitCode = 0; },
+      () => {
+        process.stdout.write(`SHUTDOWN ${JSON.stringify(runtime.ownershipCounters())}\n`);
+        process.exitCode = 0;
+      },
       () => { process.exitCode = 1; },
     );
   };

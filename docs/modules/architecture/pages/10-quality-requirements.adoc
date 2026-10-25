@@ -45,9 +45,14 @@ policy tests
 
 |Release reproducibility
 |A pull request or main publication is built.
-|The locked closure, canonical build, second-build comparison, package audit,
-documentation build, and workflow-owned artifact bindings are verified.
-|`package.json`, `.github/workflows/`, package and publication tests
+|The locked closure, unchanged canonical build, second-build comparison,
+package audit, documentation build, and workflow-owned Pages bindings are
+verified. Separate mandatory gates also build the inactive standalone artifact,
+audit complete manifest closure without rebuilding, compare a second isolated
+build byte-for-byte, start and exercise the packaged server/worker/parser, and
+verify joined signal shutdown.
+|`package.json`, `.github/workflows/`, package, standalone-package, and
+publication tests
 |===
 
 The accepted target adds availability, confidentiality, retention, recovery,
