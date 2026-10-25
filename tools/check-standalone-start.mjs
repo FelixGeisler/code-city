@@ -10,8 +10,8 @@ try {
   const origin = await readyOrigin(processUnderTest);
   for (const [target, file, mediaType] of [
     ["/", "index.html", "text/html; charset=utf-8"],
-    ["/fixture.css", "fixture.css", "text/css; charset=utf-8"],
-    ["/fixture.svg", "fixture.svg", "image/svg+xml"],
+    ["/browser.css", "browser.css", "text/css; charset=utf-8"],
+    ["/browser.js", "browser.js", "text/javascript; charset=utf-8"],
   ]) {
     const expected = await readFile(path.join(canonicalStandaloneRoot, "public", file));
     const response = await request(origin, target);

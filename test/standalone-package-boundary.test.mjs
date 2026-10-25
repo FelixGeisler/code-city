@@ -27,6 +27,7 @@ test("legacy root commands remain byte-for-byte unchanged and standalone command
     "standalone:start": "node tools/check-standalone-start.mjs",
     "standalone:package": "node tools/audit-standalone-package.mjs",
     "standalone:signals": "node tools/check-standalone-signals.mjs",
-    "standalone:verify": "npm run standalone:build && npm run standalone:audit && npm run standalone:reproducibility && npm run standalone:start && npm run standalone:package && npm run standalone:signals",
+    "standalone:browser": "node tools/check-standalone-browser.mjs",
+    "standalone:verify": "npm run standalone:build && npm run standalone:audit && npm run standalone:reproducibility && npm run standalone:start && npm run standalone:package && npm run standalone:signals && npm run standalone:browser",
   });
 });

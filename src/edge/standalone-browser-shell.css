@@ -1,0 +1,70 @@
+:root {
+  color-scheme: light dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  --page: #f3f6fa;
+  --surface: #ffffff;
+  --surface-strong: #f8fafc;
+  --text: #172033;
+  --muted: #5b667a;
+  --border: #cfd7e4;
+  --accent: #3157b7;
+  --accent-strong: #24428f;
+  --button-text: #ffffff;
+  --focus: #1d4ed8;
+  --shadow: 0 1rem 3rem rgb(23 32 51 / 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d1320;
+    --surface: #151d2d;
+    --surface-strong: #1c2638;
+    --text: #f2f5fb;
+    --muted: #b8c1d1;
+    --border: #3a465b;
+    --accent: #9bb7ff;
+    --accent-strong: #c8d7ff;
+    --button-text: #101827;
+    --focus: #a9c1ff;
+    --shadow: 0 1rem 3rem rgb(0 0 0 / 0.35);
+  }
+}
+
+* { box-sizing: border-box; }
+body { background: var(--page); color: var(--text); margin: 0; min-height: 100vh; padding-block: clamp(1.25rem, 4vw, 3.5rem); }
+main { margin-inline: auto; width: min(72rem, calc(100% - 2rem)); }
+h1 { font-size: clamp(2rem, 5vw, 3.25rem); letter-spacing: -0.04em; line-height: 1; margin-block: 0 1.5rem; }
+form { align-items: end; background: var(--surface); border: 1px solid var(--border); border-radius: 0.9rem; box-shadow: 0 0.35rem 1.25rem rgb(23 32 51 / 0.07); display: grid; gap: 0.65rem 0.75rem; grid-template-columns: minmax(0, 1fr) auto; padding: 1rem; }
+form label { color: var(--muted); font-size: 0.875rem; font-weight: 650; grid-column: 1 / -1; }
+input, textarea, button { border: 1px solid var(--border); border-radius: 0.55rem; box-sizing: border-box; font: inherit; min-height: 2.75rem; padding: 0.65rem 0.8rem; }
+input, textarea { background: var(--surface-strong); color: var(--text); min-width: 0; width: 100%; }
+textarea { grid-column: 1 / -1; line-height: 1.4; resize: vertical; }
+button { background: var(--accent); border-color: var(--accent); color: var(--button-text); cursor: pointer; font-weight: 700; justify-self: start; }
+button:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+button:disabled { cursor: wait; opacity: 0.7; }
+input:focus-visible, textarea:focus-visible, button:focus-visible { outline: 0.2rem solid var(--focus); outline-offset: 0.15rem; }
+[data-feedback]:empty, [data-status]:empty, [data-commit]:empty, [data-actions]:empty, [hidden] { display: none !important; }
+[data-feedback] { grid-column: 1 / -1; margin: 0; }
+[data-status] { align-items: center; display: flex; gap: 0.75rem; margin-block: 1rem; }
+[data-status] p { margin: 0; }
+[data-commit] { color: var(--muted); display: block; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; margin-block: 1rem; overflow-wrap: anywhere; }
+[data-failed] { background: var(--surface); border: 1px solid var(--border); border-radius: 0.55rem; margin-block: 1rem; padding: 0.75rem; }
+[data-failed] h2 { font-size: 1rem; margin: 0 0 0.65rem; }
+[data-failed-rows] { display: grid; gap: 0.55rem; list-style: none; margin: 0; padding: 0; }
+[data-failed-rows] li { border-block-start: 1px solid var(--border); display: grid; gap: 0.2rem; padding-block-start: 0.55rem; }
+[data-failed-rows] bdi { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; unicode-bidi: isolate; }
+[data-failed-rows] span { color: var(--muted); }
+[data-actions] { margin-block: 1rem; }
+#city-navigation-instructions { color: var(--muted); font-size: 0.9rem; line-height: 1.55; margin-block: 1rem 0.75rem; max-width: 76ch; }
+[data-city] { background: #07111f; border: 1px solid var(--border); border-radius: 0.35rem; box-shadow: var(--shadow); height: clamp(24rem, 62vh, 40rem); margin-block-end: 1rem; min-height: 20rem; overflow: hidden; position: relative; width: 100%; }
+[data-city] canvas { border: 0; display: block; height: 100%; outline: 0.2rem solid transparent; outline-offset: -0.35rem; width: 100%; }
+[data-city] canvas:focus-visible { outline-color: #ffffff; }
+[data-city-reset] { margin-block-end: 1rem; }
+@media (width < 30rem) {
+  main { width: min(100% - 1rem, 72rem); }
+  form { grid-template-columns: minmax(0, 1fr); }
+  form label, form textarea, [data-feedback] { grid-column: 1; }
+  form button { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }

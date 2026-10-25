@@ -77,8 +77,8 @@ execution, source/result transfer, hostile message validation, termination, and
 exit join. The inactive session runtime connects this worker edge to the
 inactive HTTP perimeter while remaining unreachable from the active browser
 package. A separate reproducible standalone artifact now contains these blocks
-and fixture-only public files. No Save/reopen, source-view, private-source,
-packaged browser, deployment, or device block is implemented yet.
+and an inactive source-free browser client. No Save/reopen, source-view,
+private-source, active cutover, deployment, or device block is implemented yet.
 
 == Inactive standalone perimeter
 
@@ -88,7 +88,7 @@ parsing, version-1 fixture-manifest and public-byte validation, a bounded
 body-reader primitive, and native `node:http` ingress/response handling. The
 worker side provides file-URL parser assets, one actual analysis worker, a
 closed command/event protocol, transfer validation, and a parent-owned joined
-lifecycle. The perimeter preloads only declared public fixture
+lifecycle. The perimeter preloads only declared public browser
 bytes, derives one canonical origin after binding, and exposes no package entry
 or configurable plugin surface. Its repository-internal handler boundary now
 hosts the fixed session, analyze, cancel, and discard implementation when the
@@ -107,9 +107,10 @@ This graph is mandatory in CI through `npm run typecheck:node`. Additive
 standalone gates then build `build/standalone/`, audit its complete manifest
 closure, reproduce every byte, start its generated CLI, exercise its packaged
 perimeter/worker/parser path with nonshipped constructor fixtures, and verify
-joined signal shutdown. The graph is still not reachable from the active Vite
-application or current `npm start` package server. Browser integration and
-activation remain later work.
+joined signal shutdown. The package now includes and exercises an inactive
+source-free browser client against that generated server and worker path. It
+remains unreachable from the active Vite application and current `npm start`
+package server; only activation and cutover remain deferred.
 
 == Accepted target boundary
 

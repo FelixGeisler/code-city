@@ -48,12 +48,14 @@ inactive repository modules. The inactive session runtime implements the fixed
 HTTP/worker orchestration, generation and control lifecycle, atomic capacity,
 NDJSON backpressure behavior, session-loss cleanup, and joined signal shutdown.
 The reproducible `build/standalone/` artifact packages the actual server,
-worker, parser runtime, four grammar families, and a fixture-only public tree
-behind a closed version-1 manifest. Explicit additive checks build, audit,
-reproduce, start, exercise, and signal that package. Browser integration,
-canonical-script cutover, deployment, and device qualification are not
-implemented. This provides no Raspberry Pi performance, concurrency, memory,
-or deployment qualification.
+worker, parser runtime, four grammar families, and the inactive source-free
+same-origin browser behind a closed version-1 manifest. Explicit additive
+checks build, audit, reproduce, start, exercise, signal, and run that package in
+installed Chrome through CDP. The prepared browser has no provider, parser,
+browser analysis worker, persistence, retry, reconnect, recovery, Save, or
+source-view path. Canonical-script cutover, deployment, and device
+qualification are not implemented. This provides no Raspberry Pi performance,
+concurrency, memory, or deployment qualification.
 
 == Approved whole-core target
 

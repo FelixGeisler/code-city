@@ -29,6 +29,7 @@ const VERIFY_COMMANDS = [
   "npm run standalone:start",
   "npm run standalone:package",
   "npm run standalone:signals",
+  "npm run standalone:browser",
 ];
 const PACKET_FILES = ["artifact.json", "smoke.json", "qualification.json", "capacity.json", "requests.json", "lifecycle.json", "index.json"];
 const ACTIONS = {

@@ -46,7 +46,8 @@ policy tests
 |Release reproducibility
 |A pull request or main publication is built.
 |The locked closure, unchanged canonical build, second-build comparison,
-package audit, documentation build, and workflow-owned Pages bindings are
+package audit, inactive packaged-browser evidence, documentation build, and
+workflow-owned Pages bindings are
 verified. Separate mandatory gates also build the inactive standalone artifact,
 audit complete manifest closure without rebuilding, compare a second isolated
 build byte-for-byte, start and exercise the packaged server/worker/parser, and

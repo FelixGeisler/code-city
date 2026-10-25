@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="referrer" content="no-referrer">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Code City</title>
+</head>
+<body>
+  <main>
+    <h1>Code City</h1>
+    <form novalidate>
+      <label for="repository">GitHub repository URL</label>
+      <input id="repository" name="repository" type="text" inputmode="url" autocomplete="off" spellcheck="false">
+      <label for="additional-exclusions">Additional exclusions</label>
+      <textarea id="additional-exclusions" name="additional-exclusions" rows="4" autocomplete="off" spellcheck="false"></textarea>
+      <button type="submit">Analyze</button>
+      <p data-feedback role="alert" aria-live="polite"></p>
+    </form>
+    <section data-status aria-live="polite"></section>
+    <output data-commit aria-live="polite"></output>
+    <section data-failed hidden>
+      <h2>Not analyzed files</h2>
+      <ul data-failed-rows></ul>
+    </section>
+    <section data-actions></section>
+    <p id="city-navigation-instructions">Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview.</p>
+    <section data-city aria-label="Code city" hidden></section>
+    <button data-city-reset type="button" hidden>Reset view</button>
+  </main>
+  <script type="module" src="/src/edge/standalone-browser-main.ts"></script>
+</body>
+</html>

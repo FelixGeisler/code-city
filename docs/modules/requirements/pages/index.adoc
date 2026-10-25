@@ -44,17 +44,20 @@ boundary.
 
 The repository also contains an inactive native-HTTP perimeter. It validates
 operator configuration and a supplied fixture manifest before listening,
-derives one canonical HTTP origin, serves only verified public fixture bytes,
+derives one canonical HTTP origin, serves only verified public package bytes,
 and exposes the implemented internal session and command paths only when the
 inactive session runtime is constructed. A deterministic builder packages that
 runtime, its actual worker, the pinned parser runtime and JavaScript,
-TypeScript, TSX, and C# grammar assets, and fixture-only public files in
+TypeScript, TSX, and C# grammar assets, and a source-free same-origin browser in
 `build/standalone/`. Its exact version-1 manifest closes over every regular
 runtime file; direct audit, reproducibility, packaged startup, deterministic
-package audit, and joined SIGINT/SIGTERM checks are mandatory additive gates.
-The artifact is not wired to `npm start`, deployed, or used by the browser
-product. Source-free browser integration, cutover, and Raspberry Pi
-qualification remain unimplemented.
+package audit, joined SIGINT/SIGTERM checks, and actual packaged Chrome/CDP
+session evidence are mandatory additive gates. The prepared browser keeps its
+session identity, generations, attempts, and current result in memory, renders
+only the source-free city and sanitized failed-file rows, and exposes Analyze,
+Cancel, and Discard without retry, reconnect, recovery, Save, or source view.
+The artifact is not wired to `npm start`, deployed, or used by the active
+browser product. Cutover and Raspberry Pi qualification remain unimplemented.
 
 The whole-core Save target above remains approved. Standalone M5 defers it.
 

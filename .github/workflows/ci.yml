@@ -31,3 +31,4 @@ jobs:
     - run: npm run standalone:start
     - run: npm run standalone:package
     - run: npm run standalone:signals
+    - run: npm run standalone:browser

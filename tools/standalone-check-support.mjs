@@ -14,9 +14,9 @@ export const CAPACITY_ARGUMENTS = Object.freeze([
   "--max-retained-source-bytes", "41943040",
 ]);
 
-export function launchStandalone({ preload } = {}) {
+export function launchStandalone({ preload, capacityArguments = CAPACITY_ARGUMENTS } = {}) {
   const entry = path.join(canonicalStandaloneRoot, "server", "standalone.mjs");
-  const args = [...(preload ? ["--import", pathToFileURL(preload).href] : []), entry, ...CAPACITY_ARGUMENTS];
+  const args = [...(preload ? ["--import", pathToFileURL(preload).href] : []), entry, ...capacityArguments];
   const child = spawn(process.execPath, args, { stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "";
   const lines = [];
