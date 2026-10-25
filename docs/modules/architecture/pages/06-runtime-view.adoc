@@ -5,9 +5,12 @@
 The generated CLI parses all operator arguments before listening. `--host`
 defaults to loopback. `--port` and all five capacities are required. A
 non-loopback host requires a canonical host. The runtime validates the exact
-version-1 package manifest and every recorded file, preloads only public bytes,
+version-1 package manifest, then verifies the length and SHA-256 digest of every
+public record before listening. It preloads only those verified public bytes,
 binds the native HTTP server, derives its canonical origin, and prints one
-`READY` line.
+`READY` line. Startup does not read or hash private server or parser records;
+the offline package audit verifies complete public/private manifest closure and
+every recorded byte before publication.
 
 == Analyze lifecycle
 

@@ -46,6 +46,9 @@ test("architecture describes canonical package, publication separation, and pend
   ]).then((values) => values.map(compact));
   assert.match(constraints, /canonical `dist\/` artifact[\s\S]*version-1 `package-manifest\.json`/u);
   assert.match(constraints, /no GitHub provider[\s\S]*browser analysis worker[\s\S]*fallback analysis path/u);
+  assert.match(runtime, /validates the exact version-1 package manifest[\s\S]*verifies the length and SHA-256 digest of every public record before listening/u);
+  assert.match(runtime, /Startup does not read or hash private server or parser records;[\s\S]*offline package audit verifies complete public\/private manifest closure and every recorded byte before publication/u);
+  assert.doesNotMatch(runtime, /runtime validates[\s\S]{0,120}every recorded file/iu);
   assert.match(runtime, /`npm run dev -- <flags>`[\s\S]*`build\/development\/`[\s\S]*no HMR or WebSocket/u);
   assert.match(deployment, /uploads the exact audited `dist\/`[\s\S]*separately uploads `build\/pages\/`/u);
   assert.match(deployment, /former in-browser analyzer JavaScript, browser-worker, and parser\/grammar WASM URLs/u);
