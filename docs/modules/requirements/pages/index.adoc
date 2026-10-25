@@ -59,12 +59,21 @@ and the current source-free result exist only in browser memory.
 
 From an accepted Analyze submission until its current terminal outcome, the
 status area shows `Analyzing repository`, the existing `Cancel` action, and one
-native indeterminate progress control labelled `Analysis progress`. The control
-has no completion value because the session protocol exposes no measurable
-completion feed. Revision selection and Analyze acknowledgement retain this
-presentation. Completion, failure, invalid input, cancellation, session loss,
-discard, page exit, and disposal remove it. Replacement removes the prior
-presentation and shows one for the newest accepted submission.
+native progress control. Its phase label is `Starting analysis`, `Resolving
+revision`, `Preparing file inventory`, `Acquiring files X of N`, `Initializing
+analysis`, `Analyzing files X of T`, or `Building city` according to the latest
+validated server event for the current generation. Acquisition uses the
+validated supported-file candidate count `N`; analysis uses the text-valid
+file count `T`, where `0 <= T <= N`. Once a positive phase total is known, the
+control uses that phase's exact completed and total counts, beginning at `0/N`
+or `0/T` while the first file is in progress. Unknown-total phases remain
+indeterminate and clear stale values. The phase-local scales may reset between
+acquisition and analysis and do not represent overall runtime, elapsed time,
+throughput, or an ETA. Optional progress may be omitted under response
+backpressure, so displayed counts may jump but never regress. Completion,
+failure, invalid input, cancellation, session loss, discard, page exit, and
+disposal remove the control. Replacement removes the prior presentation and
+shows one for the newest accepted submission.
 
 The service resolves an explicit branch head or the default-branch head,
 selects one immutable commit, acquires and validates the complete admitted

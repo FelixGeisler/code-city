@@ -90,6 +90,7 @@ function fakeView() {
     takeDiscard: () => discard,
     clear() { working = false; calls.push(["clear"]); },
     working(value) { working = true; cancel = value; calls.push(["working"]); },
+    progress(label, completed, total) { calls.push(["progress", label, completed, total]); },
     invalid() { working = false; calls.push(["invalid"]); },
     capacity() { working = false; calls.push(["capacity"]); },
     lost() { working = false; calls.push(["lost"]); },
@@ -119,6 +120,18 @@ test("browser event validation accepts only exact source-free schemas", () => {
   assert.equal(event.city.inspection[0].canonicalPath, "src/example.ts");
   assert.equal(JSON.stringify(event).includes("normalizedSource"), false);
   assert.equal(parseBrowserSessionEvent({ ...event, rawDiagnostic: "secret" }), undefined);
+  for (const progress of [
+    { type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION, stage: "acquisition", completed: 0, total: 4_000 },
+    { type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION, stage: "analysis-initialization" },
+    { type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION, stage: "analysis", completed: 1, total: 2 },
+    { type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION, stage: "city-construction" },
+  ]) assert.deepEqual(parseBrowserSessionEvent(progress), progress);
+  for (const invalid of [
+    { type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION, stage: "acquisition", completed: -1, total: 1 },
+    { type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION, stage: "analysis", completed: 0, total: 0 },
+    { type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION, stage: "analysis", completed: 4_001, total: 4_001 },
+    { type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION, stage: "city-construction", extra: true },
+  ]) assert.equal(parseBrowserSessionEvent(invalid), undefined);
   assert.equal(parseBrowserSessionEvent({ type: "ANALYSIS_FAILED", sessionId: SESSION, generation: 1, category: "raw stack" }), undefined);
   assert.equal(parseBrowserSessionEvent({
     type: "ANALYSIS_ALL_FILES_FAILED", sessionId: SESSION, generation: 1, revision: REVISION, notAnalyzedFiles: [],
@@ -168,8 +181,10 @@ test("active progress ownership spans opening, acknowledgement, revision, replac
   owner.analyzeCalls[0].result.resolve(202);
   await flush();
   assert.equal(view.isWorking(), true, "202 must not complete progress");
+  assert.deepEqual(view.calls.at(-1), ["progress", "Resolving revision", undefined, undefined]);
   owner.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 1, revision: REVISION });
   assert.equal(view.isWorking(), true, "revision selection must not complete progress");
+  assert.deepEqual(view.calls.at(-1), ["progress", "Preparing file inventory", undefined, undefined]);
 
   controller.submit("https://github.com/owner/repository", "");
   await flush();
@@ -185,6 +200,7 @@ test("active progress ownership spans opening, acknowledgement, revision, replac
   await flush();
   owner.analyzeCalls[2].result.resolve(202);
   await flush();
+  owner.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 3, revision: REVISION });
   owner.observer.event({
     type: "ANALYSIS_ALL_FILES_FAILED",
     sessionId: SESSION,
@@ -204,6 +220,7 @@ test("active progress ownership spans opening, acknowledgement, revision, replac
   await flush();
   owner.analyzeCalls[4].result.resolve(202);
   await flush();
+  owner.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 5, revision: REVISION });
   owner.observer.event(successEvent(5));
   assert.equal(view.isWorking(), false, "success must clear progress");
   view.takeDiscard()();
@@ -232,6 +249,68 @@ test("active progress ownership spans opening, acknowledgement, revision, replac
   assert.equal(view.isWorking(), false, "disposal must clear progress");
 });
 
+test("measured progress advances exact phase labels, permits omitted jumps, resets phase totals, and never regresses after 202", async () => {
+  const transport = fakeTransport();
+  const view = fakeView();
+  const controller = createStandaloneBrowserController(transport, view);
+  controller.start();
+  const owner = transport.owners[0];
+  owner.readyControl.resolve({ kind: "opened", sessionId: SESSION });
+  controller.submit("https://github.com/owner/repository", "");
+  await flush();
+  assert.deepEqual(view.calls.at(-1), ["working"]);
+
+  owner.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 1, revision: REVISION });
+  owner.observer.event({
+    type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
+    stage: "acquisition", completed: 0, total: 3,
+  });
+  assert.deepEqual(view.calls.at(-1), ["progress", "Acquiring files 0 of 3", 0, 3]);
+  owner.analyzeCalls[0].result.resolve(202);
+  await flush();
+  assert.deepEqual(view.calls.at(-1), ["progress", "Acquiring files 0 of 3", 0, 3], "202 regressed event-first progress");
+
+  owner.observer.event({
+    type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
+    stage: "acquisition", completed: 2, total: 3,
+  });
+  owner.observer.event({
+    type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
+    stage: "analysis-initialization",
+  });
+  assert.deepEqual(view.calls.at(-1), ["progress", "Initializing analysis", undefined, undefined]);
+  owner.observer.event({
+    type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
+    stage: "analysis", completed: 0, total: 2,
+  });
+  assert.deepEqual(view.calls.at(-1), ["progress", "Analyzing files 0 of 2", 0, 2]);
+  owner.observer.event({
+    type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
+    stage: "analysis", completed: 2, total: 2,
+  });
+  owner.observer.event({
+    type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
+    stage: "city-construction",
+  });
+  assert.deepEqual(view.calls.at(-1), ["progress", "Building city", undefined, undefined]);
+  owner.observer.event({
+    type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
+    stage: "analysis", completed: 2, total: 2,
+  });
+  assert.deepEqual(view.calls.slice(-2), [["clear"], ["lost"]]);
+
+  const futureTransport = fakeTransport();
+  const futureView = fakeView();
+  const future = createStandaloneBrowserController(futureTransport, futureView);
+  future.start();
+  const futureOwner = futureTransport.owners[0];
+  futureOwner.readyControl.resolve({ kind: "opened", sessionId: SESSION });
+  future.submit("https://github.com/owner/repository", "");
+  await flush();
+  futureOwner.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 2, revision: REVISION });
+  assert.deepEqual(futureView.calls.slice(-2), [["clear"], ["lost"]]);
+});
+
 test("Analyze records positive generations and exact raw command values before independently ordered events and 202", async () => {
   const transport = fakeTransport();
   const view = fakeView();
@@ -247,6 +326,7 @@ test("Analyze records positive generations and exact raw command values before i
     repositoryUrl: "  https://github.com/owner/repository  ",
     additionalExclusions: "raw\r\n value ",
   });
+  owner.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 1, revision: REVISION });
   owner.observer.event(successEvent(1));
   assert.deepEqual(view.calls.at(-1), ["succeeded", 1, 1, 0, REVISION]);
   owner.analyzeCalls[0].result.resolve(202);
@@ -274,6 +354,7 @@ test("an unrepresentable Analyze consumes its generation, loses the owner, and r
   assert.equal(first.analyzeCalls[0].command.generation, 1);
   first.analyzeCalls[0].result.resolve(202);
   await flush();
+  first.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 1, revision: REVISION });
   first.observer.event(successEvent(1));
 
   controller.submit(Symbol("unrepresentable"), "");
@@ -350,6 +431,7 @@ test("stale events are ignored; cancel and discard target only the current gener
   assert.equal(view.calls.some(([name]) => name === "succeeded"), false);
   owner.analyzeCalls[1].result.resolve(202);
   await flush();
+  owner.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 2, revision: REVISION });
   owner.observer.event(successEvent(2));
   view.takeDiscard()();
   assert.deepEqual(owner.discardCalls[0].command, { sessionId: SESSION, generation: 2 });
@@ -379,6 +461,7 @@ test("stream loss and page disposal clear associations without retry, reconnect 
   owner.readyControl.resolve({ kind: "opened", sessionId: SESSION });
   controller.submit("https://github.com/owner/repository", "");
   await flush();
+  owner.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 1, revision: REVISION });
   owner.observer.event(successEvent(1));
   owner.observer.lost();
   assert.deepEqual(view.calls.slice(-2), [["clear"], ["lost"]]);
@@ -394,13 +477,17 @@ test("generation advancement fails closed at the positive safe-integer boundary"
   assert.equal(nextBrowserGeneration(Number.MAX_SAFE_INTEGER), undefined);
 });
 
-test("browser implementation contains no storage, retry, reconnect, provider, parser, numeric progress, or browser analysis process", async () => {
+test("browser implementation contains measured native progress without storage, timing, retry, provider, parser, or browser analysis process", async () => {
   const source = await readFile(new URL("../src/edge/standalone-browser-controller.ts", import.meta.url), "utf8");
   const main = await readFile(new URL("../src/edge/standalone-browser-main.ts", import.meta.url), "utf8");
   const css = await readFile(new URL("../src/edge/standalone-browser-shell.css", import.meta.url), "utf8");
   assert.match(main, /document\.createElement\("progress"\)/u);
-  assert.match(main, /progressLabel\.append\("Analysis progress", document\.createElement\("progress"\)\)/u);
-  assert.doesNotMatch(main, /aria-valuenow|\.value\s*=\s*[^;]*progress|progress[^;\n]*\.value|setAttribute\(["']value["']/iu);
+  assert.match(main, /progressLabel\.append\("Starting analysis", progress\)/u);
+  assert.match(main, /progress\.max = total/u);
+  assert.match(main, /progress\.value = completed/u);
+  assert.match(main, /removeAttribute\("value"\)/u);
+  assert.match(main, /removeAttribute\("max"\)/u);
+  assert.doesNotMatch(main, /setAttribute\("aria-valuenow"/u);
   assert.doesNotMatch(css, /@keyframes|\banimation(?:-name)?\s*:/iu);
-  assert.doesNotMatch(`${source}\n${main}`, /localStorage|sessionStorage|indexedDB|serviceWorker|document\.cookie|setTimeout|setInterval|SharedWorker|new Worker|github-revision-gateway|github-source-gateway|tree-sitter|fallback analyzer|retry|reconnect token/iu);
+  assert.doesNotMatch(`${source}\n${main}`, /localStorage|sessionStorage|indexedDB|serviceWorker|document\.cookie|setTimeout|setInterval|SharedWorker|new Worker|github-revision-gateway|github-source-gateway|tree-sitter|fallback analyzer|retry|reconnect token|estimated|remaining time|throughput/iu);
 });

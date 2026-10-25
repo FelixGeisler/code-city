@@ -63,6 +63,7 @@ test("provider order permutations produce the same canonical admitted order and 
     outcomes.push(result.modules);
     assert.deepEqual(fixture.calls, ["inventory", "a.ts", "z.ts", "é.ts"]);
     assert(observed.every((state) => state.providerResource === false));
+    assert(observed.every((state) => !Object.hasOwn(state, "candidateCount")));
     assert.deepEqual(observed.at(-1), { phase: "static", projectedInventory: false, providerResource: false });
   }
   assert.deepEqual(outcomes[1], outcomes[0]);
@@ -160,6 +161,47 @@ test("gateway outcome mapping is closed and never returns partial modules", asyn
   assert.deepEqual(await retrieveAdmittedSources(REPOSITORY, SHA64, new AbortController().signal, inventoryFailure.value), {
     kind: "failure", category: "Provider/resolution failure",
   });
+});
+
+test("project acquisition reports exact zero-origin candidate completion only after validated preflight", async () => {
+  const observed = [];
+  const reads = [];
+  const result = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() {
+      return { kind: "inventory", entries: [regular("c.ts"), regular("a.ts"), regular("b.ts")] };
+    },
+    async readRawSource(_repository, _selected, candidate) {
+      reads.push(candidate.canonicalPath);
+      return {
+        kind: "source",
+        rawBytes: candidate.canonicalPath === "b.ts" ? Uint8Array.of(0xff) : new TextEncoder().encode(candidate.canonicalPath),
+      };
+    },
+  }, (ownership) => observed.push(ownership));
+  assert.equal(result.kind, "acquired");
+  assert.deepEqual(reads, ["a.ts", "b.ts", "c.ts"]);
+  assert.deepEqual(observed, [
+    { phase: "provider-inventory", projectedInventory: false, providerResource: false },
+    { phase: "provider-cleared", projectedInventory: true, providerResource: false },
+    { phase: "provider-candidate", candidateIndex: 0, candidateCount: 3, projectedInventory: true, providerResource: false },
+    { phase: "provider-candidate", candidateIndex: 1, candidateCount: 3, projectedInventory: true, providerResource: false },
+    { phase: "provider-candidate", candidateIndex: 2, candidateCount: 3, projectedInventory: true, providerResource: false },
+    { phase: "provider-cleared", candidateIndex: 3, candidateCount: 3, projectedInventory: false, providerResource: false },
+    { phase: "static", projectedInventory: false, providerResource: false },
+  ]);
+
+  for (const entries of [
+    [regular("a.ts"), regular("a.ts")],
+    Array.from({ length: 4_001 }, (_, index) => regular(`${String(index).padStart(4, "0")}.ts`)),
+  ]) {
+    const failedObservations = [];
+    const failed = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+      async loadInventory() { return { kind: "inventory", entries }; },
+      async readRawSource() { throw new Error("preflight failure must not read"); },
+    }, (ownership) => failedObservations.push(ownership));
+    assert.equal(failed.kind, "failure");
+    assert.equal(failedObservations.some((ownership) => Object.hasOwn(ownership, "candidateCount")), false);
+  }
 });
 
 test("project acquisition validates every identity and the 4,000-file envelope before its first raw read", async () => {

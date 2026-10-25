@@ -7,6 +7,7 @@ import {
   validateNodeWorkerStructuredCloneEvent,
   type NodeWorkerCommand,
   type NodeWorkerFailure,
+  type NodeWorkerProgress,
   type ValidatedNodeWorkerEvent,
   type ValidatedNodeWorkerSuccess,
 } from "./worker-protocol";
@@ -32,6 +33,7 @@ export type StartNodeWorkerAttemptOptions = Readonly<{
   workerFactory?: NodeWorkerFactory;
   release?: () => void;
   onRevisionSelected?: (revision: string) => void;
+  onProgress?: (progress: NodeWorkerProgress) => void;
 }>;
 
 function providerFailure(attemptId: string, generation: number, revision?: string): NodeWorkerFailure {
@@ -54,6 +56,12 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
   let worker: WorkerLike | undefined;
   let structuredCloneMessages = false;
   let selectedRevision: string | undefined;
+  let acquisitionTotal: number | undefined;
+  let acquisitionCompleted: number | undefined;
+  let initializationObserved = false;
+  let analysisTotal: number | undefined;
+  let analysisCompleted: number | undefined;
+  let cityConstructionObserved = false;
   let provisional: JoinedNodeWorkerTerminal | undefined;
   let invalid = false;
   let cancelled = false;
@@ -127,6 +135,56 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
     }
   }
 
+  function acceptProgress(progress: NodeWorkerProgress): boolean {
+    if (selectedRevision === undefined || progress.revision !== selectedRevision) return false;
+    if (progress.stage === "acquisition") {
+      if (initializationObserved || analysisTotal !== undefined || cityConstructionObserved) return false;
+      if (acquisitionTotal === undefined) {
+        if (progress.completed !== 0) return false;
+        acquisitionTotal = progress.total;
+        acquisitionCompleted = 0;
+        return true;
+      }
+      if (progress.total !== acquisitionTotal || progress.completed !== acquisitionCompleted! + 1) return false;
+      acquisitionCompleted = progress.completed;
+      return true;
+    }
+    if (progress.stage === "analysis-initialization") {
+      if (initializationObserved || acquisitionTotal === undefined || acquisitionCompleted !== acquisitionTotal
+        || analysisTotal !== undefined || cityConstructionObserved) return false;
+      initializationObserved = true;
+      return true;
+    }
+    if (progress.stage === "analysis") {
+      if (!initializationObserved || cityConstructionObserved || acquisitionTotal === undefined
+        || progress.total > acquisitionTotal) return false;
+      if (analysisTotal === undefined) {
+        if (progress.completed !== 0) return false;
+        analysisTotal = progress.total;
+        analysisCompleted = 0;
+        return true;
+      }
+      if (progress.total !== analysisTotal || progress.completed !== analysisCompleted! + 1) return false;
+      analysisCompleted = progress.completed;
+      return true;
+    }
+    if (!initializationObserved || cityConstructionObserved) return false;
+    if (analysisTotal !== undefined && analysisCompleted !== analysisTotal) return false;
+    cityConstructionObserved = true;
+    return true;
+  }
+
+  function successMatchesProgress(event: ValidatedNodeWorkerSuccess): boolean {
+    const candidateCount = (event.result.city?.inspection.length ?? 0) + event.result.notAnalyzedFiles.length;
+    const analysisCount = event.sources.length;
+    return acquisitionTotal === candidateCount && acquisitionCompleted === candidateCount
+      && initializationObserved && analysisCount <= candidateCount
+      && (analysisCount === 0
+        ? analysisTotal === undefined && analysisCompleted === undefined
+        : analysisTotal === analysisCount && analysisCompleted === analysisCount)
+      && cityConstructionObserved === (event.result.city !== null);
+  }
+
   function onMessage(value: unknown): void {
     if (joined || cancelled || invalid || provisional) { terminateInvalid(); return; }
     const parsed = structuredCloneMessages
@@ -153,9 +211,16 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
       catch { terminateInvalid(); }
       return;
     }
+    if (event.type === "PROGRESS") {
+      if (!acceptProgress(event)) { terminateInvalid(); return; }
+      try { options.onProgress?.(event); }
+      catch { terminateInvalid(); }
+      return;
+    }
     if ("revision" in event) {
       if (selectedRevision === undefined || event.revision !== selectedRevision) { terminateInvalid(); return; }
     } else if (selectedRevision !== undefined) { terminateInvalid(); return; }
+    if (event.type === "SUCCESS" && !successMatchesProgress(event)) { terminateInvalid(); return; }
     provisional = event;
   }
 

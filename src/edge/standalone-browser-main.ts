@@ -22,8 +22,12 @@ const failed = requiredElement<HTMLElement>("[data-failed]");
 const failedRows = requiredElement<HTMLUListElement>("[data-failed-rows]");
 const actions = requiredElement<HTMLElement>("[data-actions]");
 const presentationRoot = requiredElement<HTMLElement>("[data-presentation]");
+let workingProgressLabel: HTMLLabelElement | undefined;
+let workingProgress: HTMLProgressElement | undefined;
 
 function replaceStatus(message: string, action?: Readonly<{ label: string; run: () => void }>): void {
+  workingProgressLabel = undefined;
+  workingProgress = undefined;
   const text = document.createElement("p");
   text.setAttribute("role", "status");
   text.textContent = message;
@@ -44,12 +48,31 @@ function replaceWorkingStatus(cancel: () => void): void {
   text.textContent = "Analyzing repository";
   const progressLabel = document.createElement("label");
   progressLabel.setAttribute("data-analysis-progress", "");
-  progressLabel.append("Analysis progress", document.createElement("progress"));
+  const progress = document.createElement("progress");
+  progressLabel.append("Starting analysis", progress);
+  workingProgressLabel = progressLabel;
+  workingProgress = progress;
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = "Cancel";
   button.addEventListener("click", cancel, { once: true });
   status.replaceChildren(text, progressLabel, button);
+}
+
+function updateWorkingProgress(label: string, completed?: number, total?: number): void {
+  const progressLabel = workingProgressLabel;
+  const progress = workingProgress;
+  if (!progressLabel || !progress || !status.contains(progressLabel)) return;
+  progressLabel.replaceChildren(label, progress);
+  if (completed === undefined || total === undefined) {
+    progress.removeAttribute("value");
+    progress.removeAttribute("max");
+    progress.removeAttribute("aria-valuenow");
+    return;
+  }
+  progress.max = total;
+  progress.value = completed;
+  progress.removeAttribute("aria-valuenow");
 }
 
 function renderFailures(rows: readonly BrowserFailedFile[]): void {
@@ -97,6 +120,8 @@ const presentation = createStandalonePresentationCoordinator({
 const view: StandaloneBrowserView = Object.freeze({
   clear() {
     feedback.textContent = "";
+    workingProgressLabel = undefined;
+    workingProgress = undefined;
     status.replaceChildren();
     commit.textContent = "";
     renderFailures([]);
@@ -105,6 +130,9 @@ const view: StandaloneBrowserView = Object.freeze({
   },
   working(cancel) {
     replaceWorkingStatus(cancel);
+  },
+  progress(label, completed, total) {
+    updateWorkingProgress(label, completed, total);
   },
   invalid() {
     feedback.textContent = "Invalid input";
@@ -133,6 +161,8 @@ const view: StandaloneBrowserView = Object.freeze({
     replaceStatus("Cancelled");
   },
   succeeded(generation, model, failures, revision, discard) {
+    workingProgressLabel = undefined;
+    workingProgress = undefined;
     status.replaceChildren();
     feedback.textContent = "";
     commit.textContent = revision;
@@ -145,6 +175,8 @@ const view: StandaloneBrowserView = Object.freeze({
     }
   },
   allFilesFailed(_generation, failures, revision, discard) {
+    workingProgressLabel = undefined;
+    workingProgress = undefined;
     status.replaceChildren();
     feedback.textContent = "";
     commit.textContent = revision;

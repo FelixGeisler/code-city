@@ -95,6 +95,7 @@ export type ProjectSourceAcquisitionResult =
 export type RetrievalOwnership = Readonly<{
   phase: "provider-inventory" | "provider-candidate" | "provider-cleared" | "static";
   candidateIndex?: number;
+  candidateCount?: number;
   projectedInventory: boolean;
   providerResource: false;
 }>;
@@ -170,7 +171,13 @@ export async function acquireProjectSources(
       if (signal.aborted) return terminal({ kind: "cancelled" });
       const candidate = inventory.candidates[index]!;
       const expectedBlobId = candidate.expectedBlobId!;
-      observe({ phase: "provider-candidate", candidateIndex: index, projectedInventory: true, providerResource: false });
+      observe({
+        phase: "provider-candidate",
+        candidateIndex: index,
+        candidateCount: inventory.candidates.length,
+        projectedInventory: true,
+        providerResource: false,
+      });
       const source = await gateway.readRawSource(repository, selected, { ...candidate, expectedBlobId }, signal);
       if (signal.aborted) return terminal({ kind: "cancelled" });
       if (source.kind === "provider-failure") return terminal(providerFailure());
@@ -203,7 +210,13 @@ export async function acquireProjectSources(
       });
     }
 
-    observe({ phase: "provider-cleared", projectedInventory: false, providerResource: false });
+    observe({
+      phase: "provider-cleared",
+      candidateIndex: inventory.candidates.length,
+      candidateCount: inventory.candidates.length,
+      projectedInventory: false,
+      providerResource: false,
+    });
     if (signal.aborted) return terminal({ kind: "cancelled" });
     observe({ phase: "static", projectedInventory: false, providerResource: false });
     return { kind: "acquired", selected, modules, notAnalyzedFiles };

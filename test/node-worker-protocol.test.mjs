@@ -125,6 +125,38 @@ test("every Node event variant is exact and failure code/category cross-products
   ]) assertProviderInvalid(invalid);
 });
 
+test("progress records use exact source-free stage and bounded count schemas", () => {
+  const identity = { type: "PROGRESS", attemptId: ATTEMPT, generation: 7, revision: SHA };
+  const valid = [
+    { ...identity, stage: "acquisition", completed: 0, total: 1 },
+    { ...identity, stage: "acquisition", completed: 4_000, total: 4_000 },
+    { ...identity, stage: "analysis-initialization" },
+    { ...identity, stage: "analysis", completed: 0, total: 4_000 },
+    { ...identity, stage: "analysis", completed: 4_000, total: 4_000 },
+    { ...identity, stage: "city-construction" },
+  ];
+  for (const event of valid) {
+    assert.equal(validateNodeWorkerEvent(event).kind, "valid", JSON.stringify(event));
+    let posted;
+    publishNodeWorkerEvent({ postMessage(value) { posted = value; } }, event);
+    assert.deepEqual(posted, event);
+    assert.equal(JSON.stringify(event).includes("source"), false);
+    assert.equal(JSON.stringify(event).includes("path"), false);
+  }
+
+  const counted = valid[0];
+  for (const invalid of [
+    { ...counted, completed: -1 }, { ...counted, completed: 1.5 }, { ...counted, completed: Number.MAX_SAFE_INTEGER + 1 },
+    { ...counted, total: 0 }, { ...counted, total: -1 }, { ...counted, total: 4_001 },
+    { ...counted, completed: 2, total: 1 }, { ...counted, extra: true }, inherited(counted),
+    accessor(counted, "completed"), { ...identity, stage: "analysis-initialization", completed: 0, total: 1 },
+    { ...identity, stage: "unknown" }, { ...identity, revision: SHA.toUpperCase(), stage: "city-construction" },
+  ]) assertProviderInvalid(invalid);
+  const symbol = { ...counted };
+  symbol[Symbol("extra")] = true;
+  assertProviderInvalid(symbol);
+});
+
 test("success validation enforces city, failure, path-union, source bytes, order, and size contracts", () => {
   assert.equal(validateNodeWorkerStructuredCloneEvent(receive(success())).kind, "valid");
   const mixed = success({

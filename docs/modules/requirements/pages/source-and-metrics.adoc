@@ -192,6 +192,18 @@ records have no product count limit.
 A repository outside this envelope fails as `Repository exceeds Code City
 limits`. It is never sampled, truncated, or partially processed.
 
+The standalone status reports measured phase-local completion inside this
+fixed envelope. After complete inventory and preflight validation, acquisition
+reports `0/N` immediately before the first supported candidate read and then
+one completion for each considered candidate, including strict-text failures.
+After shared parser initialization succeeds, analysis reports `0/T` immediately
+before the first text-valid file and then one completion only after that file's
+parser attempt and required release have finished. Parser initialization or
+release failure does not fabricate a completion; `T = 0` emits no analysis
+counter. These counts do not change source admission, metric, city, failure,
+or retained-source behavior and are not an overall percentage or time
+estimate.
+
 GitHub independently owns API, rate, response, and tree limits.
 Code City does not copy those values into its product contract. A truncated or
 otherwise incomplete provider result fails as incomplete source. Internal

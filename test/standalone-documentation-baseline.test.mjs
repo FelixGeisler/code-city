@@ -35,6 +35,8 @@ test("requirements describe the active standalone cutover without deployment def
   ]) assert(product.includes(expected), expected);
   assert.match(product, /No capacity value is a product default or deployment recommendation/u);
   assert.match(product, /no automatic retry, reconnect, recovery, source view, Save, reopen/iu);
+  assert.match(product, /`Acquiring files X of N`[\s\S]*`Analyzing files X of T`[\s\S]*beginning at `0\/N` or `0\/T`/u);
+  assert.match(product, /phase-local scales[\s\S]*do not represent overall runtime, elapsed time, throughput, or an ETA/u);
 });
 
 test("current-state requirements and architecture distinguish implemented M5 from later whole-core outcomes", async () => {
@@ -99,6 +101,14 @@ test("active standalone inventory documentation excludes non-mounted legacy sema
   ]) assert.doesNotMatch(city, staleCurrentClaim);
 });
 
+test("building blocks distinguish browser-local inventory from internal progress schemas", async () => {
+  const buildingBlocks = compact(await read("docs/modules/architecture/pages/05-building-block-view.adoc"));
+
+  assert.match(buildingBlocks, /Inventory, filtering, sorting, and selection remain browser-local and introduce no storage, route, DTO, protocol, runtime, dependency, or ownership boundary\./u);
+  assert.match(buildingBlocks, /Measured progress adds exact source-free internal worker and session notification schemas inside the existing worker and session boundaries; it adds no public API, route, transport, runtime, dependency, or ownership boundary\./u);
+  assert.doesNotMatch(buildingBlocks, /Measured progress[^.]*introduces no[^.]*DTO|Measured progress[^.]*adds no[^.]*protocol/iu);
+});
+
 test("obsolete browser-only architecture diagrams remain removed", async () => {
   const obsoleteDiagrams = [
     "building-blocks.svg",
@@ -136,7 +146,8 @@ test("architecture describes canonical package, standalone publication, complete
   assert.doesNotMatch(runtime, /runtime validates[\s\S]{0,120}every recorded file/iu);
   assert.match(runtime, /Successful and all-files-failed results retain their exact normalized source association in process memory[\s\S]*syntax or metric failure[\s\S]*Source text rejected as unsupported is not retained[\s\S]*until Discard, replacement, detected session loss, or graceful shutdown/u);
   assert.doesNotMatch(runtime, /all-files-failed result retains only the accepted current failure association/iu);
-  assert.match(runtime, /first complete NDJSON frame makes `res\.write` return false[\s\S]*retains that blocked frame and waits for `drain`[\s\S]*blocked write alone does not cause session loss[\s\S]*session, any retained source, and their admission capacity remain owned[\s\S]*Another event or a mutating command while the frame is blocked initiates joined session loss without another write/u);
+  assert.match(runtime, /Optional progress is omitted before serialization and write[\s\S]*`writableNeedDrain`[\s\S]*`writableLength`[\s\S]*never queued[\s\S]*first blocked frame and waits for `drain`[\s\S]*blocked write alone does not cause session loss[\s\S]*mandatory event or mutating command while the frame is blocked initiates joined session loss without another write/u);
+  assert.match(runtime, /real `0\/N` and `0\/T`[\s\S]*later nonzero acquisition and analysis counts[\s\S]*healthy-reading 4,000-file attempt/u);
   assert.match(runtime, /`npm run dev -- <flags>`[\s\S]*`build\/development\/`[\s\S]*no HMR or WebSocket/u);
   assert.match(deployment, /uploads the exact audited `dist\/`[\s\S]*manifest plus publication record as internal identity evidence/u);
   assert.match(deployment, /No Pages upload or deployment action[\s\S]*hosted analyzer observation job remains/u);
