@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,29 @@ test("requirements describe the active standalone cutover without deployment def
   ]) assert(product.includes(expected), expected);
   assert.match(product, /No capacity value is a product default or deployment recommendation/u);
   assert.match(product, /no automatic retry, reconnect, recovery, source view, Save, reopen/iu);
+});
+
+test("obsolete browser-only architecture diagrams remain removed", async () => {
+  const obsoleteDiagrams = [
+    "building-blocks.svg",
+    "context.svg",
+    "deployment.svg",
+    "runtime.svg",
+  ];
+  for (const diagram of obsoleteDiagrams) {
+    const diagramPath = path.join(root, "docs/modules/architecture/assets/images", diagram);
+    await assert.rejects(stat(diagramPath), { code: "ENOENT" }, diagram);
+  }
+
+  const architecturePages = await Promise.all([
+    "03-context-and-scope.adoc",
+    "05-building-block-view.adoc",
+    "06-runtime-view.adoc",
+    "07-deployment-view.adoc",
+  ].map((page) => read(`docs/modules/architecture/pages/${page}`)));
+  for (const diagram of obsoleteDiagrams) {
+    assert.doesNotMatch(architecturePages.join("\n"), new RegExp(diagram.replace(".", "\\."), "u"));
+  }
 });
 
 test("architecture describes canonical package, publication separation, and pending qualification", async () => {
