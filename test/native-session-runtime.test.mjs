@@ -408,6 +408,64 @@ test("replacement and active controls join before release, emit only their own c
   owner.response.destroy();
 });
 
+test("response loss during every command-owned join fences replacement and holds all capacity until worker exit", async (t) => {
+  for (const operation of ["replacement", "cancel", "discard"]) {
+    await t.test(operation, async (t) => {
+      resetNativeSessionAttemptBarrier([{ holdCancel: true }, {}]);
+      const controlled = await fixture(t);
+      const runtime = await startInactiveSessionRuntime({
+        configuration: configuration({ sessions: 2, attempts: 1, sourceBytes: MAX_SOURCE }),
+        fixtureManifestBytes: controlled.manifest, artifactRoot: controlled.root,
+      });
+      t.after(() => runtime.close());
+      const owner = await openSession(runtime.origin);
+      const contender = await openSession(runtime.origin);
+      assert.equal((await command(runtime.origin, "/_code-city/analyze", analyze(owner.sessionId, 1))).status, 202);
+      const old = nativeSessionAttempts()[0];
+      const transition = operation === "replacement"
+        ? command(runtime.origin, "/_code-city/analyze", analyze(owner.sessionId, 2))
+        : command(runtime.origin, `/_code-city/${operation}`, control(owner.sessionId, 1));
+      while (!old.cancelled) await sleep(1);
+
+      let settled = false;
+      void transition.then(() => { settled = true; });
+      owner.response.destroy();
+      for (let index = 0; index < 50; index += 1) {
+        const probe = await command(runtime.origin, "/_code-city/cancel", control(owner.sessionId, 1));
+        if (probe.status === 404) break;
+        assert.equal(probe.status, 409);
+        await sleep(2);
+        if (index === 49) assert.fail("response loss was not observed during the held join");
+      }
+
+      assert.equal(settled, false, "command completed before worker join");
+      assert.equal((await openSession(runtime.origin)).status, 503, "session capacity was reused before join");
+      assert.equal(
+        (await command(runtime.origin, "/_code-city/analyze", analyze(contender.sessionId, 1))).status,
+        503,
+        "attempt or source capacity was reused before join",
+      );
+      assert.equal(nativeSessionAttempts().length, 1, "replacement work started before join");
+
+      old.allowCancelJoin();
+      assert.equal((await transition).status, 404);
+      assert.equal(nativeSessionAttempts().length, 1, "lost session started detached replacement work");
+
+      let replacement;
+      for (let index = 0; index < 50; index += 1) {
+        replacement = await openSession(runtime.origin);
+        if (replacement.status === 200) break;
+        await sleep(2);
+      }
+      assert.equal(replacement?.status, 200, "session capacity was not released after joined loss cleanup");
+      assert.equal((await command(runtime.origin, "/_code-city/analyze", analyze(contender.sessionId, 2))).status, 202);
+      assert.equal(nativeSessionAttempts().length, 2, "attempt/source capacity was not released after join");
+      replacement.response.destroy();
+      contender.response.destroy();
+    });
+  }
+});
+
 test("one blocked valid frame waits for drain, while a command or second event during blockage causes joined session loss", async (t) => {
   const originalWrite = ServerResponse.prototype.write;
   let mode = "none";

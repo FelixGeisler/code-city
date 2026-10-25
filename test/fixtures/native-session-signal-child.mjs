@@ -18,7 +18,11 @@ if (mode !== undefined) {
   const { installInactiveSessionShutdownSignals, startInactiveSessionRuntime } = await import("../../src/edge/node/session-runtime.ts");
   const { nativeSessionAttempts, resetNativeSessionAttemptBarrier } = await import("./native-session-attempt-barrier.mjs");
 
-  resetNativeSessionAttemptBarrier(mode === "active" ? [{ holdCancel: true }] : []);
+  resetNativeSessionAttemptBarrier(
+    mode === "active" ? [{ holdCancel: true }]
+      : mode === "replacement" ? [{ holdCancel: true }, { onStart: () => process.stdout.write("DETACHED\n") }]
+        : [],
+  );
   const runtime = await startInactiveSessionRuntime({
     configuration: parseStandaloneArguments([
       "--port", "0", "--max-live-sessions", "1", "--max-active-attempts", "1",
@@ -43,7 +47,7 @@ if (mode !== undefined) {
   process.stdin.resume();
   process.stdin.unref();
 
-  if (mode === "active") {
+  if (mode === "active" || mode === "replacement") {
     const timer = setInterval(() => {
       const attempt = nativeSessionAttempts()[0];
       if (!attempt) return;

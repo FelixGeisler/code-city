@@ -92,9 +92,9 @@ function openSession(origin) {
   });
 }
 
-function analyze(origin, sessionId) {
+function analyze(origin, sessionId, generation = 1) {
   const bytes = Buffer.from(JSON.stringify({
-    sessionId, generation: 1, repositoryUrl: "https://github.com/owner/repository", additionalExclusions: "",
+    sessionId, generation, repositoryUrl: "https://github.com/owner/repository", additionalExclusions: "",
   }));
   return new Promise((resolve, reject) => {
     const request = http.request(`${origin}/_code-city/analyze`, {
@@ -117,6 +117,7 @@ function sendSignal(child, signal) {
 async function expectCleanExit(exited) {
   const result = await exited;
   assert.deepEqual({ code: result.code, signal: result.signal }, { code: 0, signal: null }, `${result.stderr}\n${result.lines.join("\n")}`);
+  return result;
 }
 
 test("SIGINT exits successfully with no session only after the listener is closed", async (t) => {
@@ -152,4 +153,33 @@ test("SIGINT refuses to exit during an active deterministic attempt until worker
   assert.equal(early, false, "process exited before worker join");
   processUnderTest.child.stdin.write("JOIN\n");
   await expectCleanExit(processUnderTest.exited);
+});
+
+test("SIGTERM during a replacement join keeps response ownership and cannot start detached work", async (t) => {
+  const controlled = await artifact(t);
+  const processUnderTest = launch(t, "replacement", controlled);
+  const ready = await processUnderTest.waitLine((line) => line.startsWith("READY "));
+  const origin = ready.slice("READY ".length);
+  const owner = await openSession(origin);
+  assert.equal(await analyze(origin, owner.sessionId), 202);
+  await processUnderTest.waitLine((line) => line === "ATTEMPT");
+  const replacement = analyze(origin, owner.sessionId, 2);
+  await processUnderTest.waitLine((line) => line === "JOINING");
+
+  let responseEnded = false;
+  const ended = new Promise((resolve) => {
+    const complete = () => { responseEnded = true; resolve(); };
+    owner.response.once("end", complete);
+    owner.response.once("close", complete);
+  });
+  sendSignal(processUnderTest.child, "SIGTERM");
+  const earlyExit = await Promise.race([processUnderTest.exited.then(() => true), sleep(75).then(() => false)]);
+  assert.equal(earlyExit, false, "process exited before replacement join");
+  assert.equal(responseEnded, false, "session response ownership ended before replacement join");
+
+  processUnderTest.child.stdin.write("JOIN\n");
+  assert.equal(await replacement, 404);
+  await ended;
+  const result = await expectCleanExit(processUnderTest.exited);
+  assert.equal(result.lines.includes("DETACHED"), false, "shutdown admitted detached replacement work");
 });

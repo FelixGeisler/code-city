@@ -39,6 +39,7 @@ type SessionState = {
   active?: ActiveAttempt;
   current?: RetainedCurrent;
   joining: boolean;
+  mutation?: Promise<void>;
   lost: boolean;
   released: boolean;
   blockedFrame?: string;
@@ -205,31 +206,54 @@ export async function startInactiveSessionRuntime(input: InactiveSessionRuntimeI
   const cleanupActive = async (session: SessionState): Promise<boolean> => {
     const active = session.active;
     if (!active) return false;
-    session.active = undefined;
     active.eligible = false;
     await active.attempt.cancel();
     await active.completion;
+    if (session.active === active) session.active = undefined;
     releaseSource(active);
     return true;
   };
 
   const cleanupState = async (session: SessionState): Promise<boolean> => {
-    session.joining = true;
     const hadActive = await cleanupActive(session);
     const hadCurrent = discardCurrent(session);
-    session.joining = false;
     return hadActive || hadCurrent;
   };
+
+  const ownMutation = (session: SessionState): (() => void) => {
+    let resolveMutation!: () => void;
+    const mutation = new Promise<void>((resolve) => { resolveMutation = resolve; });
+    session.joining = true;
+    session.mutation = mutation;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (session.mutation === mutation) {
+        session.mutation = undefined;
+        session.joining = false;
+      }
+      resolveMutation();
+    };
+  };
+
+  const eligibleAfterAwait = (session: SessionState): boolean => accepting
+    && !session.lost && !session.released && sessions.get(session.id) === session;
 
   const beginLoss = (session: SessionState): Promise<void> => {
     if (session.lossPromise) return session.lossPromise;
     session.lost = true;
+    if (session.active) session.active.eligible = false;
     sessions.delete(session.id);
+    const mutation = session.mutation;
     session.lossPromise = (async () => {
+      if (mutation) await mutation;
+      session.joining = true;
       await cleanupState(session);
       session.blockedFrame = undefined;
       endResponse(session);
       releaseSession(session);
+      session.joining = false;
     })();
     return session.lossPromise;
   };
@@ -271,10 +295,7 @@ export async function startInactiveSessionRuntime(input: InactiveSessionRuntimeI
 
   const completeAttempt = async (session: SessionState, active: ActiveAttempt): Promise<void> => {
     const result = await active.attempt.result;
-    if (!active.eligible || session.active !== active || session.lost) {
-      releaseSource(active);
-      return;
-    }
+    if (!active.eligible || session.active !== active || session.lost) return;
     session.active = undefined;
     active.eligible = false;
     if (result.type === "CANCELLED") {
@@ -353,61 +374,65 @@ export async function startInactiveSessionRuntime(input: InactiveSessionRuntimeI
 
     const repository = parseRepositoryReference(command.repositoryUrl);
     const additionalExclusions = parseAdditionalExclusions(command.additionalExclusions);
-    session.latestGeneration = command.generation;
-    session.joining = true;
-    await cleanupActive(session);
-    discardCurrent(session);
-    session.joining = false;
-    if (!repository || !additionalExclusions || !isCanonicalAdditionalExclusions(additionalExclusions)) return empty(422);
-    if (activeAttempts >= configuration.maxActiveAttempts
-      || retainedSourceBytes > configuration.maxRetainedSourceBytes - MAX_NORMALIZED_TOTAL_BYTES) return empty(503);
-
-    activeAttempts += 1;
-    retainedSourceBytes += MAX_NORMALIZED_TOTAL_BYTES;
-    let attemptReleased = false;
-    let active!: ActiveAttempt;
-    const pendingRevisions: string[] = [];
-    let attempt: NodeWorkerAttempt;
+    const releaseMutation = ownMutation(session);
     try {
-      attempt = startNodeWorkerAttempt({
-        repository,
+      session.latestGeneration = command.generation;
+      await cleanupActive(session);
+      discardCurrent(session);
+      if (!eligibleAfterAwait(session)) return empty(404);
+      if (!repository || !additionalExclusions || !isCanonicalAdditionalExclusions(additionalExclusions)) return empty(422);
+      if (activeAttempts >= configuration.maxActiveAttempts
+        || retainedSourceBytes > configuration.maxRetainedSourceBytes - MAX_NORMALIZED_TOTAL_BYTES) return empty(503);
+
+      activeAttempts += 1;
+      retainedSourceBytes += MAX_NORMALIZED_TOTAL_BYTES;
+      let attemptReleased = false;
+      let active!: ActiveAttempt;
+      const pendingRevisions: string[] = [];
+      let attempt: NodeWorkerAttempt;
+      try {
+        attempt = startNodeWorkerAttempt({
+          repository,
+          generation: command.generation,
+          additionalExclusions,
+          release() {
+            if (attemptReleased) return;
+            attemptReleased = true;
+            activeAttempts -= 1;
+          },
+          onRevisionSelected(revision) {
+            if (!active) { pendingRevisions.push(revision); return; }
+            if (active.eligible && session.active === active && eligibleAfterAwait(session)) {
+              writeFrame(session, { type: "REVISION_SELECTED", sessionId: session.id, generation: active.generation, revision });
+            }
+          },
+        });
+      } catch {
+        activeAttempts -= 1;
+        retainedSourceBytes -= MAX_NORMALIZED_TOTAL_BYTES;
+        queueMicrotask(() => writeFrame(session, {
+          type: "ANALYSIS_FAILED", sessionId: session.id, generation: command.generation,
+          category: "Provider/resolution failure",
+        }));
+        return empty(202);
+      }
+      active = {
         generation: command.generation,
-        additionalExclusions,
-        release() {
-          if (attemptReleased) return;
-          attemptReleased = true;
-          activeAttempts -= 1;
-        },
-        onRevisionSelected(revision) {
-          if (!active) { pendingRevisions.push(revision); return; }
-          if (active.eligible && session.active === active && !session.lost) {
-            writeFrame(session, { type: "REVISION_SELECTED", sessionId: session.id, generation: active.generation, revision });
-          }
-        },
-      });
-    } catch {
-      activeAttempts -= 1;
-      retainedSourceBytes -= MAX_NORMALIZED_TOTAL_BYTES;
-      queueMicrotask(() => writeFrame(session, {
-        type: "ANALYSIS_FAILED", sessionId: session.id, generation: command.generation,
-        category: "Provider/resolution failure",
-      }));
+        attempt,
+        eligible: true,
+        sourceReleased: false,
+        completion: Promise.resolve(),
+      };
+      session.active = active;
+      for (const revision of pendingRevisions) {
+        if (!active.eligible || session.active !== active || !eligibleAfterAwait(session)) break;
+        writeFrame(session, { type: "REVISION_SELECTED", sessionId: session.id, generation: active.generation, revision });
+      }
+      active.completion = completeAttempt(session, active);
       return empty(202);
+    } finally {
+      releaseMutation();
     }
-    active = {
-      generation: command.generation,
-      attempt,
-      eligible: true,
-      sourceReleased: false,
-      completion: Promise.resolve(),
-    };
-    session.active = active;
-    for (const revision of pendingRevisions) {
-      if (!active.eligible || session.active !== active || session.lost) break;
-      writeFrame(session, { type: "REVISION_SELECTED", sessionId: session.id, generation: active.generation, revision });
-    }
-    active.completion = completeAttempt(session, active);
-    return empty(202);
   };
 
   const cancelHandler = async (value: unknown): Promise<EmptyResult> => {
@@ -419,11 +444,15 @@ export async function startInactiveSessionRuntime(input: InactiveSessionRuntimeI
     if (conflict) return conflict;
     if (command.generation !== session.latestGeneration) return empty(409);
     if (!session.active) return empty(204);
-    session.joining = true;
-    await cleanupActive(session);
-    session.joining = false;
-    writeFrame(session, { type: "ANALYSIS_CANCELLED", sessionId: session.id, generation: command.generation });
-    return empty(204);
+    const releaseMutation = ownMutation(session);
+    try {
+      await cleanupActive(session);
+      if (!eligibleAfterAwait(session)) return empty(404);
+      writeFrame(session, { type: "ANALYSIS_CANCELLED", sessionId: session.id, generation: command.generation });
+      return empty(204);
+    } finally {
+      releaseMutation();
+    }
   };
 
   const discardHandler = async (value: unknown): Promise<EmptyResult> => {
@@ -436,12 +465,16 @@ export async function startInactiveSessionRuntime(input: InactiveSessionRuntimeI
     if (command.generation !== session.latestGeneration) return empty(409);
     const hadState = session.active !== undefined || session.current !== undefined;
     if (!hadState) return empty(204);
-    session.joining = true;
-    await cleanupActive(session);
-    discardCurrent(session);
-    session.joining = false;
-    writeFrame(session, { type: "CURRENT_DISCARDED", sessionId: session.id, generation: command.generation });
-    return empty(204);
+    const releaseMutation = ownMutation(session);
+    try {
+      await cleanupActive(session);
+      discardCurrent(session);
+      if (!eligibleAfterAwait(session)) return empty(404);
+      writeFrame(session, { type: "CURRENT_DISCARDED", sessionId: session.id, generation: command.generation });
+      return empty(204);
+    } finally {
+      releaseMutation();
+    }
   };
 
   const handlers: FixedRouteHandlers = Object.freeze({
