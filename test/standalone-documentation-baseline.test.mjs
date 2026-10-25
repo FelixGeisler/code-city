@@ -101,6 +101,14 @@ test("active standalone inventory documentation excludes non-mounted legacy sema
   ]) assert.doesNotMatch(city, staleCurrentClaim);
 });
 
+test("building blocks distinguish browser-local inventory from internal progress schemas", async () => {
+  const buildingBlocks = compact(await read("docs/modules/architecture/pages/05-building-block-view.adoc"));
+
+  assert.match(buildingBlocks, /Inventory, filtering, sorting, and selection remain browser-local and introduce no storage, route, DTO, protocol, runtime, dependency, or ownership boundary\./u);
+  assert.match(buildingBlocks, /Measured progress adds exact source-free internal worker and session notification schemas inside the existing worker and session boundaries; it adds no public API, route, transport, runtime, dependency, or ownership boundary\./u);
+  assert.doesNotMatch(buildingBlocks, /Measured progress[^.]*introduces no[^.]*DTO|Measured progress[^.]*adds no[^.]*protocol/iu);
+});
+
 test("obsolete browser-only architecture diagrams remain removed", async () => {
   const obsoleteDiagrams = [
     "building-blocks.svg",

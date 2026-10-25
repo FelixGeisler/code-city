@@ -66,8 +66,12 @@ diagnostic, timing, or telemetry value.
 Parser runtime and grammar bytes are private artifact records loaded from file
 URLs by the worker. The HTTP perimeter exposes only `public/index.html`,
 `public/browser.css`, and `public/browser.js`. The browser bundle imports no
-legacy main controller or browser processing worker and introduces no storage,
-route, DTO, protocol, runtime, or dependency.
+legacy main controller or browser processing worker. Inventory, filtering,
+sorting, and selection remain browser-local and introduce no storage, route,
+DTO, protocol, runtime, dependency, or ownership boundary. Measured progress
+adds exact source-free internal worker and session notification schemas inside
+the existing worker and session boundaries; it adds no public API, route,
+transport, runtime, dependency, or ownership boundary.
 
 == Ownership and cleanup
 
