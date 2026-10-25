@@ -126,7 +126,7 @@ test("every workflow is parsed and CI has the exact pull-request-only topology",
   const verify = ci.jobs.verify;
   exactKeys(verify, ["runs-on", "timeout-minutes", "permissions", "steps"], "CI verify job");
   assert.equal(verify["runs-on"], "ubuntu-latest");
-  assert.equal(verify["timeout-minutes"], 20);
+  assert.equal(verify["timeout-minutes"], 30);
   assert.deepEqual(verify.permissions, { contents: "read" });
   assert.equal(verify.steps.length, 2 + VERIFY_COMMANDS.length);
   verifyPrefix(verify.steps);
@@ -144,7 +144,7 @@ test("parsed publish workflow has exact triggers, jobs, permissions, steps, pins
   const verify = publish.jobs.verify;
   exactKeys(verify, ["runs-on", "timeout-minutes", "permissions", "steps"], "publish verify job");
   assert.deepEqual({ runner: verify["runs-on"], timeout: verify["timeout-minutes"], permissions: verify.permissions }, {
-    runner: "ubuntu-latest", timeout: 20, permissions: { contents: "read" },
+    runner: "ubuntu-latest", timeout: 30, permissions: { contents: "read" },
   });
   assert.equal(verify.steps.length, 5 + VERIFY_COMMANDS.length);
   verifyPrefix(verify.steps);
