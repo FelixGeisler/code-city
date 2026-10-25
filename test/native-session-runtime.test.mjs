@@ -325,6 +325,27 @@ test("worker construction failure is an accepted joined-mapping event and releas
   owner.response.destroy();
 });
 
+test("progress emitted before the active wrapper exists is omitted rather than buffered", async (t) => {
+  resetNativeSessionAttemptBarrier([{ progressOnStart: true }]);
+  const controlled = await fixture(t);
+  const runtime = await startInactiveSessionRuntime({
+    configuration: configuration({ sessions: 1, attempts: 1, sourceBytes: MAX_SOURCE }),
+    fixtureManifestBytes: controlled.manifest,
+    artifactRoot: controlled.root,
+  });
+  t.after(() => runtime.close());
+  const owner = await openSession(runtime.origin);
+  assert.equal((await command(runtime.origin, "/_code-city/analyze", analyze(owner.sessionId, 1))).status, 202);
+  const attempt = nativeSessionAttempts()[0];
+  attempt.select();
+  await owner.stream.waitFor((event) => event.type === "REVISION_SELECTED");
+  assert.equal(owner.stream.events.some((event) => event.type === "ANALYSIS_PROGRESS"), false);
+  attempt.progress({ stage: "acquisition", completed: 1, total: 1 });
+  const progress = await owner.stream.waitFor((event) => event.type === "ANALYSIS_PROGRESS");
+  assert.equal(progress.completed, 1);
+  owner.response.destroy();
+});
+
 test("events use exact source-free schemas, terminal cancel preserves current state, and discard releases it once", async (t) => {
   const runtime = await running(t, { sourceBytes: MAX_SOURCE * 2 });
   const owner = await openSession(runtime.origin);
@@ -332,10 +353,23 @@ test("events use exact source-free schemas, terminal cancel preserves current st
   assert.equal((await command(runtime.origin, "/_code-city/analyze", analyze(owner.sessionId, 1))).status, 202);
   let attempt = nativeSessionAttempts()[0];
   attempt.select();
-  attempt.failure({ revision: "a".repeat(40), category: "No supported modules", code: "ADM-06" });
   const selected = await owner.stream.waitFor((event) => event.type === "REVISION_SELECTED" && event.generation === 1);
+  attempt.progress({ stage: "acquisition", completed: 0, total: 2 });
+  const acquisition = await owner.stream.waitFor((event) => event.type === "ANALYSIS_PROGRESS" && event.stage === "acquisition");
+  attempt.progress({ stage: "analysis-initialization" });
+  const initialization = await owner.stream.waitFor((event) => event.type === "ANALYSIS_PROGRESS" && event.stage === "analysis-initialization");
+  attempt.progress({ stage: "analysis", completed: 0, total: 1 });
+  const analysis = await owner.stream.waitFor((event) => event.type === "ANALYSIS_PROGRESS" && event.stage === "analysis");
+  attempt.progress({ stage: "city-construction" });
+  const construction = await owner.stream.waitFor((event) => event.type === "ANALYSIS_PROGRESS" && event.stage === "city-construction");
+  attempt.failure({ revision: "a".repeat(40), category: "No supported modules", code: "ADM-06" });
   const failed = await owner.stream.waitFor((event) => event.type === "ANALYSIS_FAILED" && event.generation === 1);
   assert.deepEqual(Object.keys(selected), ["type", "sessionId", "generation", "revision"]);
+  assert.deepEqual(Object.keys(acquisition), ["type", "sessionId", "generation", "revision", "stage", "completed", "total"]);
+  assert.deepEqual(Object.keys(initialization), ["type", "sessionId", "generation", "revision", "stage"]);
+  assert.deepEqual(Object.keys(analysis), ["type", "sessionId", "generation", "revision", "stage", "completed", "total"]);
+  assert.deepEqual(Object.keys(construction), ["type", "sessionId", "generation", "revision", "stage"]);
+  assert.equal(JSON.stringify([acquisition, initialization, analysis, construction]).includes("source"), false);
   assert.deepEqual(Object.keys(failed), ["type", "sessionId", "generation", "revision", "category", "code"]);
 
   assert.equal((await command(runtime.origin, "/_code-city/analyze", analyze(owner.sessionId, 2))).status, 202);
@@ -464,6 +498,92 @@ test("response loss during every command-owned join fences replacement and holds
       contender.response.destroy();
     });
   }
+});
+
+test("optional progress omits busy writes without serialization, resumes after drain, and never queues a latest value", async (t) => {
+  const originalWrite = ServerResponse.prototype.write;
+  const priorNeedDrain = Object.getOwnPropertyDescriptor(ServerResponse.prototype, "writableNeedDrain");
+  const priorLength = Object.getOwnPropertyDescriptor(ServerResponse.prototype, "writableLength");
+  let forceNeedDrain = false;
+  let forceLength = false;
+  let blockNextProgress = false;
+  let blockedResponse;
+  let progressWrites = 0;
+  ServerResponse.prototype.write = function patchedWrite(chunk, ...args) {
+    if (String(chunk).includes('"type":"ANALYSIS_PROGRESS"')) {
+      progressWrites += 1;
+      const result = originalWrite.call(this, chunk, ...args);
+      if (blockNextProgress) {
+        blockNextProgress = false;
+        blockedResponse = this;
+        return false;
+      }
+      return result;
+    }
+    return originalWrite.call(this, chunk, ...args);
+  };
+  Object.defineProperty(ServerResponse.prototype, "writableNeedDrain", {
+    configurable: true,
+    get() { return forceNeedDrain || false; },
+  });
+  Object.defineProperty(ServerResponse.prototype, "writableLength", {
+    configurable: true,
+    get() { return forceLength ? 1 : 0; },
+  });
+  t.after(() => {
+    ServerResponse.prototype.write = originalWrite;
+    if (priorNeedDrain) Object.defineProperty(ServerResponse.prototype, "writableNeedDrain", priorNeedDrain);
+    else delete ServerResponse.prototype.writableNeedDrain;
+    if (priorLength) Object.defineProperty(ServerResponse.prototype, "writableLength", priorLength);
+    else delete ServerResponse.prototype.writableLength;
+  });
+
+  const runtime = await running(t, { sessions: 1, sourceBytes: MAX_SOURCE });
+  const owner = await openSession(runtime.origin);
+  assert.equal((await command(runtime.origin, "/_code-city/analyze", analyze(owner.sessionId, 1))).status, 202);
+  const attempt = nativeSessionAttempts()[0];
+  attempt.select();
+  await owner.stream.waitFor((event) => event.type === "REVISION_SELECTED");
+
+  const originalStringify = JSON.stringify;
+  let progressSerializations = 0;
+  JSON.stringify = function patchedStringify(value, ...args) {
+    if (value?.type === "ANALYSIS_PROGRESS") progressSerializations += 1;
+    return originalStringify(value, ...args);
+  };
+  try {
+    forceNeedDrain = true;
+    attempt.progress({ stage: "acquisition", completed: 0, total: 3 });
+    forceNeedDrain = false;
+    forceLength = true;
+    attempt.progress({ stage: "acquisition", completed: 1, total: 3 });
+    forceLength = false;
+    assert.equal(progressSerializations, 0);
+    assert.equal(progressWrites, 0);
+
+    attempt.progress({ stage: "acquisition", completed: 2, total: 3 });
+    await owner.stream.waitFor((event) => event.type === "ANALYSIS_PROGRESS" && event.completed === 2);
+    assert.equal(progressSerializations, 1);
+    assert.equal(progressWrites, 1);
+
+    blockNextProgress = true;
+    attempt.progress({ stage: "acquisition", completed: 3, total: 3 });
+    await owner.stream.waitFor((event) => event.type === "ANALYSIS_PROGRESS" && event.completed === 3);
+    assert.ok(blockedResponse);
+    attempt.progress({ stage: "analysis-initialization" });
+    assert.equal(progressSerializations, 2, "blocked progress was serialized");
+    assert.equal(progressWrites, 2, "blocked progress was written");
+
+    blockedResponse.emit("drain");
+    attempt.progress({ stage: "analysis", completed: 1, total: 1 });
+    await owner.stream.waitFor((event) => event.type === "ANALYSIS_PROGRESS" && event.stage === "analysis");
+    assert.equal(owner.stream.events.some((event) => event.stage === "analysis-initialization"), false);
+    attempt.failure({ revision: "a".repeat(40) });
+    await owner.stream.waitFor((event) => event.type === "ANALYSIS_FAILED");
+  } finally {
+    JSON.stringify = originalStringify;
+  }
+  owner.response.destroy();
 });
 
 test("one blocked valid frame waits for drain, while a command or second event during blockage causes joined session loss", async (t) => {

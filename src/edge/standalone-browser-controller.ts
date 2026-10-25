@@ -8,8 +8,43 @@ export type FailedFileCategory =
 
 export type BrowserFailedFile = Readonly<{ canonicalPath: string; category: FailedFileCategory }>;
 
+export type BrowserProgressEvent =
+  | Readonly<{
+      type: "ANALYSIS_PROGRESS";
+      sessionId: string;
+      generation: number;
+      revision: string;
+      stage: "acquisition";
+      completed: number;
+      total: number;
+    }>
+  | Readonly<{
+      type: "ANALYSIS_PROGRESS";
+      sessionId: string;
+      generation: number;
+      revision: string;
+      stage: "analysis-initialization";
+    }>
+  | Readonly<{
+      type: "ANALYSIS_PROGRESS";
+      sessionId: string;
+      generation: number;
+      revision: string;
+      stage: "analysis";
+      completed: number;
+      total: number;
+    }>
+  | Readonly<{
+      type: "ANALYSIS_PROGRESS";
+      sessionId: string;
+      generation: number;
+      revision: string;
+      stage: "city-construction";
+    }>;
+
 export type BrowserSessionEvent =
   | Readonly<{ type: "REVISION_SELECTED"; sessionId: string; generation: number; revision: string }>
+  | BrowserProgressEvent
   | Readonly<{ type: "ANALYSIS_FAILED"; sessionId: string; generation: number; revision?: string; category: string; code?: string }>
   | Readonly<{ type: "ANALYSIS_CANCELLED"; sessionId: string; generation: number }>
   | Readonly<{ type: "ANALYSIS_ALL_FILES_FAILED"; sessionId: string; generation: number; revision: string; notAnalyzedFiles: readonly BrowserFailedFile[] }>
@@ -41,6 +76,7 @@ export type BrowserSessionTransport = Readonly<{
 export type StandaloneBrowserView = Readonly<{
   clear(): void;
   working(cancel: () => void): void;
+  progress(label: string, completed?: number, total?: number): void;
   invalid(): void;
   capacity(): void;
   lost(): void;
@@ -58,6 +94,16 @@ export type StandaloneBrowserController = Readonly<{
 }>;
 
 type DataRecord = Record<string, unknown>;
+
+type BrowserAttemptState = {
+  revision?: string;
+  terminal: boolean;
+  stage: 0 | 1 | 2 | 3 | 4;
+  acquisitionTotal?: number;
+  acquisitionCompleted?: number;
+  analysisTotal?: number;
+  analysisCompleted?: number;
+};
 
 const FAILURE_CATEGORIES = new Set([
   "Repository unavailable for anonymous access",
@@ -107,6 +153,12 @@ function validGeneration(value: unknown): value is number {
 
 function validRevision(value: unknown): value is string {
   return typeof value === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(value);
+}
+
+function validProgressCount(completed: unknown, total: unknown): completed is number {
+  return typeof completed === "number" && Number.isSafeInteger(completed) && completed >= 0
+    && typeof total === "number" && Number.isSafeInteger(total) && total > 0
+    && total <= MAX_ADMITTED_MODULES && completed <= total;
 }
 
 function validCode(category: string, code: unknown): code is string {
@@ -222,6 +274,23 @@ export function parseBrowserSessionEvent(value: unknown): BrowserSessionEvent | 
   const revision = exactRecord(value, ["type", "sessionId", "generation", "revision"]);
   if (revision?.type === "REVISION_SELECTED" && validSessionId(revision.sessionId)
     && validGeneration(revision.generation) && validRevision(revision.revision)) return revision as BrowserSessionEvent;
+
+  const countedProgress = exactRecord(
+    value,
+    ["type", "sessionId", "generation", "revision", "stage", "completed", "total"],
+  );
+  if (countedProgress?.type === "ANALYSIS_PROGRESS" && validSessionId(countedProgress.sessionId)
+    && validGeneration(countedProgress.generation) && validRevision(countedProgress.revision)
+    && (countedProgress.stage === "acquisition" || countedProgress.stage === "analysis")
+    && validProgressCount(countedProgress.completed, countedProgress.total)) {
+    return countedProgress as BrowserProgressEvent;
+  }
+  const stageProgress = exactRecord(value, ["type", "sessionId", "generation", "revision", "stage"]);
+  if (stageProgress?.type === "ANALYSIS_PROGRESS" && validSessionId(stageProgress.sessionId)
+    && validGeneration(stageProgress.generation) && validRevision(stageProgress.revision)
+    && (stageProgress.stage === "analysis-initialization" || stageProgress.stage === "city-construction")) {
+    return stageProgress as BrowserProgressEvent;
+  }
 
   for (const keys of [
     ["type", "sessionId", "generation", "category"],
@@ -377,10 +446,12 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
   let sessionId: string | undefined;
   let ownerEpoch = 0;
   let currentGeneration: number | undefined;
+  let attemptState: BrowserAttemptState | undefined;
   let disposed = false;
 
   const clearAssociation = (): void => {
     currentGeneration = undefined;
+    attemptState = undefined;
     view.clear();
   };
 
@@ -396,17 +467,81 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
   };
 
   const onEvent = (epoch: number, event: BrowserSessionEvent): void => {
-    if (disposed || epoch !== ownerEpoch || event.sessionId !== sessionId || event.generation !== latestGeneration) return;
+    if (disposed || epoch !== ownerEpoch || event.sessionId !== sessionId) return;
+    if (event.generation < latestGeneration) return;
+    if (event.generation > latestGeneration) { lose(epoch); return; }
+    const state = attemptState;
+    if (!state) return;
+    if (state.terminal && event.type === "ANALYSIS_PROGRESS") return;
+
     if (event.type === "REVISION_SELECTED") {
+      if (state.terminal || state.revision !== undefined || state.stage !== 0) { lose(epoch); return; }
+      state.revision = event.revision;
       view.revision(event.revision);
+      view.progress("Preparing file inventory");
       return;
     }
+
+    if (event.type === "ANALYSIS_PROGRESS") {
+      if (state.terminal || state.revision === undefined || event.revision !== state.revision) { lose(epoch); return; }
+      if (event.stage === "acquisition") {
+        if (state.stage > 1) { lose(epoch); return; }
+        if (state.acquisitionTotal === undefined) {
+          state.acquisitionTotal = event.total;
+          state.acquisitionCompleted = event.completed;
+        } else if (event.total !== state.acquisitionTotal || event.completed <= state.acquisitionCompleted!) {
+          lose(epoch);
+          return;
+        } else {
+          state.acquisitionCompleted = event.completed;
+        }
+        state.stage = 1;
+        view.progress(`Acquiring files ${event.completed} of ${event.total}`, event.completed, event.total);
+        return;
+      }
+      if (event.stage === "analysis-initialization") {
+        if (state.stage >= 2) { lose(epoch); return; }
+        state.stage = 2;
+        view.progress("Initializing analysis");
+        return;
+      }
+      if (event.stage === "analysis") {
+        if (state.stage > 3 || (state.acquisitionTotal !== undefined && event.total > state.acquisitionTotal)) {
+          lose(epoch);
+          return;
+        }
+        if (state.analysisTotal === undefined) {
+          state.analysisTotal = event.total;
+          state.analysisCompleted = event.completed;
+        } else if (event.total !== state.analysisTotal || event.completed <= state.analysisCompleted!) {
+          lose(epoch);
+          return;
+        } else {
+          state.analysisCompleted = event.completed;
+        }
+        state.stage = 3;
+        view.progress(`Analyzing files ${event.completed} of ${event.total}`, event.completed, event.total);
+        return;
+      }
+      if (state.stage >= 4) { lose(epoch); return; }
+      state.stage = 4;
+      view.progress("Building city");
+      return;
+    }
+
     if (event.type === "ANALYSIS_FAILED") {
+      const correlated = event.revision === undefined
+        ? state.revision === undefined
+        : state.revision !== undefined && event.revision === state.revision;
+      if (state.terminal || !correlated) { lose(epoch); return; }
+      state.terminal = true;
       currentGeneration = undefined;
       view.failed(event.category, event.code, event.revision);
       return;
     }
     if (event.type === "ANALYSIS_CANCELLED") {
+      if (state.terminal) return;
+      state.terminal = true;
       currentGeneration = undefined;
       view.cancelled();
       return;
@@ -416,6 +551,8 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       view.clear();
       return;
     }
+    if (state.terminal || state.revision === undefined || event.revision !== state.revision) { lose(epoch); return; }
+    state.terminal = true;
     currentGeneration = event.generation;
     const discard = (): void => {
       if (!disposed && currentGeneration === event.generation) void discardGeneration(epoch, event.generation);
@@ -503,6 +640,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       view.lost();
       return;
     }
+    attemptState = { terminal: false, stage: 0 };
     const selected = ensureOwner();
     view.working(() => { void cancelGeneration(selected.epoch, generation); });
     void (async () => {
@@ -518,9 +656,16 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       try {
         const status = await selected.owner.analyze(command);
         if (disposed || selected.epoch !== ownerEpoch || generation !== latestGeneration) return;
-        if (status === 202) return;
+        if (status === 202) {
+          const state = attemptState;
+          if (state && !state.terminal && state.revision === undefined && state.stage === 0) {
+            view.progress("Resolving revision");
+          }
+          return;
+        }
         if (status === 422) {
           currentGeneration = undefined;
+          if (attemptState) attemptState.terminal = true;
           view.clear();
           view.invalid();
           return;

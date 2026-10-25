@@ -44,6 +44,16 @@ export function startNodeWorkerAttempt(options) {
     generation: options.generation,
     options,
     select(revision = "a".repeat(40)) { options.onRevisionSelected?.(revision); },
+    progress({ revision = "a".repeat(40), stage, completed, total }) {
+      options.onProgress?.({
+        type: "PROGRESS",
+        attemptId,
+        generation: options.generation,
+        revision,
+        stage,
+        ...(completed === undefined ? {} : { completed, total }),
+      });
+    },
     complete,
     failure(value = {}) {
       complete({ type: "FAILURE", attemptId, generation: options.generation, category: "Provider/resolution failure", ...value });
@@ -58,6 +68,15 @@ export function startNodeWorkerAttempt(options) {
     get cancelled() { return cancelled; },
     get completed() { return completed; },
   };
+  if (plan.progressOnStart) options.onProgress?.({
+    type: "PROGRESS",
+    attemptId,
+    generation: options.generation,
+    revision: "a".repeat(40),
+    stage: "acquisition",
+    completed: 0,
+    total: 1,
+  });
   controls.push(control);
   if (typeof plan.onStart === "function") queueMicrotask(() => plan.onStart(control));
   return {

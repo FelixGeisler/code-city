@@ -35,8 +35,43 @@ export type NodeWorkerSuccess = Readonly<{
   sources: RetainedProjectSource[];
 }>;
 
+export type NodeWorkerProgress =
+  | Readonly<{
+      type: "PROGRESS";
+      attemptId: string;
+      generation: number;
+      revision: string;
+      stage: "acquisition";
+      completed: number;
+      total: number;
+    }>
+  | Readonly<{
+      type: "PROGRESS";
+      attemptId: string;
+      generation: number;
+      revision: string;
+      stage: "analysis-initialization";
+    }>
+  | Readonly<{
+      type: "PROGRESS";
+      attemptId: string;
+      generation: number;
+      revision: string;
+      stage: "analysis";
+      completed: number;
+      total: number;
+    }>
+  | Readonly<{
+      type: "PROGRESS";
+      attemptId: string;
+      generation: number;
+      revision: string;
+      stage: "city-construction";
+    }>;
+
 export type NodeWorkerEvent =
   | Readonly<{ type: "REVISION_SELECTED"; attemptId: string; generation: number; revision: string }>
+  | NodeWorkerProgress
   | NodeWorkerFailure
   | NodeWorkerSuccess;
 
@@ -162,6 +197,12 @@ function validCode(category: unknown, code: unknown): code is FailureCode {
 
 function correlation(record: DataRecord): boolean {
   return validAttemptId(record.attemptId) && validGeneration(record.generation);
+}
+
+function validProgressCount(completed: unknown, total: unknown): completed is number {
+  return typeof completed === "number" && Number.isSafeInteger(completed) && completed >= 0
+    && typeof total === "number" && Number.isSafeInteger(total) && total > 0
+    && total <= MAX_ADMITTED_MODULES && completed <= total;
 }
 
 function plainWholeByteStructure(value: unknown): Readonly<{ bytes: Uint8Array; buffer: ArrayBuffer }> | undefined {
@@ -326,6 +367,31 @@ function validateNodeWorkerEventInternal(
   const selected = exactRecord(value, ["type", "attemptId", "generation", "revision"]);
   if (selected?.type === "REVISION_SELECTED" && correlation(selected) && validNodeRevision(selected.revision)) {
     return { validation: { kind: "valid", event: { type: "REVISION_SELECTED", attemptId: selected.attemptId as string, generation: selected.generation as number, revision: selected.revision } } };
+  }
+  const countedProgress = exactRecord(
+    value,
+    ["type", "attemptId", "generation", "revision", "stage", "completed", "total"],
+  );
+  if (countedProgress?.type === "PROGRESS" && correlation(countedProgress)
+    && validNodeRevision(countedProgress.revision)
+    && (countedProgress.stage === "acquisition" || countedProgress.stage === "analysis")
+    && validProgressCount(countedProgress.completed, countedProgress.total)) {
+    return {
+      validation: {
+        kind: "valid",
+        event: countedProgress as NodeWorkerProgress,
+      },
+    };
+  }
+  const stageProgress = exactRecord(value, ["type", "attemptId", "generation", "revision", "stage"]);
+  if (stageProgress?.type === "PROGRESS" && correlation(stageProgress) && validNodeRevision(stageProgress.revision)
+    && (stageProgress.stage === "analysis-initialization" || stageProgress.stage === "city-construction")) {
+    return {
+      validation: {
+        kind: "valid",
+        event: stageProgress as NodeWorkerProgress,
+      },
+    };
   }
   const success = exactRecord(value, ["type", "attemptId", "generation", "revision", "result", "sources"]);
   if (success?.type === "SUCCESS") return validateSuccess(success, boundary);

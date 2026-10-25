@@ -36,6 +36,21 @@ parentPort.on("message", (command) => {
   };
   if (workerData.mode === "pre-nonzero") { parentPort.postMessage({ type: "FAILURE", attemptId: command.attemptId, generation: command.generation, category: "Revision unavailable" }); setTimeout(() => process.exit(7), 30); return; }
   parentPort.postMessage(selected);
+  const progress = (stage, completed, total) => parentPort.postMessage({
+    type: "PROGRESS", attemptId: command.attemptId, generation: command.generation, revision: SHA, stage,
+    ...(completed === undefined ? {} : { completed, total }),
+  });
+  if (workerData.mode === "valid-progress" || workerData.mode === "callback-progress") {
+    progress("acquisition", 0, 1); progress("acquisition", 1, 1); progress("analysis-initialization");
+    progress("analysis", 0, 1); progress("analysis", 1, 1); parentPort.postMessage(success); parentPort.close(); return;
+  }
+  if (workerData.mode === "progress-gap") { progress("acquisition", 0, 2); progress("acquisition", 2, 2); parentPort.close(); return; }
+  if (workerData.mode === "progress-order") { progress("analysis-initialization"); parentPort.close(); return; }
+  if (workerData.mode === "progress-terminal-mismatch") {
+    progress("acquisition", 0, 2); progress("acquisition", 1, 2); progress("acquisition", 2, 2);
+    progress("analysis-initialization"); progress("analysis", 0, 1); progress("analysis", 1, 1);
+    parentPort.postMessage(success); parentPort.close(); return;
+  }
   if (workerData.mode === "normal-delay") { parentPort.postMessage(failure); setTimeout(() => parentPort.close(), 40); return; }
   if (workerData.mode === "nonzero") { parentPort.postMessage(failure); setTimeout(() => process.exit(9), 40); return; }
   if (workerData.mode === "success-nonzero") { parentPort.postMessage(success); setTimeout(() => process.exit(9), 40); return; }
@@ -52,7 +67,7 @@ parentPort.on("message", (command) => {
   return pathToFileURL(file);
 }
 
-function run(url, mode, release = () => {}, capture = () => {}, onRevisionSelected) {
+function run(url, mode, release = () => {}, capture = () => {}, onRevisionSelected, onProgress) {
   return startNodeWorkerAttempt({
     repository: REPOSITORY, generation: 11, workerUrl: url,
     workerFactory: (entry) => {
@@ -62,6 +77,7 @@ function run(url, mode, release = () => {}, capture = () => {}, onRevisionSelect
     },
     release,
     onRevisionSelected,
+    onProgress,
   });
 }
 
@@ -101,6 +117,34 @@ test("validated revision selection is exposed once before the joined terminal re
   const attempt = run(url, "normal-delay", () => {}, () => {}, (revision) => revisions.push(revision));
   assert.equal((await attempt.result).type, "FAILURE");
   assert.deepEqual(revisions, [SHA]);
+});
+
+test("progress is nonterminal, exact, ordered, and reconciled with joined success", async (t) => {
+  const url = await faultWorker(t);
+  const observed = [];
+  const attempt = run(url, "valid-progress", () => {}, () => {}, () => {}, (progress) => observed.push(progress));
+  const result = await attempt.result;
+  assert.equal(result.type, "SUCCESS");
+  assert.deepEqual(observed.map(({ stage, completed, total }) => ({ stage, completed, total })), [
+    { stage: "acquisition", completed: 0, total: 1 },
+    { stage: "acquisition", completed: 1, total: 1 },
+    { stage: "analysis-initialization", completed: undefined, total: undefined },
+    { stage: "analysis", completed: 0, total: 1 },
+    { stage: "analysis", completed: 1, total: 1 },
+  ]);
+
+  for (const mode of ["progress-gap", "progress-order", "progress-terminal-mismatch"]) {
+    const invalid = run(url, mode);
+    const terminal = await invalid.result;
+    assert.equal(terminal.type, "FAILURE", mode);
+    assert.equal(terminal.category, "Provider/resolution failure", mode);
+    assert.equal(terminal.revision, SHA, mode);
+  }
+
+  const callback = run(url, "callback-progress", () => {}, () => {}, () => {}, () => { throw new Error("callback"); });
+  const callbackFailure = await callback.result;
+  assert.equal(callbackFailure.type, "FAILURE");
+  assert.equal(callbackFailure.category, "Provider/resolution failure");
 });
 
 test("terminal values remain provisional until a joined normal exit", async (t) => {

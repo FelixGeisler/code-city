@@ -2,6 +2,7 @@ import type { MessagePort } from "node:worker_threads";
 import { fixedTransferSourceOwnership } from "../../application/internal/source-byte-ownership";
 import { analyzeProjectSources } from "../../application/project-analysis";
 import { resolveRevision, type RevisionGateway } from "../../application/resolution";
+import { buildCity } from "../../domain/city-model";
 import {
   acquireProjectSources,
   type ImmutableRawSourceGateway,
@@ -18,6 +19,7 @@ import {
   validateNodeWorkerEventForPublication,
   type NodeWorkerEvent,
   type NodeWorkerFailure,
+  type NodeWorkerProgress,
   type NodeWorkerSuccess,
 } from "./worker-protocol";
 
@@ -26,6 +28,12 @@ export type NodeAnalysisWorkerDependencies = Readonly<{
   sourceGateway: ImmutableRawSourceGateway;
   parser: SyntaxProjectionCapability;
 }>;
+
+type NodeWorkerProgressPayload =
+  | Omit<Extract<NodeWorkerProgress, { stage: "acquisition" }>, "attemptId" | "generation" | "revision">
+  | Omit<Extract<NodeWorkerProgress, { stage: "analysis-initialization" }>, "attemptId" | "generation" | "revision">
+  | Omit<Extract<NodeWorkerProgress, { stage: "analysis" }>, "attemptId" | "generation" | "revision">
+  | Omit<Extract<NodeWorkerProgress, { stage: "city-construction" }>, "attemptId" | "generation" | "revision">;
 
 function providerFailure(attemptId: string, generation: number, revision?: string): NodeWorkerFailure {
   return revision === undefined
@@ -92,9 +100,36 @@ export function runNodeAnalysisWorker(port: MessagePort, dependencies: NodeAnaly
         return;
       }
       revision = resolution.revision;
-      publishNodeWorkerEvent(port, { type: "REVISION_SELECTED", attemptId: command.attemptId, generation: command.generation, revision });
+      const progressIdentity = { attemptId: command.attemptId, generation: command.generation, revision };
+      const publishProgress = (progress: NodeWorkerProgressPayload): void => {
+        publishNodeWorkerEvent(port, { ...progressIdentity, ...progress } as NodeWorkerProgress);
+      };
+      publishNodeWorkerEvent(port, { type: "REVISION_SELECTED", ...progressIdentity });
       const acquired = await acquireProjectSources(
-        command.repository, revision, controller.signal, sourceGateway, undefined, command.additionalExclusions,
+        command.repository,
+        revision,
+        controller.signal,
+        sourceGateway,
+        (ownership) => {
+          if (ownership.phase === "provider-candidate"
+            && ownership.candidateIndex !== undefined && ownership.candidateCount !== undefined) {
+            publishProgress({
+              type: "PROGRESS",
+              stage: "acquisition",
+              completed: ownership.candidateIndex,
+              total: ownership.candidateCount,
+            });
+          } else if (ownership.phase === "provider-cleared" && !ownership.projectedInventory
+            && ownership.candidateIndex !== undefined && ownership.candidateCount !== undefined) {
+            publishProgress({
+              type: "PROGRESS",
+              stage: "acquisition",
+              completed: ownership.candidateIndex,
+              total: ownership.candidateCount,
+            });
+          }
+        },
+        command.additionalExclusions,
       );
       if (controller.signal.aborted || acquired.kind === "cancelled") { finish(); return; }
       if (acquired.kind === "failure") {
@@ -114,7 +149,49 @@ export function runNodeAnalysisWorker(port: MessagePort, dependencies: NodeAnaly
         finish();
         return;
       }
-      const analysis = await analyzeProjectSources(acquired, dependencies.parser);
+      publishProgress({ type: "PROGRESS", stage: "analysis-initialization" });
+      const analysisTotal = acquired.modules.length;
+      let analysisCompleted = 0;
+      const parser: SyntaxProjectionCapability = {
+        async initialize() {
+          await dependencies.parser.initialize();
+          if (analysisTotal > 0) {
+            publishProgress({ type: "PROGRESS", stage: "analysis", completed: 0, total: analysisTotal });
+          }
+        },
+        async project(grammarFamily, normalizedSource) {
+          let projected: Awaited<ReturnType<SyntaxProjectionCapability["project"]>>;
+          try {
+            projected = await dependencies.parser.project(grammarFamily, normalizedSource);
+          } catch (error) {
+            analysisCompleted += 1;
+            publishProgress({
+              type: "PROGRESS",
+              stage: "analysis",
+              completed: analysisCompleted,
+              total: analysisTotal,
+            });
+            throw error;
+          }
+          return {
+            observations: projected.observations,
+            release() {
+              projected.release();
+              analysisCompleted += 1;
+              publishProgress({
+                type: "PROGRESS",
+                stage: "analysis",
+                completed: analysisCompleted,
+                total: analysisTotal,
+              });
+            },
+          };
+        },
+      };
+      const analysis = await analyzeProjectSources(acquired, parser, (facts) => {
+        publishProgress({ type: "PROGRESS", stage: "city-construction" });
+        return buildCity(facts);
+      });
       if (controller.signal.aborted) { finish(); return; }
       if (analysis.kind === "failure") {
         publishNodeWorkerEvent(port, {

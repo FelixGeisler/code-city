@@ -200,7 +200,7 @@ export async function checkStandaloneBrowser() {
                 if(newline<0)break;
                 const line=pending.slice(0,newline);
                 pending=pending.slice(newline+1);
-                if(line.length>0){const event=JSON.parse(line);window.__codeCityObservedSessionEvents.push({type:event.type,sessionId:event.sessionId,generation:event.generation,revision:event.revision,successfulCount:event.city?.geometry?.count??0,failedCount:event.notAnalyzedFiles?.length??0});}
+                if(line.length>0){const event=JSON.parse(line);window.__codeCityObservedSessionEvents.push({type:event.type,sessionId:event.sessionId,generation:event.generation,revision:event.revision,stage:event.stage,completed:event.completed,total:event.total,successfulCount:event.city?.geometry?.count??0,failedCount:event.notAnalyzedFiles?.length??0});}
               }
             }
             pending+=decoder.decode();
@@ -226,6 +226,18 @@ export async function checkStandaloneBrowser() {
       }
       throw new Error(`Timed out waiting for observed session event: ${label}`);
     };
+    const waitForProgressEvent = async (stage, generation, expectedSessionId, predicate, label, milliseconds = 120_000) => {
+      const end = Date.now() + milliseconds;
+      while (Date.now() < end) {
+        const events = await observedSessionEvents();
+        const event = events.find((candidate) => candidate.type === "ANALYSIS_PROGRESS"
+          && candidate.stage === stage && candidate.generation === generation && candidate.sessionId === expectedSessionId
+          && predicate(candidate));
+        if (event) return event;
+        await sleep(20);
+      }
+      throw new Error(`Timed out waiting for progress event: ${label}`);
+    };
     const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,discard:[...document.querySelectorAll('[data-actions] button')].map((button)=>button.textContent)})`;
     const snapshot = () => evaluate(snapshotExpression);
     const progressEvidence = () => evaluate(`(()=>{
@@ -248,6 +260,9 @@ export async function checkStandaloneBrowser() {
         native:progress instanceof HTMLProgressElement,
         indeterminate:progress?.matches(':indeterminate')??false,
         valueAttribute:progress?.hasAttribute('value')??false,
+        maxAttribute:progress?.hasAttribute('max')??false,
+        value:progress?.value??null,
+        max:progress?.max??null,
         ariaValueNow:progress?.hasAttribute('aria-valuenow')??false,
         associated:progress?.labels?.length===1&&progress.labels[0]===label&&label.control===progress,
         label:label?.textContent??'',
@@ -261,7 +276,7 @@ export async function checkStandaloneBrowser() {
         labelContrast:(high+0.05)/(low+0.05),
       };
     })()`);
-    const assertActiveProgress = async (width, theme, label) => {
+    const assertActiveProgress = async (width, theme, label, expectedLabel) => {
       await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 800, deviceScaleFactor: 1, mobile: false }, sessionId);
       await cdp.send("Emulation.setEmulatedMedia", { media: "screen", features: [{ name: "prefers-color-scheme", value: theme }] }, sessionId);
       await evaluate("new Promise((resolve)=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
@@ -288,7 +303,7 @@ export async function checkStandaloneBrowser() {
         valueAttribute: false,
         ariaValueNow: false,
         associated: true,
-        label: "Analysis progress",
+        label: expectedLabel,
         status: "Analyzing repository",
         statusRole: "status",
         cancel: "Cancel",
@@ -298,6 +313,39 @@ export async function checkStandaloneBrowser() {
         viewportContained: true,
       }, label);
       assert(evidence.labelContrast >= 4.5, `${label} label contrast was ${evidence.labelContrast}`);
+    };
+    const assertMeasuredProgress = async (expectedLabel, expectedValue, expectedMax, label) => {
+      await evaluate("new Promise((resolve)=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+      const evidence = await progressEvidence();
+      assert.deepEqual({
+        count: evidence.count,
+        native: evidence.native,
+        indeterminate: evidence.indeterminate,
+        valueAttribute: evidence.valueAttribute,
+        maxAttribute: evidence.maxAttribute,
+        value: evidence.value,
+        max: evidence.max,
+        ariaValueNow: evidence.ariaValueNow,
+        associated: evidence.associated,
+        label: evidence.label,
+        status: evidence.status,
+        cancel: evidence.cancel,
+        visible: evidence.visible,
+      }, {
+        count: 1,
+        native: true,
+        indeterminate: false,
+        valueAttribute: true,
+        maxAttribute: true,
+        value: expectedValue,
+        max: expectedMax,
+        ariaValueNow: false,
+        associated: true,
+        label: expectedLabel,
+        status: "Analyzing repository",
+        cancel: "Cancel",
+        visible: true,
+      }, label);
     };
     const restoreViewport = async () => {
       await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId);
@@ -478,14 +526,42 @@ export async function checkStandaloneBrowser() {
     assert.equal(await evaluate("document.querySelector('[data-presentation]').hidden&&document.querySelectorAll('[data-inspector]').length===0"), true);
     assert.equal((await progressEvidence()).count, 0, "all-files-failed retained progress");
 
+    await Promise.all([
+      rm(harness.acquisitionRelease, { force: true }),
+      rm(harness.analysisRelease, { force: true }),
+    ]);
     let logStart = (await logRows(harness)).length;
+    await setMode(harness, "progress-barriers");
+    await installDelayedControlResponse("/_code-city/analyze");
+    await submit();
+    await waitForLog(harness, logStart, (rows) => rows.some(({ event }) => event === "first-acquisition-held"), "first acquisition barrier");
+    current = latestAnalyze();
+    await waitForProgressEvent("acquisition", current.generation, current.sessionId, (event) => event.completed === 0 && event.total === 3, "acquisition zero");
+    await assertMeasuredProgress("Acquiring files 0 of 3", 0, 3, "held first acquisition file");
+    assert.deepEqual(await evaluate(`({status:window.__codeCityControlStatus,settled:window.__codeCityControlSettled})`), { status: 202, settled: false });
+    assert.equal(await releaseDelayedControlResponse(), 202);
+    await assertMeasuredProgress("Acquiring files 0 of 3", 0, 3, "event-before-202 progress did not regress");
+    await writeFile(harness.acquisitionRelease, "release\n", "utf8");
+
+    await waitForLog(harness, logStart, (rows) => rows.some(({ event }) => event === "first-analysis-held"), "first analysis barrier");
+    await waitForProgressEvent("acquisition", current.generation, current.sessionId, (event) => event.completed > 0 && event.completed < event.total, "nonzero intermediate acquisition");
+    await waitForProgressEvent("analysis", current.generation, current.sessionId, (event) => event.completed === 0 && event.total === 2, "analysis zero");
+    await assertMeasuredProgress("Analyzing files 0 of 2", 0, 2, "held first analysis file with phase reset");
+    await writeFile(harness.analysisRelease, "release\n", "utf8");
+    await waitForProgressEvent("analysis", current.generation, current.sessionId, (event) => event.completed > 0 && event.completed < event.total, "nonzero intermediate analysis");
+    state = await waitFor((value) => value.canvases === 1 && value.analyzed === 2 && value.failed === 1, "progress barrier success");
+    assert.equal((await progressEvidence()).count, 0, "progress barrier terminal retained progress");
+    const progressEvents = (await observedSessionEvents()).filter((event) => event.type === "ANALYSIS_PROGRESS" && event.generation === current.generation);
+    assert.equal(JSON.stringify(progressEvents).match(/source|path|provider|diagnostic|telemetry|storage/iu), null);
+
+    logStart = (await logRows(harness)).length;
     await setMode(harness, "block-provider");
     let responseStart = responses.length;
     await submit();
     await waitForLog(harness, logStart, (rows) => rows.some(({ event }) => event === "revision-start"), "provider start before cancellation");
     await waitForResponse(responseStart, "/_code-city/analyze", 202);
-    await assertActiveProgress(900, "light", "post-acknowledgement light progress");
-    await assertActiveProgress(320, "dark", "post-acknowledgement narrow dark progress");
+    await assertActiveProgress(900, "light", "post-acknowledgement light progress", "Resolving revision");
+    await assertActiveProgress(320, "dark", "post-acknowledgement narrow dark progress", "Resolving revision");
     current = latestAnalyze();
     await installDelayedControlResponse("/_code-city/cancel");
     await click("[data-status] button");
@@ -505,7 +581,7 @@ export async function checkStandaloneBrowser() {
     current = latestAnalyze();
     await waitForResponse(responseStart, "/_code-city/analyze", 202);
     await waitForSessionEvent("REVISION_SELECTED", current.generation, current.sessionId, "held post-revision generation");
-    await assertActiveProgress(320, "light", "post-revision narrow light progress");
+    await assertActiveProgress(320, "light", "post-revision narrow light progress", "Preparing file inventory");
     await click("[data-status] button");
     await waitFor((value) => value.status === "Cancelled", "post-revision cancellation");
     assert.equal((await progressEvidence()).count, 0, "post-revision terminal event retained progress");
@@ -610,6 +686,32 @@ export async function checkStandaloneBrowser() {
     await sleep(100);
     await probeTwoSessions(origin);
 
+    await setMode(harness, "fast-4000");
+    const bulk = await openSessionEventually(origin);
+    assert.equal((await command(origin, "/_code-city/analyze", {
+      sessionId: bulk.sessionId,
+      generation: 1,
+      repositoryUrl: REPOSITORY,
+      additionalExclusions: "",
+    })).status, 202);
+    const bulkTerminal = await bulk.stream.waitFor((event) => event.type === "ANALYSIS_ALL_FILES_FAILED" && event.generation === 1);
+    assert.equal(bulkTerminal.notAnalyzedFiles.length, 4_000);
+    assert.equal(bulkTerminal.notAnalyzedFiles.every(({ category }) => category === "Source text is not supported"), true);
+    assert.equal(bulk.stream.events.some((event) => event.type === "ANALYSIS_PROGRESS" && event.stage === "analysis"), false);
+    assert.equal((await command(origin, "/_code-city/discard", { sessionId: bulk.sessionId, generation: 1 })).status, 204);
+    await bulk.stream.waitFor((event) => event.type === "CURRENT_DISCARDED" && event.generation === 1);
+    await setMode(harness, "success");
+    assert.equal((await command(origin, "/_code-city/analyze", {
+      sessionId: bulk.sessionId,
+      generation: 2,
+      repositoryUrl: REPOSITORY,
+      additionalExclusions: "",
+    })).status, 202);
+    const bulkReuse = await bulk.stream.waitFor((event) => event.type === "ANALYSIS_SUCCEEDED" && event.generation === 2);
+    assert.equal(bulkReuse.city.geometry.count, 5);
+    bulk.response.destroy();
+    await probeTwoSessions(origin);
+
     await setMode(harness, "large-failures");
     const paused = await openPausedSession(origin);
     const large = await command(origin, "/_code-city/analyze", {
@@ -637,9 +739,9 @@ export async function checkStandaloneBrowser() {
       chrome: { category: discovery.category, version: chromeVersion },
       scenarios: [
         "success", "retained-noop-cancel", "raw-422-cleanup", "unrepresentable-input", "discard-event-first",
-        "discard-repeat-no-state", "discard-stale", "mixed", "all-files-failed", "progress-post-ack", "cancel-event-first",
+        "discard-repeat-no-state", "discard-stale", "mixed", "all-files-failed", "measured-progress-barriers", "progress-event-before-ack", "progress-post-ack", "cancel-event-first",
         "cancel-repeat-noop", "progress-post-revision", "replacement-stale-suppression", "parser-cancel", "join-reuse", "analyze-400", "analyze-404", "analyze-409",
-        "analyze-413", "analyze-415", "reader-503", "pagehide", "non-reading-owner", "exact-network-allowlist",
+        "analyze-413", "analyze-415", "reader-503", "pagehide", "fast-4000-healthy-owner", "non-reading-owner", "exact-network-allowlist",
       ],
       browserRequests: requests.length,
       providerEvents: (await logRows(harness)).length,

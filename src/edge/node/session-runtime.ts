@@ -11,13 +11,47 @@ import {
   type FixedRouteHandlers,
 } from "./http-perimeter";
 import { startNodeWorkerAttempt, type NodeWorkerAttempt } from "./worker-attempt";
-import type { NodeWorkerFailure, ValidatedNodeWorkerSuccess } from "./worker-protocol";
+import type { NodeWorkerFailure, NodeWorkerProgress, ValidatedNodeWorkerSuccess } from "./worker-protocol";
 
 const SESSION_MEDIA_TYPE = "application/x-ndjson; charset=utf-8";
 
 type EmptyResult = Extract<FixedHandlerResult, { kind: "empty" }>;
 type StreamResult = Extract<FixedHandlerResult, { kind: "stream" }>;
 type DataRecord = Record<string, unknown>;
+
+export type SessionProgress =
+  | Readonly<{
+      type: "ANALYSIS_PROGRESS";
+      sessionId: string;
+      generation: number;
+      revision: string;
+      stage: "acquisition";
+      completed: number;
+      total: number;
+    }>
+  | Readonly<{
+      type: "ANALYSIS_PROGRESS";
+      sessionId: string;
+      generation: number;
+      revision: string;
+      stage: "analysis-initialization";
+    }>
+  | Readonly<{
+      type: "ANALYSIS_PROGRESS";
+      sessionId: string;
+      generation: number;
+      revision: string;
+      stage: "analysis";
+      completed: number;
+      total: number;
+    }>
+  | Readonly<{
+      type: "ANALYSIS_PROGRESS";
+      sessionId: string;
+      generation: number;
+      revision: string;
+      stage: "city-construction";
+    }>;
 
 type RetainedCurrent = Readonly<{
   generation: number;
@@ -291,6 +325,30 @@ export async function startInactiveSessionRuntime(input: InactiveSessionRuntimeI
     }
   };
 
+  const writeProgressFrame = (session: SessionState, event: SessionProgress): boolean => {
+    if (session.lost || session.released) return false;
+    if (session.blockedFrame !== undefined) return true;
+    const response = session.response;
+    if (!response || response.destroyed || response.writableEnded) {
+      void beginLoss(session);
+      return false;
+    }
+    if (response.writableNeedDrain || response.writableLength !== 0) return true;
+    try {
+      const frame = `${JSON.stringify(event)}\n`;
+      if (!response.write(frame)) {
+        session.blockedFrame = frame;
+        response.once("drain", () => {
+          if (session.blockedFrame === frame) session.blockedFrame = undefined;
+        });
+      }
+      return true;
+    } catch {
+      void beginLoss(session);
+      return false;
+    }
+  };
+
   const commandConflict = (session: SessionState): EmptyResult | undefined => {
     if (session.blockedFrame !== undefined) {
       void beginLoss(session);
@@ -411,6 +469,34 @@ export async function startInactiveSessionRuntime(input: InactiveSessionRuntimeI
             if (!active) { pendingRevisions.push(revision); return; }
             if (active.eligible && session.active === active && eligibleAfterAwait(session)) {
               writeFrame(session, { type: "REVISION_SELECTED", sessionId: session.id, generation: active.generation, revision });
+            }
+          },
+          onProgress(progress: NodeWorkerProgress) {
+            if (!active || !active.eligible || session.active !== active || !eligibleAfterAwait(session)) return;
+            const identity = {
+              type: "ANALYSIS_PROGRESS" as const,
+              sessionId: session.id,
+              generation: active.generation,
+              revision: progress.revision,
+            };
+            if (progress.stage === "acquisition") {
+              writeProgressFrame(session, {
+                ...identity,
+                stage: "acquisition",
+                completed: progress.completed,
+                total: progress.total,
+              });
+            } else if (progress.stage === "analysis") {
+              writeProgressFrame(session, {
+                ...identity,
+                stage: "analysis",
+                completed: progress.completed,
+                total: progress.total,
+              });
+            } else if (progress.stage === "analysis-initialization") {
+              writeProgressFrame(session, { ...identity, stage: "analysis-initialization" });
+            } else {
+              writeProgressFrame(session, { ...identity, stage: "city-construction" });
             }
           },
         });

@@ -67,7 +67,9 @@ export async function analyzeProjectSources(acquired, parser) {
 import { parentPort, workerData } from "node:worker_threads";
 import { registerHooks } from "node:module";
 registerHooks({ resolve(specifier, context, nextResolve) {
-  if (workerData.scenario === "cityFailure" && specifier === "../domain/city-model" && context.parentURL?.endsWith("/src/application/project-analysis.js")) {
+  if (workerData.scenario === "cityFailure"
+    && (specifier === "../domain/city-model" || specifier === "../../domain/city-model")
+    && (context.parentURL?.endsWith("/src/application/project-analysis.js") || context.parentURL?.endsWith("/src/edge/node/analysis-worker.js"))) {
     return { url: ${JSON.stringify(pathToFileURL(cityFault).href)}, shortCircuit: true };
   }
   if (workerData.scenario === "admissionContent" && specifier === "../../application/source-retrieval" && context.parentURL?.endsWith("/src/edge/node/analysis-worker.js")) {
@@ -83,16 +85,32 @@ const { createSyntaxObservationWriter } = await import(${JSON.stringify(pathToFi
 const SHA = "a".repeat(40);
 workerData.control?.unref();
 const entered = (phase) => workerData.control?.postMessage({ phase });
+const waitForRelease = async (phase) => {
+  if (!workerData.control) return;
+  await new Promise((resolve) => {
+    const listener = (message) => {
+      if (message?.release !== phase) return;
+      workerData.control.off("message", listener);
+      resolve();
+    };
+    workerData.control.on("message", listener);
+    entered(phase);
+  });
+};
 const regular = (path, sha = SHA) => ({ path, mode: "100644", type: "blob", ...(sha === undefined ? {} : { sha }) });
 const inventory = {
   success: [["a.ts", "const a = 1;\\n"]],
   mixed: [["a.ts", "const a = 1;\\n"], ["b.ts", "syntax"], ["c.ts", "metrics"], ["d.ts", null]],
   allFailed: [["a.ts", "syntax"], ["b.ts", "metrics"], ["c.ts", null]],
+  zeroText: [["a.ts", null]],
   parserBusy: [["a.ts", "busy"]],
   providerWait: [["a.ts", "const a = 1;\\n"]],
   firstSourceMutation: [["a.ts", "const a = 1;\\n"], ["b.ts", "const b = 1;\\n"]],
+  progressBarriers: [["a.ts", "const a = 1;\\n"], ["b.ts", "const b = 1;\\n"], ["c.ts", "const c = 1;\\n"]],
 }[workerData.scenario] ?? [["a.ts", "const a = 1;\\n"]];
 const bytes = new TextEncoder();
+let sourceReadCount = 0;
+let projectCount = 0;
 runNodeAnalysisWorker(parentPort, {
   async revisionGateway(_repository, signal) {
     if (workerData.scenario === "providerWait") {
@@ -116,6 +134,7 @@ runNodeAnalysisWorker(parentPort, {
       return { kind: "inventory", entries: inventory.map(([file]) => regular(file)) };
     },
     async readRawSource(_repository, _revision, candidate) {
+      if (workerData.scenario === "progressBarriers" && sourceReadCount++ === 0) await waitForRelease("first-acquisition");
       if (workerData.scenario === "sourceProvider") return { kind: "provider-failure" };
       if (workerData.scenario === "productLimit") return { kind: "product-limit" };
       const row = inventory.find(([file]) => file === candidate.canonicalPath);
@@ -126,6 +145,7 @@ runNodeAnalysisWorker(parentPort, {
   parser: {
     async initialize() { if (workerData.scenario === "parserInitialize") throw new Error("parser initialization"); },
     async project(_family, source) {
+      if (workerData.scenario === "progressBarriers" && projectCount++ === 0) await waitForRelease("first-analysis");
       if (source === "syntax") throw new Error("syntax");
       if (source === "metrics") return { observations: { [Symbol.iterator]() { throw new Error("metrics"); } }, release() {} };
       if (source === "busy") { entered("parserBusy"); for (;;) {} }
@@ -198,6 +218,18 @@ const publishPrepared = (event) => {
 parentPort.on("message", (command) => {
   if (command.type !== "START") return;
   parentPort.postMessage(selected(command));
+  if (workerData.mode.startsWith("raw-")) {
+    const progress = (stage, completed, total) => parentPort.postMessage({
+      type: "PROGRESS", attemptId: command.attemptId, generation: command.generation, revision: SHA, stage,
+      ...(completed === undefined ? {} : { completed, total }),
+    });
+    progress("acquisition", 0, 1);
+    progress("acquisition", 1, 1);
+    progress("analysis-initialization");
+    progress("analysis", 0, 1);
+    progress("analysis", 1, 1);
+    progress("city-construction");
+  }
   const event = eventFor(command, workerData.mode);
   if (workerData.mode === "valid-transfer") {
     const before = [
@@ -219,11 +251,45 @@ parentPort.on("message", (command) => {
   return { analysis: pathToFileURL(analysisBootstrap), transfer: pathToFileURL(transferBootstrap) };
 }
 
-function start(bundle, scenario, release = () => {}) {
+function start(bundle, scenario, release = () => {}, onProgress) {
   return startNodeWorkerAttempt({
     repository: REPOSITORY, generation: 3, workerUrl: bundle,
-    workerFactory: (url) => new Worker(url, { workerData: { scenario, mode: scenario } }), release,
+    workerFactory: (url) => new Worker(url, { workerData: { scenario, mode: scenario } }), release, onProgress,
   });
+}
+
+function startProgressBarriers(bundle) {
+  const { port1, port2 } = new MessageChannel();
+  const progress = [];
+  const phases = [];
+  const waiters = [];
+  port1.on("message", (message) => {
+    phases.push(message.phase);
+    for (const waiter of [...waiters]) {
+      if (waiter.phase !== message.phase) continue;
+      waiters.splice(waiters.indexOf(waiter), 1);
+      waiter.resolve();
+    }
+  });
+  const attempt = startNodeWorkerAttempt({
+    repository: REPOSITORY,
+    generation: 3,
+    workerUrl: bundle,
+    workerFactory: (url) => new Worker(url, {
+      workerData: { scenario: "progressBarriers", mode: "progressBarriers", control: port2 }, transferList: [port2],
+    }),
+    onProgress: (event) => progress.push(event),
+  });
+  return {
+    attempt,
+    progress,
+    async reached(phase) {
+      if (phases.includes(phase)) return;
+      await new Promise((resolve) => waiters.push({ phase, resolve }));
+    },
+    release(phase) { port1.postMessage({ release: phase }); },
+    close() { port1.close(); },
+  };
 }
 
 function startAtBarrier(bundle, scenario, release = () => {}) {
@@ -285,6 +351,38 @@ test("actual worker returns city/source, mixed failures, and all-files-failed on
   assert.deepEqual(allFailed.sources.map(({ canonicalPath }) => canonicalPath), ["a.ts", "b.ts"]);
 });
 
+test("actual worker exposes zero and nonzero acquisition and analysis progress at real barriers", async (t) => {
+  const { analysis } = await compiledWorkerFixture(t);
+  const controlled = startProgressBarriers(analysis);
+  t.after(() => controlled.close());
+
+  await controlled.reached("first-acquisition");
+  assert.deepEqual(controlled.progress.map(({ stage, completed, total }) => ({ stage, completed, total })), [
+    { stage: "acquisition", completed: 0, total: 3 },
+  ]);
+  controlled.release("first-acquisition");
+
+  await controlled.reached("first-analysis");
+  assert.deepEqual(
+    controlled.progress.filter(({ stage }) => stage === "acquisition").map(({ completed, total }) => [completed, total]),
+    [[0, 3], [1, 3], [2, 3], [3, 3]],
+  );
+  assert(controlled.progress.some(({ stage }) => stage === "analysis-initialization"));
+  assert.deepEqual(
+    controlled.progress.filter(({ stage }) => stage === "analysis").map(({ completed, total }) => [completed, total]),
+    [[0, 3]],
+  );
+  controlled.release("first-analysis");
+
+  const result = await controlled.attempt.result;
+  assert.equal(result.type, "SUCCESS");
+  assert.deepEqual(
+    controlled.progress.filter(({ stage }) => stage === "analysis").map(({ completed, total }) => [completed, total]),
+    [[0, 3], [1, 3], [2, 3], [3, 3]],
+  );
+  assert.equal(controlled.progress.filter(({ stage }) => stage === "city-construction").length, 1);
+});
+
 test("actual worker maps resolution, acquisition, parser, metric, and city outcomes exactly", async (t) => {
   const { analysis } = await compiledWorkerFixture(t);
   const rows = [
@@ -310,6 +408,47 @@ test("actual worker maps resolution, acquisition, parser, metric, and city outco
       type: "FAILURE", attemptId: attempt.attemptId, generation: 3, ...expected,
     }, scenario);
   }
+});
+
+test("actual worker counts syntax and metric attempts after cleanup without fabricating fatal completions", async (t) => {
+  const { analysis } = await compiledWorkerFixture(t);
+
+  const mixedProgress = [];
+  const mixed = start(analysis, "mixed", () => {}, (event) => mixedProgress.push(event));
+  assert.equal((await mixed.result).type, "SUCCESS");
+  assert.deepEqual(
+    mixedProgress.filter(({ stage }) => stage === "analysis").map(({ completed, total }) => [completed, total]),
+    [[0, 3], [1, 3], [2, 3], [3, 3]],
+  );
+
+  const initializationProgress = [];
+  const initialization = start(analysis, "parserInitialize", () => {}, (event) => initializationProgress.push(event));
+  assert.equal((await initialization.result).category, "Metric processing failed");
+  assert.equal(initializationProgress.some(({ stage }) => stage === "analysis"), false);
+  assert.equal(initializationProgress.filter(({ stage }) => stage === "analysis-initialization").length, 1);
+
+  const releaseProgress = [];
+  const release = start(analysis, "metricFailure", () => {}, (event) => releaseProgress.push(event));
+  assert.equal((await release.result).category, "Metric processing failed");
+  assert.deepEqual(
+    releaseProgress.filter(({ stage }) => stage === "analysis").map(({ completed, total }) => [completed, total]),
+    [[0, 1]],
+  );
+
+  const allFailedProgress = [];
+  const allFailed = start(analysis, "allFailed", () => {}, (event) => allFailedProgress.push(event));
+  const allFailedResult = await allFailed.result;
+  assert.equal(allFailedResult.type, "SUCCESS");
+  assert.equal(allFailedResult.result.city, null);
+  assert.equal(allFailedProgress.some(({ stage }) => stage === "city-construction"), false);
+
+  const zeroProgress = [];
+  const zero = start(analysis, "zeroText", () => {}, (event) => zeroProgress.push(event));
+  const zeroResult = await zero.result;
+  assert.equal(zeroResult.type, "SUCCESS");
+  assert.equal(zeroResult.sources.length, 0);
+  assert.equal(zeroProgress.filter(({ stage }) => stage === "analysis-initialization").length, 1);
+  assert.equal(zeroProgress.some(({ stage }) => stage === "analysis" || stage === "city-construction"), false);
 });
 
 test("actual production worker rejects a mutation of the first acquired source before transfer", async (t) => {

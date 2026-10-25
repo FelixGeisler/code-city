@@ -18,20 +18,23 @@ association for the current temporary result.
 |Node edge
 |GitHub gateways, parser adapter/assets, analysis worker
 |Perform anonymous public-GitHub reads, load pinned file-URL parser assets, run
-one isolated attempt, validate worker protocol values, and transfer owned
-buffers.
+one isolated attempt, emit source-free measured acquisition and analysis
+notifications at existing observer/parser/release/city seams, validate worker
+protocol values and progress order, and transfer owned buffers.
 
 |Node edge
 |Session runtime and native HTTP perimeter
 |Validate operator configuration and manifest bytes, serve only public package
-records, own sessions/generations/capacity/control/loss/shutdown, and join
+records, own sessions/generations/capacity/control/loss/shutdown, forward
+eligible optional progress only when the response queue is empty, and join
 workers before release.
 
 |Browser edge
 |Standalone controller, presentation-session coordinator, inventory, safe file
 inspector, and city presenter
 |Open one same-origin session, send Analyze/Cancel/Discard, validate source-free
-events, suppress stale state, and atomically compose the successful-file
+events and monotonic phase-local counters, render one native progress control,
+suppress stale state, and atomically compose the successful-file
 inventory, shared canonical-index selection, inspector, and unchanged city
 presenter. Filter, sort, and selection do not alter camera or geometry.
 
@@ -54,8 +57,12 @@ only filtered/sorted canonical-index projections and current selection from
 those facts. It never receives source, unit detail, parser trees, provider
 payloads, or raw diagnostics.
 
-The parent sends validated attempt commands into one worker and accepts a
-terminal result only after exact protocol validation and normal joined exit.
+The parent sends validated attempt commands into one worker, validates exact
+correlation, stage order, consecutive worker-side counts, fixed totals, and
+successful terminal reconciliation, and accepts a terminal result only after
+normal joined exit. Progress records contain only attempt/session correlation,
+revision, stage, and bounded counts; they contain no source, path, provider,
+diagnostic, timing, or telemetry value.
 Parser runtime and grammar bytes are private artifact records loaded from file
 URLs by the worker. The HTTP perimeter exposes only `public/index.html`,
 `public/browser.css`, and `public/browser.js`. The browser bundle imports no
