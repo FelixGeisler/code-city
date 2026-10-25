@@ -7,7 +7,7 @@ import { build as viteBuild } from "vite";
 import { writeStandaloneManifest } from "./standalone-manifest.mjs";
 
 export const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
-export const canonicalStandaloneRoot = path.join(projectRoot, "build", "standalone");
+export const canonicalStandaloneRoot = path.join(projectRoot, "dist");
 
 const PARSER_FILES = Object.freeze([
   ["node_modules/web-tree-sitter/web-tree-sitter.js", "web-tree-sitter.js"],
@@ -150,5 +150,5 @@ export async function buildStandaloneArtifact(outputRoot = canonicalStandaloneRo
 const invokedPath = process.argv[1] && path.resolve(process.argv[1]);
 if (invokedPath === fileURLToPath(import.meta.url)) {
   const { artifactRoot, manifest } = await buildStandaloneArtifact();
-  process.stdout.write(`Wrote ${manifest.files.length} standalone files to ${path.relative(projectRoot, artifactRoot)}.\n`);
+  process.stdout.write(`Wrote ${manifest.files.length} canonical standalone files to ${path.relative(projectRoot, artifactRoot)}.\n`);
 }

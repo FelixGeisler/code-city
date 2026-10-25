@@ -19,7 +19,8 @@ branch is supplied, the default-branch tip resolved to one immutable commit on
 Analyze
 
 |Output
-|One complete city, or one failure with no stale or partial city
+|One deterministic city with sanitized per-file failure rows, or one terminal
+failure with no stale or partial city
 
 |Building
 |One nonexcluded admitted source module

@@ -1,52 +1,66 @@
 # Code City
 
-Code City turns the supported JavaScript, TypeScript, and C# modules in a public GitHub repository into a deterministic city. Open the [hosted application](https://felixgeisler.github.io/code-city/), enter a public repository URL such as `https://github.com/FelixGeisler/code-city`, and submit it. The protected default branch is `main`.
+Code City builds a deterministic city from supported JavaScript, TypeScript, and C# modules in a public GitHub repository. The standalone Node.js service owns source acquisition and analysis; its browser uses only same-origin session and command routes.
 
 Supported languages: JavaScript, TypeScript, and C#.
 
-## Develop
+## Install
 
 Use Node 24, npm 11, and the pinned dependency closure.
 
 ```bash
 npm ci --ignore-scripts
-npm run dev
 ```
 
-The development application is available at <http://localhost:5173/code-city/>. Stop the server with Ctrl+C.
+## Build and run
 
-## Build and serve the package
+Build the canonical standalone artifact in `dist/`:
 
 ```bash
 npm run build
-npm run start
 ```
 
-The clean production package is written to `dist/`; its external integrity manifest is written to `build/evidence/package-manifest.json`. The packaged application is served at <http://127.0.0.1:4173/code-city/>. Stop the server with Ctrl+C.
+Start that exact artifact by supplying `--port` and all five capacity flags:
 
-Run the complete local gate with:
+```bash
+npm start -- \
+  --port 0 \
+  --max-live-sessions 2 \
+  --max-active-attempts 1 \
+  --max-command-body-readers 2 \
+  --max-command-body-bytes 4096 \
+  --max-retained-source-bytes 41943040
+```
+
+Only `--host` defaults, to `127.0.0.1`. Every value above is an example for local verification, not a deployment recommendation or capacity default. A non-loopback `--host` also requires `--canonical-host`.
+
+For one-shot development, build under `build/development/` and start the same service without HMR or WebSocket support:
+
+```bash
+npm run dev -- \
+  --port 0 \
+  --max-live-sessions 2 \
+  --max-active-attempts 1 \
+  --max-command-body-readers 2 \
+  --max-command-body-bytes 4096 \
+  --max-retained-source-bytes 41943040
+```
+
+The service is loopback-first. Deliberate trusted-LAN use is limited to public GitHub source. Internet exposure, private repositories, authentication, Save/recovery, and Raspberry Pi qualification are not provided.
+
+## Verification
 
 ```bash
 npm run verify
 ```
 
-That gate type-checks the main and worker contexts, runs tests, builds once, compares a separate reproducibility build, audits the unchanged canonical package over local HTTP, and builds the documentation.
+This gate type-checks, tests, builds the canonical artifact once, reproduces every manifest-recorded byte, audits the actual packaged server/worker/parser/browser, verifies signal shutdown and the script-free retirement notice, and builds the documentation.
 
-## Production evidence and finalization
-
-Pull requests run only the `verify` check. A protected-`main` push runs the separate publication workflow, builds once, deploys that exact Pages artifact, and—while [M2 acceptance issue #537](https://github.com/FelixGeisler/code-city/issues/537) is open—collects a sealed seven-file production-evidence artifact. Collection runs without a GitHub token in the collector environment. The workflow summary records the authenticated artifact and packet bindings needed for local finalization.
-
-After independently authenticating and downloading that artifact into a marker-free `sealed/` directory, save the workflow/API bindings as sibling `artifact-metadata.json` and run:
-
-```bash
-node tools/finalize-production-evidence.mjs --packet <production-dir>/sealed --metadata <production-dir>/artifact-metadata.json --output <production-dir>/wrapper.json
-```
-
-The finalizer is offline. It validates the downloaded packet and metadata, then publishes canonical `wrapper.json` without replacing an existing file. Production evidence and the wrapper remain release-review inputs; deployment alone is not acceptance.
+Pull requests run the same gate after locked install, dependency closure, security audit, and the isolated Node type check. A protected push to `main` uploads the exact audited `dist/` artifact and separately deploys the exact audited retirement notice to Pages. The former analyzer URL inventory for the subsequent live-404 check is versioned at `publication/former-analyzer-assets-v1.json`.
 
 ## Documentation
 
-Product requirements and architecture are maintained as an Antora site under `docs/`. Build it independently with:
+Product requirements and architecture are maintained as an Antora site under `docs/`:
 
 ```bash
 npm run docs:build

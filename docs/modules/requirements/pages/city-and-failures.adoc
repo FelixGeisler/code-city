@@ -195,12 +195,12 @@ corresponding capped displayed dimension.
 The geometry payload stores this exact opaque base RGBA. Face display
 transforms do not change band membership or the payload colour.
 
-== Current implemented presentation at `9bcf7c8`
+== Current implemented standalone presentation
 
-The sections from Layout through Atomic lifecycle describe current browser
-behavior and test evidence. Two-segment grouping, whole-attempt processing
-failure, search-triggered camera reveal, and the current absence of source
-viewing are not the approved whole-core target.
+The sections from Layout through Atomic lifecycle describe current source-free
+standalone browser behavior and test evidence. Two-segment grouping,
+search-triggered camera reveal, and the current absence of source viewing are
+not the approved whole-core target.
 
 Current city construction and payload evidence is in `test/city-model.test.mjs`
 and `test/city-payload.test.mjs`. Current camera and presentation evidence is in

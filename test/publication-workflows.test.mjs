@@ -5,9 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { load as loadYaml } from "js-yaml";
-import { serializePackageManifest } from "../tools/package-manifest.mjs";
-import { EXACT_CSP, EXACT_REFERRER_POLICY } from "../tools/package-policy.mjs";
-import { createPublicationRecord } from "../tools/publication-record.mjs";
+import { serializeStandaloneManifest } from "../tools/standalone-manifest.mjs";
+import { createStandalonePublicationRecord } from "../tools/standalone-publication-record.mjs";
 import {
   evaluateCondition,
   inlineModule,
@@ -23,13 +22,6 @@ const VERIFY_COMMANDS = [
   "npm audit --audit-level=high",
   "npm run typecheck:node",
   "npm run verify",
-  "npm run standalone:build",
-  "npm run standalone:audit",
-  "npm run standalone:reproducibility",
-  "npm run standalone:start",
-  "npm run standalone:package",
-  "npm run standalone:signals",
-  "npm run standalone:browser",
 ];
 const PACKET_FILES = ["artifact.json", "smoke.json", "qualification.json", "capacity.json", "requests.json", "lifecycle.json", "index.json"];
 const ACTIONS = {
@@ -78,15 +70,9 @@ function jobSteps(document, job) {
 }
 
 function controlledManifestBytes(fileSha256 = "0".repeat(64)) {
-  return serializePackageManifest({
-    schemaVersion: 3,
-    basePath: "/code-city/",
-    policy: {
-      contentSecurityPolicy: EXACT_CSP,
-      referrerPolicy: EXACT_REFERRER_POLICY,
-      connectOrigins: ["'self'", "https://api.github.com", "https://raw.githubusercontent.com"],
-    },
-    files: [{ path: "index.html", mediaType: "text/html", byteLength: 0, sha256: fileSha256 }],
+  return serializeStandaloneManifest({
+    version: 1,
+    files: [{ path: "public/index.html", role: "public", mediaType: "text/html; charset=utf-8", length: 0, sha256: fileSha256 }],
   });
 }
 
@@ -95,7 +81,7 @@ async function prepareBindingFixture(directory) {
   const publication = path.join(directory, "build", "publication");
   await mkdir(tools, { recursive: true });
   await mkdir(publication, { recursive: true });
-  await Promise.all(["package-manifest.mjs", "package-policy.mjs", "publication-record.mjs"].map(
+  await Promise.all(["standalone-manifest.mjs", "standalone-publication-record.mjs"].map(
     (name) => copyFile(path.join("tools", name), path.join(tools, name)),
   ));
   execFileSync("git", ["init", "--quiet", directory]);
@@ -106,7 +92,7 @@ async function prepareBindingFixture(directory) {
   const head = execFileSync("git", ["-C", directory, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const manifestBytes = controlledManifestBytes();
   const input = { repository: "FelixGeisler/code-city", eventName: "push", eventSha: head, runId: 123456, runAttempt: 2 };
-  const recordBytes = createPublicationRecord(input, manifestBytes);
+  const recordBytes = createStandalonePublicationRecord(input, manifestBytes);
   const manifestPath = path.join(publication, "package-manifest.json");
   const recordPath = path.join(publication, "publication-record.json");
   await writeFile(manifestPath, manifestBytes);
@@ -146,14 +132,24 @@ test("parsed publish workflow has exact triggers, jobs, permissions, steps, pins
   assert.deepEqual({ runner: verify["runs-on"], timeout: verify["timeout-minutes"], permissions: verify.permissions }, {
     runner: "ubuntu-latest", timeout: 20, permissions: { contents: "read" },
   });
-  assert.equal(verify.steps.length, 5 + VERIFY_COMMANDS.length);
+  assert.equal(verify.steps.length, 6 + VERIFY_COMMANDS.length);
   verifyPrefix(verify.steps);
   const publicationIndex = 2 + VERIFY_COMMANDS.length;
   exactKeys(verify.steps[publicationIndex], ["name", "run"], "publication record step");
-  assert.equal(verify.steps[publicationIndex].name, "Create and validate the publication record");
-  assert.match(verify.steps[publicationIndex].run, /createPublicationRecord[\s\S]*validatePublicationRecord/u);
-  assert.deepEqual(verify.steps[publicationIndex + 1], { name: "Upload the Pages artifact", uses: ACTIONS.pagesUpload, with: { path: "dist" } });
-  assert.deepEqual(verify.steps[publicationIndex + 2], {
+  assert.equal(verify.steps[publicationIndex].name, "Create and validate the standalone publication record");
+  assert.match(verify.steps[publicationIndex].run, /createStandalonePublicationRecord[\s\S]*validateStandalonePublicationRecord/u);
+  assert.deepEqual(verify.steps[publicationIndex + 1], {
+    name: "Upload the audited standalone artifact",
+    uses: ACTIONS.artifactUpload,
+    with: {
+      name: "code-city-standalone-${{ github.sha }}",
+      path: "dist",
+      "if-no-files-found": "error",
+      "retention-days": 90,
+    },
+  });
+  assert.deepEqual(verify.steps[publicationIndex + 2], { name: "Upload the audited retirement notice", uses: ACTIONS.pagesUpload, with: { path: "build/pages" } });
+  assert.deepEqual(verify.steps[publicationIndex + 3], {
     name: "Upload internal publication evidence",
     uses: ACTIONS.artifactUpload,
     with: {
@@ -351,7 +347,7 @@ test("pre-collector binding executes every current-run identity check before col
     { name: "HEAD", mutate: async (fixture, env) => { env.GITHUB_SHA = fixture.head === "f".repeat(40) ? "e".repeat(40) : "f".repeat(40); } },
     { name: "record", mutate: async (fixture) => {
       const otherSha = fixture.head === "d".repeat(40) ? "c".repeat(40) : "d".repeat(40);
-      await writeFile(fixture.recordPath, createPublicationRecord({ ...fixture.input, eventSha: otherSha }, fixture.manifestBytes));
+      await writeFile(fixture.recordPath, createStandalonePublicationRecord({ ...fixture.input, eventSha: otherSha }, fixture.manifestBytes));
     } },
     { name: "manifest", mutate: async (fixture) => { await writeFile(fixture.manifestPath, controlledManifestBytes("1".repeat(64))); } },
     { name: "repo", mutate: async (_fixture, env) => { env.GITHUB_REPOSITORY = "FelixGeisler/other"; } },
@@ -362,7 +358,7 @@ test("pre-collector binding executes every current-run identity check before col
     await t.test(mismatch.name, async () => {
       const result = await executeFixture(mismatch.name.toLowerCase(), mismatch.mutate);
       assert.notEqual(result.code, 0, `${mismatch.name} mismatch unexpectedly reached collection`);
-      assert.match(result.stderr, /publication binding mismatch|Package manifest|Publication record/u);
+      assert.match(result.stderr, /publication binding mismatch|Standalone manifest|Standalone publication/u);
     });
   }
 });

@@ -1,85 +1,42 @@
 = Architecture Constraints
 
-== Current implementation
+== Current standalone constraints
 
-* The active application is a static TypeScript package built with Vite and
-  runs in a browser main context plus one module worker. It has no active
-  application server or persistence runtime. An inactive shared continuation
-  core, its dedicated Node.js worker boundary and closed internal worker
-  protocol, and the native-HTTP session runtime are not connected to the Vite
-  entry or canonical `dist/` package. They are staged only in the separate
-  inactive `build/standalone/` artifact.
-* The current provider is anonymous public GitHub. The browser resolves the
-  explicit branch head, or the default-branch head when no branch was supplied,
-  and retrieves source through validated immutable commit and root tree
-  identities.
-* Repository content is untrusted data. It is decoded and parsed but never
-  imported, executed, built, or tested. The static package applies its manifest-
-  owned content security and connection policy.
+* The package-supported Node.js runtime hosts one native same-origin
+  `node:http` service. Each admitted analysis runs in one dedicated
+  `worker_threads` worker. This is not an operating-system sandbox.
+* The service is loopback-first. Deliberate trusted-LAN operation is limited to
+  public GitHub source. Internet exposure, private repositories, company
+  authentication, FLOW, and ADO are not approved.
+* Only `--host` defaults. `--port` and all five capacity flags are required.
+  No numerical capacity is a product default or deployment recommendation.
+* Repository content is untrusted data. It is validated, decoded, and parsed,
+  but never imported, executed, built, or tested.
 * Supported languages, source admission, processing limits, metric semantics,
-  and visual mapping are product constraints owned by
-  xref:requirements:source-and-metrics.adoc[Source and Metrics] and
-  xref:requirements:city-and-failures.adoc[City and Failures].
-* Syntax analysis uses pinned WebAssembly grammars.
-* Presentation requires WebGL2 and follows the product presentation contract in
-  xref:requirements:city-and-failures.adoc[City and Failures].
-* Dependency and tool versions are authoritative only in `package.json` and
-  `package-lock.json`.
+  and visual mapping are product constraints owned by the requirements module.
+* Syntax analysis uses pinned WebAssembly grammars. Dependency and tool versions
+  are authoritative only in `package.json` and `package-lock.json`.
+* Temporary source-result association exists only in application process
+  memory. There is no Save, reopen, persistence, or recovery.
+* Raspberry Pi performance, concurrency, memory, and deployment qualification
+  remain pending.
 
-== Accepted standalone M5 design
+== Package boundary
 
-The standalone M5 slice uses the package-supported Node.js runtime and one
-native same-origin `node:http` service. Each admitted analysis attempt runs in
-one dedicated `worker_threads` worker. The parent owns worker termination and
-awaits worker exit before terminal cleanup. This is a same-process execution
-boundary, not an operating-system sandbox or protection against process or host
-out-of-memory failure.
+The canonical `dist/` artifact contains `public/`, private `server/`, private
+`parser/`, and one version-1 `package-manifest.json`. Manifest paths are
+artifact-relative. The HTTP perimeter serves only verified public records and
+returns `404` for the manifest, private files, and unlisted paths.
 
-The xref:requirements:standalone-m5-operating-policy.adoc[standalone M5
-operating policy] defines process-memory-only temporary custody, loopback-first
-exposure with deliberate trusted-LAN use limited to public GitHub source, a
-finite operator-set admission capacity without a numerical default, and joined
-terminal cleanup. These choices and
-xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR 0014] are
-accepted design. The shared continuation core, dedicated Node worker execution
-and joined parent boundary, CLI validation, fixture-manifest validation, bounded
-body reader, and fail-closed native-HTTP perimeter are implemented as separate
-inactive repository modules. The inactive session runtime implements the fixed
-HTTP/worker orchestration, generation and control lifecycle, atomic capacity,
-NDJSON backpressure behavior, session-loss cleanup, and joined signal shutdown.
-The reproducible `build/standalone/` artifact packages the actual server,
-worker, parser runtime, four grammar families, and the inactive source-free
-same-origin browser behind a closed version-1 manifest. Explicit additive
-checks build, audit, reproduce, start, exercise, signal, and run that package in
-installed Chrome through CDP. The prepared browser has no provider, parser,
-browser analysis worker, persistence, retry, reconnect, recovery, Save, or
-source-view path. Canonical-script cutover, deployment, and device
-qualification are not implemented. This provides no Raspberry Pi performance,
-concurrency, memory, or deployment qualification.
+The browser contains no GitHub provider, raw-source payload, parser runtime,
+grammar WASM, browser analysis worker, or fallback analysis path. It uses only
+the same-origin session and command routes and keeps temporary interaction
+state in memory.
 
-== Approved whole-core target
+== Accepted later target
 
 xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
-requires a Code City server to own acquisition, analysis, retained source-result
-association, and optional saved investigations. The browser remains responsible
-for presentation and investigation. Explicit Save creates an immutable shared
-snapshot. Temporary work is not silently saved.
-
-The target must retain the product contracts linked above. In particular, it
-must support per-file continuation after complete acquisition, recursive
-hierarchy, source and unit drill-down, a complete sortable file inventory,
-Save/reopen, and selection without automatic camera movement. These are
-accepted constraints, not current capabilities.
-
-== Unresolved design
-
-For standalone M5, the internal HTTP session and event protocol is implemented
-by the inactive runtime. A public API, authentication, Internet exposure,
-deployment topology, calibrated capacity values, and device qualification
-remain unselected. The accepted design does not authorize private repositories
-or FLOW/ADO integration.
-
-For the whole-core target, Save persistence technology, portable exchange
-representation, format and I/O, deletion, backup, and recovery remain
-unselected. Recursive geometry, ordering, spacing, labels, and picking are also
-unselected. This documentation does not choose them.
+keeps server ownership and adds optional immutable saved investigations. A
+public API, authentication, Internet exposure, private-source integration,
+Save storage, deletion, backup, recovery, and a deployment topology remain
+unselected.

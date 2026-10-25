@@ -4,64 +4,49 @@
 |===
 |Term |Meaning in this architecture
 
-|Accepted target
-|Approved product behavior and responsibility boundary that is not necessarily
-implemented. The complete contract is in xref:requirements:index.adoc[Product].
-
 |Additional exclusion
 |A user-supplied exact canonical repository-relative path captured with an
-Analyze attempt. Rules are owned by
-xref:requirements:source-and-metrics.adoc#CC-CORE-SRC-05[Path exclusions].
+Analyze attempt.
 
-|Aligned city
-|One current worker result whose canonical-order geometry and inspection facts
-have equal identity and count. It contains no source.
+|Canonical artifact
+|The `dist/` directory containing public browser bytes, private server/parser
+bytes, and the version-1 package manifest.
 
 |Canonical path
-|The validated repository-relative identity used for ordering and inspection.
-Its normative rules are in
-xref:requirements:source-and-metrics.adoc#authoritative-admission[Admission].
+|The validated repository-relative identity used for ordering and presentation.
 
 |Complete acquisition
 |Validation of the entire recursive tree, including every raw ancestor, before
-exclusion, suffix filtering, or blob reads. See
-xref:requirements:source-and-metrics.adoc#CC-CORE-SRC-06[Complete acquisition].
+exclusion, suffix filtering, or blob reads.
 
 |Current implementation
-|The browser-only system evidenced at commit
-`38e620c915866394ca4967f418eec9d3f6ec979b`.
+|The standalone M5 service and source-free same-origin browser selected by ADR
+0014.
 
 |Generation
-|A controller-assigned attempt identity used to prevent replaced, cancelled, or
-stale work from mutating the current city.
+|A strictly increasing session-scoped attempt identity that prevents replaced,
+cancelled, or stale work from becoming current.
 
 |Immutable revision
-|The full commit identity selected only by explicit analysis. See
-xref:requirements:source-and-metrics.adoc#CC-CORE-SRC-02[Explicit immutable-revision analysis].
+|The full commit identity selected only by explicit analysis.
 
-|Investigation
-|The city, file selection, metrics, units, source evidence, and saved state
-covered by xref:requirements:city-and-failures.adoc[City and Failures]. Current
-implementation supports only the documented browser-session subset.
-
-|Main context
-|The browser execution context containing the controller, semantic publication,
-and WebGL presenter.
+|Retirement notice
+|The separate versioned script-free Pages document stating that the former
+in-browser analyzer is retired and the standalone artifact is deliverable.
 
 |Saved investigation
-|The accepted immutable server-owned snapshot created only by explicit Save. It
-is not implemented. Its contract is in
-xref:requirements:city-and-failures.adoc#CC-CORE-SAVE-03[Immutable saved snapshot].
+|The later immutable server-owned snapshot created only by explicit Save. It is
+not implemented in standalone M5.
 
 |Source-free
-|Containing geometry and inspection facts but no source text, parser tree,
-provider response, or raw diagnostic.
+|Containing geometry, presentation facts, and sanitized failures but no source
+text, parser tree, provider response, or raw diagnostic.
 
 |Worker
-|The single current browser module worker that performs provider acquisition,
-admission, parsing, metrics, and city construction.
+|One Node.js `worker_threads` worker that executes one admitted analysis
+attempt. No browser analysis worker is shipped.
 
 |Unresolved design
-|A target mechanism that has not been selected and must not be inferred from an
+|A later mechanism that has not been selected and must not be inferred from an
 accepted outcome.
 |===

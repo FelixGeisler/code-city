@@ -1,161 +1,94 @@
 = Product
 
-== Approved whole-core target
+== Current standalone M5 product
 
-The `CC-CORE-*` references in this module define the approved whole-core target.
-They do not claim that the whole target is implemented. Features without
-repository and test evidence remain unimplemented. The current application is the transitional browser-only baseline described
-below.
+Code City is a standalone Node.js application for one anonymously accessible
+public GitHub repository. The service owns revision selection, source
+acquisition, parsing, metrics, deterministic city construction, temporary
+source-result association, admission capacity, and cleanup. The browser owns
+same-origin interaction and presentation and receives no source payload.
 
-The target accepts one public GitHub repository root or explicit branch link,
-records one immutable commit on an explicit analysis action, and produces a
-deterministic city and investigation for that commit. The Code City server owns source acquisition,
-analysis, and the authoritative association of source and results. The browser
-owns presentation and investigation. Explicit Save creates an immutable shared
-server snapshot; temporary work is not silently saved.
+The stable source and metric behavior is defined in
+xref:source-and-metrics.adoc[Source and Metrics]. City, failure, interaction,
+and deferred Save behavior is defined in
+xref:city-and-failures.adoc[City and Failures]. The exact temporary-custody,
+network, capacity, and no-Save boundary is defined in
+xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating Policy].
 
-The stable source, metric, and processing requirements are in
-xref:source-and-metrics.adoc[Source and Metrics]. City, investigation, failure,
-and save requirements are in xref:city-and-failures.adoc[City and Failures].
+The canonical built artifact is `dist/`. Its version-1
+`package-manifest.json` records every public and private runtime byte with an
+artifact-relative path, role, media type, length, and SHA-256 digest. The
+artifact contains:
+
+* `public/` for the source-free same-origin browser;
+* `server/` for the native HTTP service and worker code;
+* `parser/` for the pinned parser runtime and JavaScript, TypeScript, TSX, and
+  C# grammar assets.
+
+Only declared `public/` bytes are served. The manifest, server files, parser
+files, and unlisted paths return `404`.
+
+== Operation
+
+`npm run build` creates the canonical artifact. `npm start -- <flags>` starts
+only that built artifact. `npm run dev -- <flags>` performs a one-shot build in
+`build/development/` and starts the same service; it provides no HMR or
+WebSocket path and does not write `dist/`.
+
+Only `--host` has a default (`127.0.0.1`). Operators must supply `--port` and
+all five capacity flags:
+
+* `--max-live-sessions`
+* `--max-active-attempts`
+* `--max-command-body-readers`
+* `--max-command-body-bytes`
+* `--max-retained-source-bytes`
+
+No capacity value is a product default or deployment recommendation. A
+non-loopback host requires an explicit canonical host. The approved exposure
+boundary is loopback-first or deliberate unauthenticated trusted-LAN use for
+public GitHub source only. Internet exposure, private repositories, FLOW, ADO,
+authentication, and device deployment are not approved.
+
+== User-visible behavior
+
+The browser captures one public GitHub repository URL and optional additional
+exclusions when Analyze is selected. It uses only the same-origin session,
+analyze, cancel, and discard routes. Session identity, generations, attempts,
+and the current source-free result exist only in browser memory.
+
+The service resolves an explicit branch head or the default-branch head,
+selects one immutable commit, acquires and validates the complete admitted
+source set, continues supported per-file analysis failures, and returns one
+deterministic city plus sanitized failed-file rows. Replacement, cancellation,
+session loss, backpressure loss, and shutdown cannot publish stale work.
+Successful or all-files-failed current results remain until Discard,
+replacement, or session loss.
+
+There is no automatic retry, reconnect, recovery, source view, Save, reopen, or
+application-managed persistence. Raspberry Pi performance, concurrency,
+memory, and deployment qualification remain pending.
+
+== Verification and publication
+
+`npm run verify` type-checks, runs tests, builds once, reproduces the manifest
+and every recorded byte, drives the actual packaged server, worker, parser
+assets, and browser with deterministic nonshipped provider evidence, verifies
+joined signal shutdown, audits the retirement notice and former analyzer URL
+inventory, and builds this documentation. Missing or stale artifacts fail
+closed.
+
+A protected-main publication uploads the exact audited manifest-bound
+standalone artifact. GitHub Pages receives a separate versioned, script-free
+notice stating only that the in-browser analyzer is retired and the standalone
+artifact is deliverable. The notice is not a hosted Code City service and does
+not claim that the Pages repository setting is disabled.
+
+== Approved whole-core target beyond standalone M5
+
 Accepted xref:architecture:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
-fixes the ownership boundary. It does not select a server platform, API, storage
-technology, access mechanism, or deployment topology.
-
-== Accepted standalone M5 slice
-
-The standalone M5 slice is accepted and implementation has begun. An inactive
-shared continuation core implements verified raw-source acquisition,
-deterministic per-file continuation, city construction, failed-file rows, and
-retained normalized source. An inactive Node worker boundary now runs that core
-in one actual `worker_threads` worker, validates commands and source/result
-messages on both sides of structured cloning, transfers owned buffers, and
-joins worker exit before exposing a terminal value. An inactive server-owned
-session runtime connects that worker boundary to the native HTTP perimeter. It
-owns generation-scoped attempts, retained current results, atomic live-session,
-worker, reader, and source-byte capacity, exact NDJSON events, backpressure
-loss, joined replacement/control/loss cleanup, and single-entry signal
-shutdown. It remains disconnected from the active browser pipeline. Its exact
-custody, lifetime, cleanup, exposure, admission-capacity, and no-Save rules are
-defined once in the
-xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating Policy]. Accepted
-xref:architecture:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR
-0014] selects its Node.js, native same-origin HTTP, and worker execution
-boundary.
-
-The repository also contains an inactive native-HTTP perimeter. It validates
-operator configuration and a supplied fixture manifest before listening,
-derives one canonical HTTP origin, serves only verified public package bytes,
-and exposes the implemented internal session and command paths only when the
-inactive session runtime is constructed. A deterministic builder packages that
-runtime, its actual worker, the pinned parser runtime and JavaScript,
-TypeScript, TSX, and C# grammar assets, and a source-free same-origin browser in
-`build/standalone/`. Its exact version-1 manifest closes over every regular
-runtime file; direct audit, reproducibility, packaged startup, deterministic
-package audit, joined SIGINT/SIGTERM checks, and actual packaged Chrome/CDP
-session evidence are mandatory additive gates. The prepared browser keeps its
-session identity, generations, attempts, and current result in memory, renders
-only the source-free city and sanitized failed-file rows, and exposes Analyze,
-Cancel, and Discard without retry, reconnect, recovery, Save, or source view.
-The artifact is not wired to `npm start`, deployed, or used by the active
-browser product. Cutover and Raspberry Pi qualification remain unimplemented.
-
-The whole-core Save target above remains approved. Standalone M5 defers it.
-
-== Current implemented baseline
-
-The active product remains a static browser application with no active server
-runtime or persistence. The inactive core, worker boundary, perimeter, and
-standalone artifact above do not change its entry, requests, canonical `dist`
-package, root scripts, or Pages deployment. The following describes current
-behavior, not the complete approved target.
-
-[cols="1,3",options="header"]
-|===
-|Area |Current behavior
-
-|Repository
-|One anonymously accessible public GitHub repository
-
-|Revision
-|The current head commit of the explicit branch, or of the repository's default
-branch when no branch was supplied
-
-|Files
-|`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, and `.cs`
-(ASCII case-insensitive)
-
-|Result
-|One deterministic city for the selected commit, with current navigation,
-selection, and inspection defined by xref:city-and-failures.adoc[City and
-Failures]
-
-|Storage
-|Current browser session only; reload clears all current product state
-|===
-
-=== Current input
-
-Repository forms:
-
-* `https://github.com/<owner>/<repository>`
-* `https://github.com/<owner>/<repository>/tree/<branch-suffix>`
-
-Ignore surrounding spaces, tabs, and line breaks around the repository URL.
-Require HTTPS, the literal `github.com` host, valid owner and repository
-segments, and exactly one of the forms above. A branch link decodes its complete
-nonempty suffix once as one branch name. Reject credentials, a port, query,
-fragment, raw backslash, trailing slash, malformed encoding, empty raw or
-decoded branch components, and decoded components equal to `.` or `..`. Root
-links still reject encoded owner or repository segments and any extra path.
-Tags, commit links, blob links, and generic arbitrary refs are not accepted.
-* Additional exclusions are optional newline-separated canonical
-  repository-relative paths. LF, CRLF, and CR separate lines; empty lines are
-  ignored; nonempty lines are neither trimmed nor normalized. Paths must be
-  well-formed NFC, preserve ordinary spaces, contain no control characters,
-  and satisfy the canonical path rules in xref:source-and-metrics.adoc[Source
-  and Metrics]. Exact case-sensitive duplicates are invalid. Accepted paths
-  sort by unsigned UTF-8 for the captured attempt.
-
-Only Analyze starts work. Invalid repository or exclusion input starts no
-worker and no GitHub request. Editing either field without Analyze starts
-nothing and cannot change an active, queued, or completed attempt.
-
-=== Current selected revision
-
-On Analyze, the browser atomically captures the repository, optional explicit
-branch, and validated additional exclusions. It resolves the supplied branch
-through GitHub's branch namespace or resolves the default-branch head when no
-branch was supplied, then processes only the selected immutable commit. It shows
-the full commit ID with the result. Commit and raw-source requests use that
-commit ID. The recursive-tree request uses the root tree ID validated from
-commit evidence. Movement of the branch after selection does not change the
-current attempt. A new submission resolves the head again. An unavailable
-explicit branch fails without default-branch fallback.
-
-=== Current user-visible behavior
-
-. Before Analyze, the page shows the repository URL and Additional exclusions
-  inputs.
-. After Analyze, any previous result disappears. The page shows the captured
-  fixed and additional effective exclusions as exact inert text, shows that Code
-  City is working and offers Cancel.
-. On success, the page shows the selected commit ID and one complete city.
-  Users can navigate it, identify a hovered building's district in one stable
-  contextual row, select any building by keyboard or pointer with persistent
-  district context, search canonical module paths by exact case-sensitive
-  substring, reveal a matching building, and read its canonical path, full
-  district, and exact metric explanation.
-. On failure, the page shows a short explanation and no city. It also shows the
-  commit ID when one was selected.
-. After cancellation, the page shows a cancellation message and no city.
-
-Analyzing another captured repository/exclusion pair starts over. Results from an older or cancelled
-submission must never appear. The current implementation has no timeout,
-automatic retry, or fallback.
-
-== Current M2 release quality
-
-The city remains the visual focus, controls are intentional, interaction is
-predictable, cues do not overpower metric colours, and the inspector is clean,
-responsive, and readable. The current interaction and visual-release ownership
-are defined once in xref:city-and-failures.adoc[City and Failures].
+keeps server ownership of acquisition, analysis, and source-result association.
+The later whole-core target adds explicit immutable Save/reopen and deeper
+investigation outcomes. Storage, authentication, public API, Internet
+operation, private-source integration, deployment topology, and recovery
+technology remain unselected and are not implied by standalone M5.
