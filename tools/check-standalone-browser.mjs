@@ -228,6 +228,81 @@ export async function checkStandaloneBrowser() {
     };
     const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,discard:[...document.querySelectorAll('[data-actions] button')].map((button)=>button.textContent)})`;
     const snapshot = () => evaluate(snapshotExpression);
+    const progressEvidence = () => evaluate(`(()=>{
+      const host=document.querySelector('[data-status]');
+      const controls=[...host.querySelectorAll('progress')];
+      const progress=controls[0];
+      const label=progress?.closest('label[data-analysis-progress]');
+      const button=host.querySelector(':scope > button');
+      const text=host.querySelector(':scope > p');
+      const visible=(element)=>{if(!element)return false;const style=getComputedStyle(element);const rectangle=element.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity)>0&&rectangle.width>0&&rectangle.height>0;};
+      const channel=(value)=>{value/=255;return value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4;};
+      const luminance=(value)=>{const channels=value.match(/[\\d.]+/gu)?.slice(0,3).map(Number)??[];return channels.length===3?0.2126*channel(channels[0])+0.7152*channel(channels[1])+0.0722*channel(channels[2]):0;};
+      const foreground=label?getComputedStyle(label).color:'rgb(0, 0, 0)';
+      const background=getComputedStyle(document.body).backgroundColor;
+      const high=Math.max(luminance(foreground),luminance(background));
+      const low=Math.min(luminance(foreground),luminance(background));
+      const rectangle=progress?.getBoundingClientRect();
+      return {
+        count:controls.length,
+        native:progress instanceof HTMLProgressElement,
+        indeterminate:progress?.matches(':indeterminate')??false,
+        valueAttribute:progress?.hasAttribute('value')??false,
+        ariaValueNow:progress?.hasAttribute('aria-valuenow')??false,
+        associated:progress?.labels?.length===1&&progress.labels[0]===label&&label.control===progress,
+        label:label?.textContent??'',
+        status:text?.textContent??'',
+        statusRole:text?.getAttribute('role')??'',
+        cancel:button?.textContent??'',
+        exactChildren:JSON.stringify([...host.children].map((node)=>node.tagName))===JSON.stringify(['P','LABEL','BUTTON']),
+        visible:visible(text)&&visible(label)&&visible(progress)&&visible(button),
+        noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth&&host.scrollWidth<=host.clientWidth,
+        viewportContained:rectangle!==undefined&&rectangle.left>=0&&rectangle.right<=window.innerWidth,
+        labelContrast:(high+0.05)/(low+0.05),
+      };
+    })()`);
+    const assertActiveProgress = async (width, theme, label) => {
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 800, deviceScaleFactor: 1, mobile: false }, sessionId);
+      await cdp.send("Emulation.setEmulatedMedia", { media: "screen", features: [{ name: "prefers-color-scheme", value: theme }] }, sessionId);
+      await evaluate("new Promise((resolve)=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+      const evidence = await progressEvidence();
+      assert.deepEqual({
+        count: evidence.count,
+        native: evidence.native,
+        indeterminate: evidence.indeterminate,
+        valueAttribute: evidence.valueAttribute,
+        ariaValueNow: evidence.ariaValueNow,
+        associated: evidence.associated,
+        label: evidence.label,
+        status: evidence.status,
+        statusRole: evidence.statusRole,
+        cancel: evidence.cancel,
+        exactChildren: evidence.exactChildren,
+        visible: evidence.visible,
+        noHorizontalOverflow: evidence.noHorizontalOverflow,
+        viewportContained: evidence.viewportContained,
+      }, {
+        count: 1,
+        native: true,
+        indeterminate: true,
+        valueAttribute: false,
+        ariaValueNow: false,
+        associated: true,
+        label: "Analysis progress",
+        status: "Analyzing repository",
+        statusRole: "status",
+        cancel: "Cancel",
+        exactChildren: true,
+        visible: true,
+        noHorizontalOverflow: true,
+        viewportContained: true,
+      }, label);
+      assert(evidence.labelContrast >= 4.5, `${label} label contrast was ${evidence.labelContrast}`);
+    };
+    const restoreViewport = async () => {
+      await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId);
+      await cdp.send("Emulation.setEmulatedMedia", { media: "", features: [] }, sessionId);
+    };
     const waitFor = async (predicate, label, milliseconds = 120_000) => {
       const end = Date.now() + milliseconds;
       while (Date.now() < end) {
@@ -355,6 +430,7 @@ export async function checkStandaloneBrowser() {
     assert.equal(invalidRequest.repositoryUrl, invalidRaw.repositoryUrl);
     assert.equal(invalidRequest.additionalExclusions, invalidRaw.additionalExclusions);
     state = await waitFor((value) => value.feedback === "Invalid input" && value.canvases === 0 && value.commit === "" && value.discard.length === 0, "consumed raw 422");
+    assert.equal((await progressEvidence()).count, 0, "invalid submission retained progress");
     assert.equal(await browserCommand("/_code-city/discard", { sessionId: invalidRequest.sessionId, generation: invalidRequest.generation }), 204);
     assert.deepEqual(await snapshot(), state, "repeat discard after consumed 422 emitted an event or restored old UI");
 
@@ -400,19 +476,40 @@ export async function checkStandaloneBrowser() {
     await submit();
     state = await waitFor((value) => value.canvases === 0 && value.analyzed === 0 && value.failed === 1 && value.discard.length === 1, "all files failed");
     assert.equal(await evaluate("document.querySelector('[data-presentation]').hidden&&document.querySelectorAll('[data-inspector]').length===0"), true);
+    assert.equal((await progressEvidence()).count, 0, "all-files-failed retained progress");
 
     let logStart = (await logRows(harness)).length;
     await setMode(harness, "block-provider");
+    let responseStart = responses.length;
     await submit();
     await waitForLog(harness, logStart, (rows) => rows.some(({ event }) => event === "revision-start"), "provider start before cancellation");
+    await waitForResponse(responseStart, "/_code-city/analyze", 202);
+    await assertActiveProgress(900, "light", "post-acknowledgement light progress");
+    await assertActiveProgress(320, "dark", "post-acknowledgement narrow dark progress");
     current = latestAnalyze();
     await installDelayedControlResponse("/_code-city/cancel");
     await click("[data-status] button");
     state = await waitFor((value) => value.status === "Cancelled", "cancel event before response delivery");
+    assert.equal((await progressEvidence()).count, 0, "terminal cancellation event retained progress");
     assert.deepEqual(await evaluate(`({status:window.__codeCityControlStatus,settled:window.__codeCityControlSettled})`), { status: 204, settled: false });
     assert.equal(await releaseDelayedControlResponse(), 204);
     assert.equal(await browserCommand("/_code-city/cancel", { sessionId: current.sessionId, generation: current.generation }), 204);
     assert.deepEqual(await snapshot(), state, "repeat no-op cancel emitted an event");
+    await restoreViewport();
+
+    logStart = (await logRows(harness)).length;
+    await setMode(harness, "block-inventory");
+    responseStart = responses.length;
+    await submit();
+    await waitForLog(harness, logStart, (rows) => rows.some(({ event }) => event === "inventory-held"), "inventory barrier after revision selection");
+    current = latestAnalyze();
+    await waitForResponse(responseStart, "/_code-city/analyze", 202);
+    await waitForSessionEvent("REVISION_SELECTED", current.generation, current.sessionId, "held post-revision generation");
+    await assertActiveProgress(320, "light", "post-revision narrow light progress");
+    await click("[data-status] button");
+    await waitFor((value) => value.status === "Cancelled", "post-revision cancellation");
+    assert.equal((await progressEvidence()).count, 0, "post-revision terminal event retained progress");
+    await restoreViewport();
 
     logStart = (await logRows(harness)).length;
     await setMode(harness, "block-provider");
@@ -451,7 +548,7 @@ export async function checkStandaloneBrowser() {
       await recoverSuccess(`success after ${scenario.label}`);
     }
 
-    let responseStart = responses.length;
+    responseStart = responses.length;
     await submit(REPOSITORY, "x".repeat(5000));
     await waitFor((value) => value.status === "Provider/resolution failure" && value.canvases === 0 && value.commit === "", "Analyze 413 loss policy");
     await waitForResponse(responseStart, "/_code-city/analyze", 413);
@@ -540,8 +637,8 @@ export async function checkStandaloneBrowser() {
       chrome: { category: discovery.category, version: chromeVersion },
       scenarios: [
         "success", "retained-noop-cancel", "raw-422-cleanup", "unrepresentable-input", "discard-event-first",
-        "discard-repeat-no-state", "discard-stale", "mixed", "all-files-failed", "cancel-event-first", "cancel-repeat-noop",
-        "replacement-stale-suppression", "parser-cancel", "join-reuse", "analyze-400", "analyze-404", "analyze-409",
+        "discard-repeat-no-state", "discard-stale", "mixed", "all-files-failed", "progress-post-ack", "cancel-event-first",
+        "cancel-repeat-noop", "progress-post-revision", "replacement-stale-suppression", "parser-cancel", "join-reuse", "analyze-400", "analyze-404", "analyze-409",
         "analyze-413", "analyze-415", "reader-503", "pagehide", "non-reading-owner", "exact-network-allowlist",
       ],
       browserRequests: requests.length,

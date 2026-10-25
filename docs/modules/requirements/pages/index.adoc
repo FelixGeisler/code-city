@@ -57,6 +57,15 @@ exclusions when Analyze is selected. It uses only the same-origin session,
 analyze, cancel, and discard routes. Session identity, generations, attempts,
 and the current source-free result exist only in browser memory.
 
+From an accepted Analyze submission until its current terminal outcome, the
+status area shows `Analyzing repository`, the existing `Cancel` action, and one
+native indeterminate progress control labelled `Analysis progress`. The control
+has no completion value because the session protocol exposes no measurable
+completion feed. Revision selection and Analyze acknowledgement retain this
+presentation. Completion, failure, invalid input, cancellation, session loss,
+discard, page exit, and disposal remove it. Replacement removes the prior
+presentation and shows one for the newest accepted submission.
+
 The service resolves an explicit branch head or the default-branch head,
 selects one immutable commit, acquires and validates the complete admitted
 source set, continues supported per-file analysis failures, and returns one

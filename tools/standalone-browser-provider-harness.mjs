@@ -46,7 +46,19 @@ function rows() {
 }
 const sources=new Map(rows().map(([sourcePath,source])=>{const rawBytes=source===null?Uint8Array.from([0xc3,0x28]):encoder.encode(source);const sha=createHash("sha1").update("blob "+rawBytes.byteLength+"\\0").update(rawBytes).digest("hex");return [sourcePath,{rawBytes,sha}];}));
 export function createGithubRawSourceGateway() { return {
-  async loadInventory() { record("inventory", { mode: scenario.mode, count: sources.size }); return { kind:"inventory", entries:[...(sources.has("src/Zeta.js")?[{path:"src",mode:"040000",type:"tree"}]:[]),...[...sources].map(([sourcePath,value])=>({path:sourcePath,mode:"100644",type:"blob",sha:value.sha}))] }; },
+  async loadInventory(_repository,_selected,signal) {
+    record("inventory", { mode: scenario.mode, count: sources.size });
+    if (scenario.mode === "block-inventory") {
+      record("inventory-held");
+      await new Promise((resolve) => {
+        if (signal.aborted) resolve();
+        else signal.addEventListener("abort", resolve, { once: true });
+      });
+      record("inventory-aborted", { aborted: signal.aborted });
+      return { kind:"provider-failure" };
+    }
+    return { kind:"inventory", entries:[...(sources.has("src/Zeta.js")?[{path:"src",mode:"040000",type:"tree"}]:[]),...[...sources].map(([sourcePath,value])=>({path:sourcePath,mode:"100644",type:"blob",sha:value.sha}))] };
+  },
   async readRawSource(_repository,_selected,candidate) { const source=sources.get(candidate.rawPath); if(source===undefined)return {kind:"provider-failure"}; record("source"); return {kind:"source",rawBytes:source.rawBytes}; },
 }; }
 `, "utf8");
