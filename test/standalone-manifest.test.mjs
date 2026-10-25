@@ -72,10 +72,10 @@ test("direct standalone audit fails closed for absent artifacts/manifests, stale
     if (scenario === "stale") await writeFile(path.join(target, "public", "index.html"), "changed\n");
     if (scenario === "missing-record") {
       const parsed = JSON.parse(await readFile(path.join(target, "package-manifest.json"), "utf8"));
-      parsed.files = parsed.files.filter(({ path: filePath }) => filePath !== "public/fixture.css");
+      parsed.files = parsed.files.filter(({ path: filePath }) => filePath !== "public/browser.css");
       await writeFile(path.join(target, "package-manifest.json"), `${JSON.stringify(parsed)}\n`);
     }
-    if (scenario === "missing-file") await rm(path.join(target, "public", "fixture.css"));
+    if (scenario === "missing-file") await rm(path.join(target, "public", "browser.css"));
     if (scenario === "unrecorded") await writeFile(path.join(target, "public", "extra.js"), "export {};\n");
     if (scenario === "symlink") {
       const real = path.join(root, "real-directory");

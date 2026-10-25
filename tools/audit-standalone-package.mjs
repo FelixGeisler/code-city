@@ -6,18 +6,25 @@ import { auditStandaloneArtifact } from "./standalone-manifest.mjs";
 import { analyze, expectCleanExit, launchStandalone, openSession, readyOrigin, sendGracefulSignal, terminateForCleanup, writeProviderHarness, writeSignalPreload } from "./standalone-check-support.mjs";
 
 const manifest = await auditStandaloneArtifact(canonicalStandaloneRoot);
+const publicPaths = manifest.files.filter(({ role }) => role === "public").map(({ path: filePath }) => filePath);
+if (JSON.stringify(publicPaths) !== JSON.stringify(["public/browser.css", "public/browser.js", "public/index.html"])) {
+  throw new Error(`Standalone public closure differs: ${JSON.stringify(publicPaths)}`);
+}
 const generated = [];
 for (const record of manifest.files) {
-  if (record.role === "public" && (record.path.endsWith(".js") || record.path.endsWith(".mjs"))) throw new Error(`Standalone public fixture contains JavaScript: ${record.path}`);
   if (record.path.endsWith(".js") || record.path.endsWith(".mjs")) generated.push(await readFile(path.join(canonicalStandaloneRoot, ...record.path.split("/")), "utf8"));
-  if (record.role === "public" && record.path.endsWith(".html")) {
-    const html = await readFile(path.join(canonicalStandaloneRoot, ...record.path.split("/")), "utf8");
-    if (/<script\b|_code-city\/|Analyze|repositoryUrl/iu.test(html)) throw new Error(`Standalone public fixture contains a browser analysis client: ${record.path}`);
-  }
 }
 const generatedSource = generated.join("\n");
-if (/process\.env|--(?:test|fixture|provider|fault)\b|providerOverride|fault selector|fixture selector|main-controller|processing-worker|browser analysis client/iu.test(generatedSource)) {
-  throw new Error("Standalone generated JavaScript contains a forbidden runtime/test selector or browser client");
+if (/process\.env|--(?:test|fixture|provider|fault)\b|providerOverride|fault selector|fixture selector|main-controller|processing-worker/iu.test(generatedSource)) {
+  throw new Error("Standalone generated JavaScript contains a forbidden runtime/test selector or legacy browser process");
+}
+const publicJavaScript = await readFile(path.join(canonicalStandaloneRoot, "public", "browser.js"), "utf8");
+if (/new\s+Worker\b|SharedWorker\b|createGithub(?:Revision|RawSource)Gateway|readRawSource|normalizedSource|rawDiagnostic|web-tree-sitter|tree-sitter-(?:javascript|typescript|tsx|c-sharp)|\.wasm\b|api\.github\.com|raw\.githubusercontent\.com/iu.test(publicJavaScript)) {
+  throw new Error("Standalone public JavaScript contains a browser analysis process, provider/source contract, or parser asset reference");
+}
+if (!publicJavaScript.includes("/_code-city/session") || !publicJavaScript.includes("Discard current analysis")
+  || !publicJavaScript.includes("Code City capacity is unavailable.")) {
+  throw new Error("Standalone public browser client is incomplete");
 }
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "code-city-standalone-package-audit-"));

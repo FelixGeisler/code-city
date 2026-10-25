@@ -281,8 +281,12 @@ test("exactly four strict no-emit TypeScript configs isolate main, worker, and i
   assert.deepEqual(main.compilerOptions.types, ["vite/client"]);
   assert.deepEqual(main.files.map((file) => file.replaceAll("\\", "/")), [
     "./src/edge/main.ts",
+    "./src/edge/standalone-browser-main.ts",
+    "./src/edge/standalone-browser-controller.ts",
     "./src/edge/city-presenter.ts",
+    "./src/application/city-payload.ts",
     "./src/domain/camera-picking-policy.ts",
+    "./src/domain/source-admission.ts",
   ]);
 
   const worker = showTypeScriptConfig("tsconfig.worker.json");
@@ -366,6 +370,9 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/processing-worker.ts",
     "edge/semantic-publication.ts",
     "edge/shell.css",
+    "edge/standalone-browser-controller.ts",
+    "edge/standalone-browser-main.ts",
+    "edge/standalone-browser-shell.css",
     "edge/tree-sitter-adapter.ts",
     "edge/tree-sitter-assets.ts",
   ]);
@@ -764,7 +771,8 @@ test("commands preserve the canonical package audit sequence and CI separates re
     "standalone:start": "node tools/check-standalone-start.mjs",
     "standalone:package": "node tools/audit-standalone-package.mjs",
     "standalone:signals": "node tools/check-standalone-signals.mjs",
-    "standalone:verify": "npm run standalone:build && npm run standalone:audit && npm run standalone:reproducibility && npm run standalone:start && npm run standalone:package && npm run standalone:signals",
+    "standalone:browser": "node tools/check-standalone-browser.mjs",
+    "standalone:verify": "npm run standalone:build && npm run standalone:audit && npm run standalone:reproducibility && npm run standalone:start && npm run standalone:package && npm run standalone:signals && npm run standalone:browser",
   });
 
   const ci = await readText(".github/workflows/ci.yml");
@@ -779,7 +787,7 @@ test("commands preserve the canonical package audit sequence and CI separates re
     const audit = workflow.indexOf("npm audit --audit-level=high");
     const nodeTypecheck = workflow.indexOf("npm run typecheck:node");
     const verify = workflow.indexOf("npm run verify");
-    const standalone = ["build", "audit", "reproducibility", "start", "package", "signals"]
+    const standalone = ["build", "audit", "reproducibility", "start", "package", "signals", "browser"]
       .map((name) => workflow.indexOf(`npm run standalone:${name}`));
     assert(install >= 0 && install < closure && closure < audit && audit < nodeTypecheck && nodeTypecheck < verify);
     assert(standalone.every((position) => position > verify));

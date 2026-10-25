@@ -96,13 +96,25 @@ operating policy] owns temporary process-memory custody, session-loss and
 shutdown cleanup, loopback-first exposure, and finite operator-set admission.
 The internal session/event payloads, lifecycle states, and reported-loss
 handling are implemented by this inactive runtime. A deterministic builder now
-writes only `build/standalone/`: fixture public bytes, private server and worker
-JavaScript, private parser runtime and four grammar assets, and one exact
-version-1 closure manifest. The generated CLI requires every capacity and the
-port while allowing only the host default, reports the assigned canonical
-origin, and uses native `fetch` in its production worker. Package tests inject
-deterministic providers or join barriers only through nonshipped constructor
-modules; generated runtime bytes contain no selector for them.
+writes only `build/standalone/`: the source-free same-origin browser, private
+server and worker JavaScript, private parser runtime and four grammar assets,
+and one exact version-1 closure manifest. The browser opens one NDJSON owner,
+keeps session and generation state only in memory, validates exact events,
+gates late events by session and generation, and sends only Analyze, Cancel,
+and Discard commands. Session loss, advanced-Analyze protocol failure, and any
+Analyze `503` abort the owner and clear the displayed association; `422` shows
+`Invalid input`. Success and all-files-failed retain one explicit Discard
+control, while failed-file paths and categories remain inert text.
+
+The generated CLI requires every capacity and the port while allowing only the
+host default, reports the assigned canonical origin, and uses native `fetch` in
+its production worker. Package tests inject deterministic providers or join
+barriers only through nonshipped constructor modules; generated runtime bytes
+contain no selector for them. Installed-Chrome/CDP evidence runs the actual
+packaged browser, server, worker, file-URL parser assets, and manifest serving,
+proves same-origin browser traffic and private-asset `404` behavior, and covers
+success, continuation outcomes, cancellation, replacement, discard, loss,
+non-reading ownership, and joined capacity reuse without live GitHub.
 
 Deployment values and calibrated capacity values remain later
 operator/deployment contracts. The standalone artifact is inactive: canonical

@@ -3,16 +3,11 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/pr
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { build as viteBuild } from "vite";
 import { writeStandaloneManifest } from "./standalone-manifest.mjs";
 
 export const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 export const canonicalStandaloneRoot = path.join(projectRoot, "build", "standalone");
-
-const PUBLIC_FILES = Object.freeze({
-  "index.html": "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Code City inactive standalone fixture</title><link rel=\"stylesheet\" href=\"/fixture.css\"></head><body><main><img src=\"/fixture.svg\" alt=\"\"><h1>Inactive standalone fixture</h1><p>This package is not the Code City browser client.</p></main></body></html>\n",
-  "fixture.css": "body{font-family:system-ui,sans-serif;margin:2rem}main{max-width:40rem}img{width:3rem;height:3rem}\n",
-  "fixture.svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\"><path fill=\"#2563eb\" d=\"M1 15V7h4v8zm5 0V1h4v14zm5 0V5h4v10z\"/></svg>\n",
-});
 
 const PARSER_FILES = Object.freeze([
   ["node_modules/web-tree-sitter/web-tree-sitter.js", "web-tree-sitter.js"],
@@ -51,6 +46,41 @@ async function emittedFiles(directory, prefix = "") {
     else throw new Error(`Standalone compiler emitted a non-file: ${relative}`);
   }
   return files;
+}
+
+async function buildBrowser(artifactRoot) {
+  const publicRoot = path.join(artifactRoot, "public");
+  await viteBuild({
+    root: projectRoot,
+    configFile: false,
+    publicDir: false,
+    logLevel: "silent",
+    base: "/",
+    build: {
+      outDir: publicRoot,
+      emptyOutDir: true,
+      sourcemap: false,
+      minify: "oxc",
+      assetsInlineLimit: 0,
+      lib: {
+        entry: path.join(projectRoot, "src", "edge", "standalone-browser-main.ts"),
+        formats: ["es"],
+        fileName: () => "browser.js",
+        cssFileName: "browser",
+      },
+    },
+  });
+  const template = await readFile(path.join(projectRoot, "standalone.html"), "utf8");
+  const html = template
+    .replace("  <script type=\"module\" src=\"/src/edge/standalone-browser-main.ts\"></script>\n", "  <link rel=\"stylesheet\" href=\"/browser.css\">\n  <script type=\"module\" src=\"/browser.js\"></script>\n")
+    .replaceAll("\r\n", "\n");
+  if (html === template) throw new Error("Standalone browser template entry was not replaced");
+  await writeFile(path.join(publicRoot, "index.html"), html, "utf8");
+  await writeFile(
+    path.join(publicRoot, "browser.css"),
+    (await readFile(path.join(projectRoot, "src", "edge", "standalone-browser-shell.css"), "utf8")).replaceAll("\r\n", "\n"),
+    "utf8",
+  );
 }
 
 async function compileSources(artifactRoot) {
@@ -101,7 +131,7 @@ export async function buildStandaloneArtifact(outputRoot = canonicalStandaloneRo
   const artifactRoot = path.resolve(outputRoot);
   await rm(artifactRoot, { recursive: true, force: true });
   await Promise.all(["public", "server", "parser"].map((name) => mkdir(path.join(artifactRoot, name), { recursive: true })));
-  for (const [name, content] of Object.entries(PUBLIC_FILES)) await writeFile(path.join(artifactRoot, "public", name), content, "utf8");
+  await buildBrowser(artifactRoot);
   for (const [source, name] of PARSER_FILES) await cp(path.join(projectRoot, ...source.split("/")), path.join(artifactRoot, "parser", name));
   await compileSources(artifactRoot);
   const manifest = await writeStandaloneManifest(artifactRoot);

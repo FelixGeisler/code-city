@@ -22,9 +22,10 @@ server runtime.
 
 The pull-request `CI` workflow installs the locked dependency closure, performs
 the security audit, type-checks the isolated Node graph, and runs the unchanged
-`npm run verify`. It then runs six additive standalone gates: build, direct
-manifest audit, isolated reproducibility, packaged startup, package audit, and
-signal shutdown. It does not publish.
+`npm run verify`. It then runs seven additive standalone gates: build, direct
+manifest audit, isolated reproducibility, packaged startup, package audit,
+signal shutdown, and installed-Chrome packaged-browser evidence. It does not
+publish.
 
 On a push to `main`, the `Publish` workflow repeats those gates, creates the
 legacy canonical package and publication record, uploads the reviewed `dist`

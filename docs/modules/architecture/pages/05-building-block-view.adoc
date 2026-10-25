@@ -77,8 +77,8 @@ execution, source/result transfer, hostile message validation, termination, and
 exit join. The inactive session runtime connects this worker edge to the
 inactive HTTP perimeter while remaining unreachable from the active browser
 package. A separate reproducible standalone artifact now contains these blocks
-and fixture-only public files. No Save/reopen, source-view, private-source,
-packaged browser, deployment, or device block is implemented yet.
+and an inactive source-free browser client. No Save/reopen, source-view,
+private-source, active cutover, deployment, or device block is implemented yet.
 
 == Inactive standalone perimeter
 
@@ -88,7 +88,7 @@ parsing, version-1 fixture-manifest and public-byte validation, a bounded
 body-reader primitive, and native `node:http` ingress/response handling. The
 worker side provides file-URL parser assets, one actual analysis worker, a
 closed command/event protocol, transfer validation, and a parent-owned joined
-lifecycle. The perimeter preloads only declared public fixture
+lifecycle. The perimeter preloads only declared public browser
 bytes, derives one canonical origin after binding, and exposes no package entry
 or configurable plugin surface. Its repository-internal handler boundary now
 hosts the fixed session, analyze, cancel, and discard implementation when the
