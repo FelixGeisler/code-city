@@ -38,6 +38,20 @@ function replaceStatus(message: string, action?: Readonly<{ label: string; run: 
   status.replaceChildren(text, button);
 }
 
+function replaceWorkingStatus(cancel: () => void): void {
+  const text = document.createElement("p");
+  text.setAttribute("role", "status");
+  text.textContent = "Analyzing repository";
+  const progressLabel = document.createElement("label");
+  progressLabel.setAttribute("data-analysis-progress", "");
+  progressLabel.append("Analysis progress", document.createElement("progress"));
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Cancel";
+  button.addEventListener("click", cancel, { once: true });
+  status.replaceChildren(text, progressLabel, button);
+}
+
 function renderFailures(rows: readonly BrowserFailedFile[]): void {
   if (rows.length === 0) {
     failedRows.replaceChildren();
@@ -90,7 +104,7 @@ const view: StandaloneBrowserView = Object.freeze({
     presentation.clear();
   },
   working(cancel) {
-    replaceStatus("Working", { label: "Cancel", run: cancel });
+    replaceWorkingStatus(cancel);
   },
   invalid() {
     feedback.textContent = "Invalid input";

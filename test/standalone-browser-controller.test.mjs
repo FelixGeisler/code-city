@@ -82,20 +82,22 @@ function fakeView() {
   const calls = [];
   let cancel;
   let discard;
+  let working = false;
   return {
     calls,
+    isWorking: () => working,
     takeCancel: () => cancel,
     takeDiscard: () => discard,
-    clear() { calls.push(["clear"]); },
-    working(value) { cancel = value; calls.push(["working"]); },
-    invalid() { calls.push(["invalid"]); },
-    capacity() { calls.push(["capacity"]); },
-    lost() { calls.push(["lost"]); },
+    clear() { working = false; calls.push(["clear"]); },
+    working(value) { working = true; cancel = value; calls.push(["working"]); },
+    invalid() { working = false; calls.push(["invalid"]); },
+    capacity() { working = false; calls.push(["capacity"]); },
+    lost() { working = false; calls.push(["lost"]); },
     revision(value) { calls.push(["revision", value]); },
-    failed(category, code, revision) { calls.push(["failed", category, code, revision]); },
-    cancelled() { calls.push(["cancelled"]); },
-    succeeded(generation, city, failures, revision, value) { discard = value; calls.push(["succeeded", generation, city.inspection.length, failures.length, revision]); },
-    allFilesFailed(generation, failures, revision, value) { discard = value; calls.push(["all-failed", generation, failures.length, revision]); },
+    failed(category, code, revision) { working = false; calls.push(["failed", category, code, revision]); },
+    cancelled() { working = false; calls.push(["cancelled"]); },
+    succeeded(generation, city, failures, revision, value) { working = false; discard = value; calls.push(["succeeded", generation, city.inspection.length, failures.length, revision]); },
+    allFilesFailed(generation, failures, revision, value) { working = false; discard = value; calls.push(["all-failed", generation, failures.length, revision]); },
   };
 }
 
@@ -149,6 +151,85 @@ test("browser city validation rejects numeric wire values that typed arrays woul
       type: "ANALYSIS_SUCCEEDED", sessionId: SESSION, generation: 1, revision: REVISION, city, notAnalyzedFiles: [],
     }), undefined);
   }
+});
+
+test("active progress ownership spans opening, acknowledgement, revision, replacement, and terminal events", async () => {
+  const transport = fakeTransport();
+  const view = fakeView();
+  const controller = createStandaloneBrowserController(transport, view);
+  controller.start();
+  const owner = transport.owners[0];
+
+  controller.submit("https://github.com/owner/repository", "");
+  assert.equal(view.isWorking(), true, "opening wait must remain active");
+  owner.readyControl.resolve({ kind: "opened", sessionId: SESSION });
+  await flush();
+  assert.equal(view.isWorking(), true, "Analyze acknowledgement wait must remain active");
+  owner.analyzeCalls[0].result.resolve(202);
+  await flush();
+  assert.equal(view.isWorking(), true, "202 must not complete progress");
+  owner.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 1, revision: REVISION });
+  assert.equal(view.isWorking(), true, "revision selection must not complete progress");
+
+  controller.submit("https://github.com/owner/repository", "");
+  await flush();
+  assert.equal(view.isWorking(), true, "replacement must install current progress");
+  owner.observer.event({ type: "ANALYSIS_CANCELLED", sessionId: SESSION, generation: 1 });
+  assert.equal(view.isWorking(), true, "stale terminal events must not clear current progress");
+  owner.analyzeCalls[1].result.resolve(202);
+  await flush();
+  owner.observer.event({ type: "ANALYSIS_FAILED", sessionId: SESSION, generation: 2, category: "Provider/resolution failure" });
+  assert.equal(view.isWorking(), false, "current failure must clear progress");
+
+  controller.submit("https://github.com/owner/repository", "");
+  await flush();
+  owner.analyzeCalls[2].result.resolve(202);
+  await flush();
+  owner.observer.event({
+    type: "ANALYSIS_ALL_FILES_FAILED",
+    sessionId: SESSION,
+    generation: 3,
+    revision: REVISION,
+    notAnalyzedFiles: [{ canonicalPath: "bad.js", category: "Syntax could not be analyzed" }],
+  });
+  assert.equal(view.isWorking(), false, "all-files-failed must clear progress");
+
+  controller.submit("https://github.com/owner/repository", "");
+  await flush();
+  owner.analyzeCalls[3].result.resolve(422);
+  await flush();
+  assert.equal(view.isWorking(), false, "invalid submission must clear progress");
+
+  controller.submit("https://github.com/owner/repository", "");
+  await flush();
+  owner.analyzeCalls[4].result.resolve(202);
+  await flush();
+  owner.observer.event(successEvent(5));
+  assert.equal(view.isWorking(), false, "success must clear progress");
+  view.takeDiscard()();
+  owner.discardCalls[0].result.resolve(204);
+  await flush();
+  owner.observer.event({ type: "CURRENT_DISCARDED", sessionId: SESSION, generation: 5 });
+  assert.equal(view.isWorking(), false, "discard must leave progress absent");
+
+  controller.submit("https://github.com/owner/repository", "");
+  await flush();
+  view.takeCancel()();
+  owner.cancelCalls[0].result.resolve(204);
+  await flush();
+  assert.equal(view.isWorking(), true, "cancel acknowledgement alone must retain progress");
+  owner.observer.event({ type: "ANALYSIS_CANCELLED", sessionId: SESSION, generation: 6 });
+  assert.equal(view.isWorking(), false, "cancellation event must clear progress");
+
+  controller.submit("https://github.com/owner/repository", "");
+  await flush();
+  owner.observer.lost();
+  assert.equal(view.isWorking(), false, "session loss must clear progress");
+
+  controller.submit("https://github.com/owner/repository", "");
+  assert.equal(view.isWorking(), true);
+  controller.dispose();
+  assert.equal(view.isWorking(), false, "disposal must clear progress");
 });
 
 test("Analyze records positive generations and exact raw command values before independently ordered events and 202", async () => {
@@ -225,6 +306,10 @@ test("session-create capacity is exact, clears state, and does not reconnect bef
   assert.equal(transport.owners.length, 1);
   controller.submit("https://github.com/owner/repository", "");
   assert.equal(transport.owners.length, 2);
+  assert.equal(view.isWorking(), true);
+  transport.owners[1].readyControl.resolve({ kind: "capacity" });
+  await flush();
+  assert.equal(view.isWorking(), false, "capacity rejection must clear progress");
 });
 
 test("every advanced-Analyze protocol/loss status closes the owner, clears state, and reconnects only on later explicit Analyze", async (t) => {
@@ -309,8 +394,13 @@ test("generation advancement fails closed at the positive safe-integer boundary"
   assert.equal(nextBrowserGeneration(Number.MAX_SAFE_INTEGER), undefined);
 });
 
-test("browser implementation contains no storage, retry, reconnect, provider, parser, or browser analysis process", async () => {
+test("browser implementation contains no storage, retry, reconnect, provider, parser, numeric progress, or browser analysis process", async () => {
   const source = await readFile(new URL("../src/edge/standalone-browser-controller.ts", import.meta.url), "utf8");
   const main = await readFile(new URL("../src/edge/standalone-browser-main.ts", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/edge/standalone-browser-shell.css", import.meta.url), "utf8");
+  assert.match(main, /document\.createElement\("progress"\)/u);
+  assert.match(main, /progressLabel\.append\("Analysis progress", document\.createElement\("progress"\)\)/u);
+  assert.doesNotMatch(main, /aria-valuenow|\.value\s*=\s*[^;]*progress|progress[^;\n]*\.value|setAttribute\(["']value["']/iu);
+  assert.doesNotMatch(css, /@keyframes|\banimation(?:-name)?\s*:/iu);
   assert.doesNotMatch(`${source}\n${main}`, /localStorage|sessionStorage|indexedDB|serviceWorker|document\.cookie|setTimeout|setInterval|SharedWorker|new Worker|github-revision-gateway|github-source-gateway|tree-sitter|fallback analyzer|retry|reconnect token/iu);
 });
