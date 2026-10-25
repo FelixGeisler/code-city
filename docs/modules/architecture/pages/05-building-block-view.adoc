@@ -72,11 +72,12 @@ source invariants. The GitHub edge supplies verified raw bytes through an
 additive capability; its existing decoded-source facade remains compatible.
 
 These blocks are not reachable from the current browser worker, protocol,
-controller, or browser entry. An inactive Node edge now owns their worker-thread
+controller, or browser entry. An inactive Node edge owns their worker-thread
 execution, source/result transfer, hostile message validation, termination, and
-exit join. It is not connected to the inactive HTTP perimeter. No session,
-Save/reopen, source-view, private-source, deployment, or device block is
-implemented yet.
+exit join. The inactive session runtime connects this worker edge to the
+inactive HTTP perimeter while remaining unreachable from the current package.
+No Save/reopen, source-view, private-source, packaged-browser, deployment, or
+device block is implemented yet.
 
 == Inactive standalone perimeter
 
@@ -88,15 +89,24 @@ worker side provides file-URL parser assets, one actual analysis worker, a
 closed command/event protocol, transfer validation, and a parent-owned joined
 lifecycle. The perimeter preloads only declared public fixture
 bytes, derives one canonical origin after binding, and exposes no package entry
-or configurable handler/plugin surface. Its fixed reserved paths have no
-production handlers, so the HTTP side creates no session, attempt, provider,
-or worker state and does not invoke the inactive application core.
+or configurable plugin surface. Its repository-internal handler boundary now
+hosts the fixed session, analyze, cancel, and discard implementation when the
+inactive session runtime is constructed.
+
+The runtime creates 32-byte CSPRNG session identities, owns one persistent
+NDJSON response per live session, linearizes generation-scoped mutations,
+reserves worker and source capacity before creation, retains successful current
+source/results, and releases every counter only after joined cleanup. It treats
+blocked output conflicts and reported request/response/socket loss as session
+loss, and one SIGINT/SIGTERM path stops admission before joining all workers and
+closing responses. Tests alone substitute nonshipped worker and response
+barriers; no selector is exposed through runtime configuration or HTTP.
 
 This graph is mandatory in CI through `npm run typecheck:node`, but it is not
 reachable from the active Vite application or current `npm start` package
-server. The worker side invokes the inactive application core only when an
-internal parent starts an analysis attempt; no HTTP or package integration can
-start one yet.
+server. HTTP can start an attempt only through explicit construction of the
+inactive session runtime; artifact construction and browser integration remain
+later work.
 
 == Accepted target boundary
 

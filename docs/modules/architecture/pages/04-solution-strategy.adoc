@@ -49,10 +49,13 @@ The active browser behavior above remains fail-fast and source-free. The
 inactive Node boundary runs one core attempt in an actual worker thread,
 applies its selected closed internal command/event protocol, transfers the
 exact city and retained-source buffers, and exposes a terminal only after
-normal joined exit. The separate inactive native-HTTP perimeter does not invoke
-this boundary. No session runtime, HTTP/worker orchestration, package cutover,
-Save or source view, private-source support, deployment, or device
-qualification is implemented.
+normal joined exit. The inactive native-HTTP session runtime invokes this boundary only after exact
+body parsing, semantic validation, replacement cleanup, and atomic capacity
+reservation. It owns one browser-held NDJSON response per session, strictly
+increasing generations, retained current source/result state, cancel/discard,
+backpressure loss, stale suppression, joined cleanup, and signal shutdown. No
+package construction, source-free browser, cutover, Save or source view,
+private-source support, deployment, or device qualification is implemented.
 
 == Accepted target strategy
 

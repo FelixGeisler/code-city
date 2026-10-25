@@ -29,10 +29,14 @@ deterministic per-file continuation, city construction, failed-file rows, and
 retained normalized source. An inactive Node worker boundary now runs that core
 in one actual `worker_threads` worker, validates commands and source/result
 messages on both sides of structured cloning, transfers owned buffers, and
-joins worker exit before exposing a terminal value. It is not connected to the
-active browser pipeline or the inactive HTTP perimeter. Its exact custody,
-lifetime, cleanup, exposure, admission-capacity,
-and no-Save rules are defined once in the
+joins worker exit before exposing a terminal value. An inactive server-owned
+session runtime connects that worker boundary to the native HTTP perimeter. It
+owns generation-scoped attempts, retained current results, atomic live-session,
+worker, reader, and source-byte capacity, exact NDJSON events, backpressure
+loss, joined replacement/control/loss cleanup, and single-entry signal
+shutdown. It remains disconnected from the active browser pipeline. Its exact
+custody, lifetime, cleanup, exposure, admission-capacity, and no-Save rules are
+defined once in the
 xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating Policy]. Accepted
 xref:architecture:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR
 0014] selects its Node.js, native same-origin HTTP, and worker execution
@@ -41,10 +45,11 @@ boundary.
 The repository also contains an inactive native-HTTP perimeter. It validates
 operator configuration and a supplied fixture manifest before listening,
 derives one canonical HTTP origin, serves only verified public fixture bytes,
-and reserves the future session and command paths without implementing them.
-It is not wired to `npm start`, packaged, deployed, or used by the browser
-product. Sessions, integration between the worker and HTTP perimeter, runtime
-orchestration, cutover, and Raspberry Pi qualification remain unimplemented.
+and exposes the implemented internal session and command paths only when the
+inactive session runtime is constructed. It is not wired to `npm start`,
+packaged, deployed, or used by the browser product. Standalone artifact
+construction, source-free browser integration, cutover, and Raspberry Pi
+qualification remain unimplemented.
 
 The whole-core Save target above remains approved. Standalone M5 defers it.
 

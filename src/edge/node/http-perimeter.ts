@@ -21,7 +21,17 @@ const API_ROUTES = Object.freeze({
 } as const);
 
 type ApiTarget = keyof typeof API_ROUTES;
-type FixedHandler = (value: unknown) => void | Promise<void>;
+
+export type FixedHandlerResult =
+  | Readonly<{ kind: "empty"; status: number; close?: boolean }>
+  | Readonly<{
+      kind: "stream";
+      status: number;
+      contentType: string;
+      open(request: IncomingMessage, response: ServerResponse): void;
+    }>;
+
+type FixedHandler = (value: unknown) => void | FixedHandlerResult | Promise<void | FixedHandlerResult>;
 
 export type FixedRouteHandlers = Readonly<Partial<Record<ApiTarget, FixedHandler>>>;
 
@@ -35,6 +45,7 @@ export interface InactiveHttpPerimeterInput {
 export interface RunningInactiveHttpPerimeter {
   readonly origin: string;
   readonly close: () => Promise<void>;
+  readonly closeIdleConnections: () => void;
 }
 
 type IngressKind = "request" | "continue" | "expectation";
@@ -126,10 +137,17 @@ function createPerimeterServer(
     response.end(head ? undefined : fixture.bytes);
   };
 
-  const sendHandlerSuccess = (response: ServerResponse): void => {
-    response.statusCode = 204;
+  const sendEmpty = (request: IncomingMessage, response: ServerResponse, status: number, close = false): void => {
+    response.statusCode = status;
     applySecurityHeaders(response);
     response.setHeader("Content-Length", "0");
+    if (close) {
+      const socket = request.socket;
+      markClosing(socket);
+      response.shouldKeepAlive = false;
+      response.setHeader("Connection", "close");
+      response.once("finish", () => socket.end());
+    }
     response.end();
   };
 
@@ -175,14 +193,27 @@ function createPerimeterServer(
       return;
     }
     if (closingSockets.has(request.socket) || request.socket.destroyed) return;
+    let handled: void | FixedHandlerResult;
     try {
-      await handler(result.value);
+      handled = await handler(result.value);
     } catch {
       reject(request, response, 500);
       return;
     }
+    if (handled?.kind === "stream") {
+      if (closingSockets.has(request.socket) || request.socket.destroyed) {
+        handled.open(request, response);
+        return;
+      }
+      response.statusCode = handled.status;
+      applySecurityHeaders(response);
+      response.setHeader("Content-Type", handled.contentType);
+      try { handled.open(request, response); }
+      catch { response.destroy(); }
+      return;
+    }
     if (closingSockets.has(request.socket) || request.socket.destroyed) return;
-    sendHandlerSuccess(response);
+    sendEmpty(request, response, handled?.kind === "empty" ? handled.status : 204, handled?.kind === "empty" && handled.close === true);
   };
 
   const dispatch = (request: IncomingMessage, response: ServerResponse, kind: IngressKind): void => {
@@ -314,6 +345,9 @@ export async function startInactiveHttpPerimeter(input: InactiveHttpPerimeterInp
         server.closeIdleConnections();
       });
       return closePromise;
+    },
+    closeIdleConnections(): void {
+      server.closeIdleConnections();
     },
   });
 }
