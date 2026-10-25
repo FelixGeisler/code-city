@@ -484,7 +484,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     if (disposed) return;
     const generation = nextBrowserGeneration(latestGeneration);
     clearAssociation();
-    if (generation === undefined || typeof repositoryUrl !== "string" || typeof additionalExclusions !== "string") {
+    if (generation === undefined) {
       const prior = owner;
       owner = undefined;
       sessionId = undefined;
@@ -494,6 +494,15 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       return;
     }
     latestGeneration = generation;
+    if (typeof repositoryUrl !== "string" || typeof additionalExclusions !== "string") {
+      const prior = owner;
+      owner = undefined;
+      sessionId = undefined;
+      ownerEpoch += 1;
+      prior?.close();
+      view.lost();
+      return;
+    }
     const selected = ensureOwner();
     view.working(() => { void cancelGeneration(selected.epoch, generation); });
     void (async () => {

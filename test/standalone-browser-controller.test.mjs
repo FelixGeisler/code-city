@@ -18,6 +18,7 @@ const { buildCity } = await import("../src/domain/city-model.ts");
 const { validateCityPayload } = await import("../src/application/city-payload.ts");
 
 const SESSION = "A".repeat(43);
+const SECOND_SESSION = "B".repeat(43);
 const REVISION = "a".repeat(40);
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -178,6 +179,39 @@ test("Analyze records positive generations and exact raw command values before i
   await flush();
   assert.deepEqual(view.calls.slice(-2), [["clear"], ["invalid"]]);
   assert.equal(transport.owners.length, 1, "422 must not reconnect");
+});
+
+test("an unrepresentable Analyze consumes its generation, loses the owner, and resumes at the following generation", async () => {
+  const transport = fakeTransport();
+  const view = fakeView();
+  const controller = createStandaloneBrowserController(transport, view);
+  controller.start();
+  const first = transport.owners[0];
+  first.readyControl.resolve({ kind: "opened", sessionId: SESSION });
+  controller.submit("https://github.com/owner/repository", "");
+  await flush();
+  assert.equal(first.analyzeCalls[0].command.generation, 1);
+  first.analyzeCalls[0].result.resolve(202);
+  await flush();
+  first.observer.event(successEvent(1));
+
+  controller.submit(Symbol("unrepresentable"), "");
+  assert.equal(first.closed, true);
+  assert.equal(first.analyzeCalls.length, 1, "unrepresentable input must not reach Analyze");
+  assert.deepEqual(view.calls.slice(-2), [["clear"], ["lost"]]);
+  assert.equal(transport.owners.length, 1, "loss must not reconnect automatically");
+
+  controller.submit("https://github.com/owner/repository", "");
+  assert.equal(transport.owners.length, 2);
+  const second = transport.owners[1];
+  second.readyControl.resolve({ kind: "opened", sessionId: SECOND_SESSION });
+  await flush();
+  assert.deepEqual(second.analyzeCalls[0].command, {
+    sessionId: SECOND_SESSION,
+    generation: 3,
+    repositoryUrl: "https://github.com/owner/repository",
+    additionalExclusions: "",
+  });
 });
 
 test("session-create capacity is exact, clears state, and does not reconnect before explicit Analyze", async () => {

@@ -160,10 +160,54 @@ export async function checkStandaloneBrowser() {
       cdp.send("Runtime.enable", {}, sessionId),
       cdp.send("Network.enable", {}, sessionId),
     ]);
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `(()=>{
+      window.__codeCityObservedSessionEvents=[];
+      window.__codeCitySessionObservationError="";
+      const originalFetch=window.fetch.bind(window);
+      window.fetch=async(input,init)=>{
+        const response=await originalFetch(input,init);
+        const target=typeof input==="string"?input:input instanceof Request?input.url:String(input);
+        if(new URL(target,location.href).pathname!=="/_code-city/session"||!response.body)return response;
+        const evidence=response.clone();
+        void(async()=>{
+          try{
+            const reader=evidence.body.getReader();
+            const decoder=new TextDecoder("utf-8",{fatal:true});
+            let pending="";
+            for(;;){
+              const result=await reader.read();
+              if(result.done)break;
+              pending+=decoder.decode(result.value,{stream:true});
+              for(;;){
+                const newline=pending.indexOf("\\n");
+                if(newline<0)break;
+                const line=pending.slice(0,newline);
+                pending=pending.slice(newline+1);
+                if(line.length>0)window.__codeCityObservedSessionEvents.push(JSON.parse(line));
+              }
+            }
+            pending+=decoder.decode();
+            if(pending.length!==0)throw new Error("incomplete session frame");
+          }catch(error){if(error?.name!=="AbortError")window.__codeCitySessionObservationError=String(error);}
+        })();
+        return response;
+      };
+    })();` }, sessionId);
     const evaluate = async (expression) => {
       const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
       if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
       return result.result.value;
+    };
+    const observedSessionEvents = () => evaluate(`window.__codeCityObservedSessionEvents.map((event)=>({...event}))`);
+    const waitForSessionEvent = async (type, generation, expectedSessionId, label, milliseconds = 120_000) => {
+      const end = Date.now() + milliseconds;
+      while (Date.now() < end) {
+        const evidence = await evaluate(`({error:window.__codeCitySessionObservationError,event:window.__codeCityObservedSessionEvents.find((event)=>event.type===${JSON.stringify(type)}&&${generation === undefined ? "true" : `event.generation===${generation}`}&&event.sessionId===${JSON.stringify(expectedSessionId)})??null})`);
+        if (evidence.error) throw new Error(`Session observation failed while waiting for ${label}: ${evidence.error}`);
+        if (evidence.event) return evidence.event;
+        await sleep(20);
+      }
+      throw new Error(`Timed out waiting for observed session event: ${label}`);
     };
     const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,failed:[...document.querySelectorAll('[data-failed-rows] li')].map((row)=>row.textContent),discard:[...document.querySelectorAll('[data-actions] button')].map((button)=>button.textContent)})`;
     const snapshot = () => evaluate(snapshotExpression);
@@ -208,6 +252,12 @@ export async function checkStandaloneBrowser() {
     await submit();
     let state = await waitFor((value) => value.canvases === 1 && value.discard[0] === "Discard current analysis", "ordinary success");
     assert.equal(state.commit, "a".repeat(40));
+    const firstAnalyze = latestAnalyze();
+    assert.equal(firstAnalyze.generation, 1);
+    assert.deepEqual(await waitForSessionEvent("SESSION_OPENED", undefined, firstAnalyze.sessionId, "initial session opening"), {
+      type: "SESSION_OPENED", sessionId: firstAnalyze.sessionId,
+    });
+    assert.equal((await waitForSessionEvent("ANALYSIS_SUCCEEDED", firstAnalyze.generation, firstAnalyze.sessionId, "ordinary success generation")).generation, 1);
     assert.equal((await request(origin, "/browser.css")).status, 200);
     assert.deepEqual(await snapshot(), state, "retained result changed while the session remained idle");
 
@@ -217,6 +267,7 @@ export async function checkStandaloneBrowser() {
 
     const invalidRaw = await submit("  invalid repository  ", "raw\r\nvalue ");
     const invalidRequest = latestAnalyze();
+    assert.equal(invalidRequest.generation, firstAnalyze.generation + 1);
     assert.equal(invalidRequest.repositoryUrl, invalidRaw.repositoryUrl);
     assert.equal(invalidRequest.additionalExclusions, invalidRaw.additionalExclusions);
     state = await waitFor((value) => value.feedback === "Invalid input" && value.canvases === 0 && value.commit === "" && value.discard.length === 0, "consumed raw 422");
@@ -224,12 +275,23 @@ export async function checkStandaloneBrowser() {
     assert.deepEqual(await snapshot(), state, "repeat discard after consumed 422 emitted an event or restored old UI");
 
     state = await recoverSuccess("success after consumed 422");
+    const beforeUnrepresentableCommand = latestAnalyze();
+    assert.equal(beforeUnrepresentableCommand.generation, invalidRequest.generation + 1);
+    assert.equal((await waitForSessionEvent("ANALYSIS_SUCCEEDED", beforeUnrepresentableCommand.generation, beforeUnrepresentableCommand.sessionId, "pre-unrepresentable success generation")).generation, beforeUnrepresentableCommand.generation);
     const beforeUnrepresentable = analyzeRequests().length;
     await evaluate(`(()=>{const input=document.querySelector('input[name=repository]');Object.defineProperty(input,'value',{configurable:true,value:Symbol('unrepresentable')});document.querySelector('form').requestSubmit();return true;})()`);
     await waitFor((value) => value.status === "Provider/resolution failure" && value.canvases === 0 && value.commit === "" && value.discard.length === 0, "unrepresentable input closure");
     assert.equal(analyzeRequests().length, beforeUnrepresentable, "unrepresentable input reached the Analyze endpoint");
     await evaluate(`(()=>{const input=document.querySelector('input[name=repository]');delete input.value;return true;})()`);
     state = await recoverSuccess("success after unrepresentable input closure");
+    const afterUnrepresentableCommand = latestAnalyze();
+    assert.equal(afterUnrepresentableCommand.generation, beforeUnrepresentableCommand.generation + 2, "unrepresentable Analyze did not consume its generation");
+    assert.notEqual(afterUnrepresentableCommand.sessionId, beforeUnrepresentableCommand.sessionId, "explicit recovery reused the lost session");
+    assert.deepEqual(await waitForSessionEvent("SESSION_OPENED", undefined, afterUnrepresentableCommand.sessionId, "post-loss explicit session opening"), {
+      type: "SESSION_OPENED", sessionId: afterUnrepresentableCommand.sessionId,
+    });
+    assert.equal((await waitForSessionEvent("ANALYSIS_SUCCEEDED", afterUnrepresentableCommand.generation, afterUnrepresentableCommand.sessionId, "post-loss success generation")).generation, afterUnrepresentableCommand.generation);
+    assert.equal((await observedSessionEvents()).some(({ generation }) => generation === beforeUnrepresentableCommand.generation + 1), false, "unrepresentable Analyze emitted a session event");
 
     current = latestAnalyze();
     await installDelayedControlResponse("/_code-city/discard");
