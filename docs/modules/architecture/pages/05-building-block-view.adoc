@@ -75,9 +75,10 @@ These blocks are not reachable from the current browser worker, protocol,
 controller, or browser entry. An inactive Node edge owns their worker-thread
 execution, source/result transfer, hostile message validation, termination, and
 exit join. The inactive session runtime connects this worker edge to the
-inactive HTTP perimeter while remaining unreachable from the current package.
-No Save/reopen, source-view, private-source, packaged-browser, deployment, or
-device block is implemented yet.
+inactive HTTP perimeter while remaining unreachable from the active browser
+package. A separate reproducible standalone artifact now contains these blocks
+and fixture-only public files. No Save/reopen, source-view, private-source,
+packaged browser, deployment, or device block is implemented yet.
 
 == Inactive standalone perimeter
 
@@ -102,11 +103,13 @@ loss, and one SIGINT/SIGTERM path stops admission before joining all workers and
 closing responses. Tests alone substitute nonshipped worker and response
 barriers; no selector is exposed through runtime configuration or HTTP.
 
-This graph is mandatory in CI through `npm run typecheck:node`, but it is not
-reachable from the active Vite application or current `npm start` package
-server. HTTP can start an attempt only through explicit construction of the
-inactive session runtime; artifact construction and browser integration remain
-later work.
+This graph is mandatory in CI through `npm run typecheck:node`. Additive
+standalone gates then build `build/standalone/`, audit its complete manifest
+closure, reproduce every byte, start its generated CLI, exercise its packaged
+perimeter/worker/parser path with nonshipped constructor fixtures, and verify
+joined signal shutdown. The graph is still not reachable from the active Vite
+application or current `npm start` package server. Browser integration and
+activation remain later work.
 
 == Accepted target boundary
 

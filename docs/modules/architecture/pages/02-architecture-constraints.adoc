@@ -7,7 +7,8 @@
   application server or persistence runtime. An inactive shared continuation
   core, its dedicated Node.js worker boundary and closed internal worker
   protocol, and the native-HTTP session runtime are not connected to the Vite
-  entry or package.
+  entry or canonical `dist/` package. They are staged only in the separate
+  inactive `build/standalone/` artifact.
 * The current provider is anonymous public GitHub. The browser resolves the
   explicit branch head, or the default-branch head when no branch was supplied,
   and retrieves source through validated immutable commit and root tree
@@ -46,7 +47,11 @@ body reader, and fail-closed native-HTTP perimeter are implemented as separate
 inactive repository modules. The inactive session runtime implements the fixed
 HTTP/worker orchestration, generation and control lifecycle, atomic capacity,
 NDJSON backpressure behavior, session-loss cleanup, and joined signal shutdown.
-Packaged startup, browser integration, cutover, and deployment are not
+The reproducible `build/standalone/` artifact packages the actual server,
+worker, parser runtime, four grammar families, and a fixture-only public tree
+behind a closed version-1 manifest. Explicit additive checks build, audit,
+reproduce, start, exercise, and signal that package. Browser integration,
+canonical-script cutover, deployment, and device qualification are not
 implemented. This provides no Raspberry Pi performance, concurrency, memory,
 or deployment qualification.
 

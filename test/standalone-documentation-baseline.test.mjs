@@ -136,15 +136,15 @@ test("arc42 records structure without duplicating the authoritative policy", asy
     assert.match(architecture, new RegExp(fact.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"), fact);
   }
   assert.match(architecture, /loopback-first[\s\S]*trusted-LAN/u);
-  assert.match(architecture, /implemented as separate inactive repository modules[\s\S]*not implemented[\s\S]*no\s+Raspberry Pi performance, concurrency, memory, or deployment qualification/u);
+  assert.match(architecture, /implemented as separate inactive repository modules[\s\S]*`build\/standalone\/` artifact[\s\S]*not implemented[\s\S]*no\s+Raspberry Pi performance, concurrency, memory, or deployment qualification/u);
   assert.match(compact(runtime), /inactive shared core now completes verified raw acquisition[\s\S]*inactive Node boundary executes one attempt in a dedicated worker/u);
   assert.match(compact(runtime), /inactive perimeter validates all operator values and supplied manifest bytes before listening/u);
   assert.match(compact(runtime), /valid Analyze first advances its generation[\s\S]*atomically reserves one worker slot and the full 40 MiB source envelope/u);
   assert.match(compact(runtime), /One false return waits for `drain`[\s\S]*SIGINT and SIGTERM stop admission/u);
   assert.match(compact(buildingBlocks), /Inactive shared application core[\s\S]*inactive session runtime connects this worker edge to the inactive HTTP perimeter/u);
   assert.match(compact(buildingBlocks), /isolated `src\/edge\/node\/` graph contains repository-internal native-HTTP and worker building blocks/u);
-  assert.match(compact(deployment), /inactive continuation core, worker, native-HTTP perimeter, and session runtime[\s\S]*not included in the Pages artifact/u);
-  assert.match(compact(deployment), /type-checks the isolated Node graph[\s\S]*unchanged `npm run verify`/u);
+  assert.match(compact(deployment), /inactive continuation core, worker, native-HTTP perimeter, and session runtime[\s\S]*packaged only in `build\/standalone\/`[\s\S]*not uploaded or deployed/u);
+  assert.match(compact(deployment), /type-checks the isolated Node graph[\s\S]*unchanged `npm run verify`[\s\S]*six additive standalone gates/u);
   assert.doesNotMatch(architecture, /\*Temporary custody:|\*Unsaved lifetime:|Rejected for M5:/u);
 });
 
@@ -161,8 +161,9 @@ test("requirements distinguish current browser, standalone M5, and whole-core Sa
   assert.match(compactProduct, /inactive Node worker boundary now runs that core in one actual `worker_threads` worker[\s\S]*inactive server-owned session runtime connects that worker boundary to the native HTTP perimeter/u);
   assert.match(compactProduct, /inactive native-HTTP perimeter/u);
   assert.match(compactProduct, /active product remains a static browser application with no active server runtime or persistence/u);
-  assert.match(compactProduct, /not wired to `npm start`, packaged, deployed, or used by the browser product/u);
-  assert.match(compactProduct, /Standalone artifact construction, source-free browser integration, cutover, and Raspberry Pi qualification remain unimplemented/u);
+  assert.match(compactProduct, /deterministic builder packages that runtime[\s\S]*`build\/standalone\/`/u);
+  assert.match(compactProduct, /not wired to `npm start`, deployed, or used by the browser product/u);
+  assert.match(compactProduct, /Source-free browser integration, cutover, and Raspberry Pi qualification remain unimplemented/u);
   assert.match(compactCity, /Save and reopen remain approved whole-core outcomes/u);
   assert.match(compactCity, /Standalone M5 retains temporary source and results only in process memory and discards them on explicit discard, replacement, detected session loss, or graceful shutdown/u);
   assert.match(compactCity, /Save and reopen are deferred from M5, not revoked/u);

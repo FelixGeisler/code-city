@@ -304,6 +304,7 @@ test("exactly four strict no-emit TypeScript configs isolate main, worker, and i
   assert(!node.compilerOptions.lib.includes("webworker"));
   assert.deepEqual(node.files.map((file) => file.replaceAll("\\", "/")), [
     "./src/edge/node/analysis-worker-entry.ts",
+    "./src/edge/node/analysis-worker-production.ts",
     "./src/edge/node/analysis-worker.ts",
     "./src/edge/node/body-reader.ts",
     "./src/edge/node/config.ts",
@@ -311,6 +312,8 @@ test("exactly four strict no-emit TypeScript configs isolate main, worker, and i
     "./src/edge/node/http-perimeter.ts",
     "./src/edge/node/parser-assets.ts",
     "./src/edge/node/session-runtime.ts",
+    "./src/edge/node/standalone-cli.ts",
+    "./src/edge/node/standalone-worker-entry.ts",
     "./src/edge/node/wire-observer.ts",
     "./src/edge/node/worker-attempt.ts",
     "./src/edge/node/worker-protocol.ts",
@@ -347,6 +350,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/github-source-gateway.ts",
     "edge/main.ts",
     "edge/node/analysis-worker-entry.ts",
+    "edge/node/analysis-worker-production.ts",
     "edge/node/analysis-worker.ts",
     "edge/node/body-reader.ts",
     "edge/node/config.ts",
@@ -354,6 +358,8 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/node/http-perimeter.ts",
     "edge/node/parser-assets.ts",
     "edge/node/session-runtime.ts",
+    "edge/node/standalone-cli.ts",
+    "edge/node/standalone-worker-entry.ts",
     "edge/node/wire-observer.ts",
     "edge/node/worker-attempt.ts",
     "edge/node/worker-protocol.ts",
@@ -752,6 +758,13 @@ test("commands preserve the canonical package audit sequence and CI separates re
     "docs:build": "antora antora-playbook.yml",
     verify: "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build",
     "typecheck:node": "tsc -p tsconfig.node.json",
+    "standalone:build": "node tools/build-standalone.mjs",
+    "standalone:audit": "node tools/audit-standalone.mjs",
+    "standalone:reproducibility": "node tools/check-standalone-reproducibility.mjs",
+    "standalone:start": "node tools/check-standalone-start.mjs",
+    "standalone:package": "node tools/audit-standalone-package.mjs",
+    "standalone:signals": "node tools/check-standalone-signals.mjs",
+    "standalone:verify": "npm run standalone:build && npm run standalone:audit && npm run standalone:reproducibility && npm run standalone:start && npm run standalone:package && npm run standalone:signals",
   });
 
   const ci = await readText(".github/workflows/ci.yml");
@@ -766,7 +779,11 @@ test("commands preserve the canonical package audit sequence and CI separates re
     const audit = workflow.indexOf("npm audit --audit-level=high");
     const nodeTypecheck = workflow.indexOf("npm run typecheck:node");
     const verify = workflow.indexOf("npm run verify");
+    const standalone = ["build", "audit", "reproducibility", "start", "package", "signals"]
+      .map((name) => workflow.indexOf(`npm run standalone:${name}`));
     assert(install >= 0 && install < closure && closure < audit && audit < nodeTypecheck && nodeTypecheck < verify);
+    assert(standalone.every((position) => position > verify));
+    assert(standalone.every((position, index) => index === 0 || standalone[index - 1] < position));
     assert.equal((workflow.match(/npm audit --audit-level=high/gu) ?? []).length, 1);
     assert.equal((workflow.match(/npm run typecheck:node/gu) ?? []).length, 1);
     assert.doesNotMatch(workflow, /check-security-audit|npm audit[^\n]*(?:--omit=dev|--production|\|\||continue-on-error)/u);

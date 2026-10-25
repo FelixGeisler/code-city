@@ -13,21 +13,25 @@ code from the same package. Public GitHub remains an external provider.
 There is no Node.js application process in production. Node.js, npm, Vite, and
 Antora remain build and verification tools. The inactive continuation core,
 worker, native-HTTP perimeter, and session runtime are neither connected to the
-active browser pipeline nor selected by `npm start`; the Node modules are not
-included in the Pages artifact. A Pages artifact is static content, not a Code
-City server runtime.
+active browser pipeline nor selected by `npm start`. They are packaged only in
+`build/standalone/`; that directory is not the Pages artifact and is not
+uploaded or deployed. A Pages artifact remains static content, not a Code City
+server runtime.
 
 == Current publication path
 
 The pull-request `CI` workflow installs the locked dependency closure, performs
 the security audit, type-checks the isolated Node graph, and runs the unchanged
-`npm run verify`. It does not publish.
+`npm run verify`. It then runs six additive standalone gates: build, direct
+manifest audit, isolated reproducibility, packaged startup, package audit, and
+signal shutdown. It does not publish.
 
 On a push to `main`, the `Publish` workflow repeats those gates, creates the
-canonical package and publication record, uploads the reviewed Pages artifact,
-and deploys that artifact. The package manifest and publication tooling own
-artifact identity and publication evidence; tool versions remain in the package
-and lock files.
+legacy canonical package and publication record, uploads the reviewed `dist`
+Pages artifact, and deploys that artifact. The inactive standalone artifact is
+verified but not uploaded. The legacy package manifest and publication tooling
+continue to own Pages artifact identity and publication evidence; tool versions
+remain in the package and lock files.
 
 The workflow's production-evidence job is conditional on its explicit issue-
 state eligibility check. When eligible, the collector verifies deployment and
