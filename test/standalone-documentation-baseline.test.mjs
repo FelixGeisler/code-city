@@ -104,6 +104,9 @@ test("architecture describes canonical package, publication separation, and pend
   assert.match(runtime, /validates the exact version-1 package manifest[\s\S]*verifies the length and SHA-256 digest of every public record before listening/u);
   assert.match(runtime, /Startup does not read or hash private server or parser records;[\s\S]*offline package audit verifies complete public\/private manifest closure and every recorded byte before publication/u);
   assert.doesNotMatch(runtime, /runtime validates[\s\S]{0,120}every recorded file/iu);
+  assert.match(runtime, /Successful and all-files-failed results retain their exact normalized source association in process memory[\s\S]*syntax or metric failure[\s\S]*Source text rejected as unsupported is not retained[\s\S]*until Discard, replacement, detected session loss, or graceful shutdown/u);
+  assert.doesNotMatch(runtime, /all-files-failed result retains only the accepted current failure association/iu);
+  assert.match(runtime, /first complete NDJSON frame makes `res\.write` return false[\s\S]*retains that blocked frame and waits for `drain`[\s\S]*blocked write alone does not cause session loss[\s\S]*session, any retained source, and their admission capacity remain owned[\s\S]*Another event or a mutating command while the frame is blocked initiates joined session loss without another write/u);
   assert.match(runtime, /`npm run dev -- <flags>`[\s\S]*`build\/development\/`[\s\S]*no HMR or WebSocket/u);
   assert.match(deployment, /uploads the exact audited `dist\/`[\s\S]*separately uploads `build\/pages\/`/u);
   assert.match(deployment, /former in-browser analyzer JavaScript, browser-worker, and parser\/grammar WASM URLs/u);

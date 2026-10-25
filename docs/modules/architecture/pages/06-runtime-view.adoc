@@ -27,9 +27,12 @@ every recorded byte before publication.
 . The session emits one complete JSON event per write. The browser validates
   session and generation identity before changing displayed state.
 
-A successful result retains its exact normalized source association in process
-memory. An all-files-failed result retains only the accepted current failure
-association. Both expose Discard. The browser receives no source.
+Successful and all-files-failed results retain their exact normalized source
+association in process memory for every successfully analyzed file and every
+file that reached a syntax or metric failure. Source text rejected as
+unsupported is not retained. The current source-result association remains
+until Discard, replacement, detected session loss, or graceful shutdown. Both
+results expose Discard. The browser receives no source.
 
 == Cancellation, replacement, loss, and shutdown
 
@@ -37,10 +40,14 @@ Cancel and Discard invalidate work, terminate and join an active worker, release
 ownership, and then emit their control event. Replacement emits no synthetic
 terminal event. Stale completion cannot restore discarded state.
 
-A blocked NDJSON write, a second mutation while blocked, request abort,
-response close/error, owning-socket close, unrepresentable browser input, or an
-advanced command/protocol failure loses the browser-owned temporary session.
-There is no reconnect or recovery.
+When the first complete NDJSON frame makes `res.write` return false, the runtime
+retains that blocked frame and waits for `drain`; the blocked write alone does
+not cause session loss. The session, any retained source, and their admission
+capacity remain owned while it waits. Another event or a mutating command while
+the frame is blocked initiates joined session loss without another write.
+Request abort, response close/error, owning-socket close, unrepresentable
+browser input, or an advanced command/protocol failure also loses the
+browser-owned temporary session. There is no reconnect or recovery.
 
 SIGINT and SIGTERM stop admission, invalidate work, join workers, discard
 retained state, close responses, and complete only with zero live sessions,
