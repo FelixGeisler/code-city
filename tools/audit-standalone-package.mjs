@@ -19,11 +19,14 @@ if (/process\.env|--(?:test|fixture|provider|fault)\b|providerOverride|fault sel
   throw new Error("Standalone generated JavaScript contains a forbidden runtime/test selector or legacy browser process");
 }
 const publicJavaScript = await readFile(path.join(canonicalStandaloneRoot, "public", "browser.js"), "utf8");
-if (/new\s+Worker\b|SharedWorker\b|createGithub(?:Revision|RawSource)Gateway|readRawSource|normalizedSource|rawDiagnostic|web-tree-sitter|tree-sitter-(?:javascript|typescript|tsx|c-sharp)|\.wasm\b|api\.github\.com|raw\.githubusercontent\.com/iu.test(publicJavaScript)) {
+if (/new\s+Worker\b|SharedWorker\b|createGithub(?:Revision|RawSource)Gateway|readRawSource|normalizedSource|rawDiagnostic|web-tree-sitter|tree-sitter-(?:javascript|typescript|tsx|c-sharp)|\.wasm\b|api\.github\.com|raw\.githubusercontent\.com|localStorage|sessionStorage|indexedDB|serviceWorker|document\.cookie/iu.test(publicJavaScript)) {
   throw new Error("Standalone public JavaScript contains a browser analysis process, provider/source contract, or parser asset reference");
 }
 if (!publicJavaScript.includes("/_code-city/session") || !publicJavaScript.includes("Discard current analysis")
-  || !publicJavaScript.includes("Code City capacity is unavailable.")) {
+  || !publicJavaScript.includes("Code City capacity is unavailable.")
+  || !publicJavaScript.includes("Analyzed files")
+  || !publicJavaScript.includes("Filter by canonical path")
+  || !publicJavaScript.includes("Maximum complexity (M)")) {
   throw new Error("Standalone public browser client is incomplete");
 }
 

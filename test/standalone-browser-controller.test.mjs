@@ -94,8 +94,8 @@ function fakeView() {
     revision(value) { calls.push(["revision", value]); },
     failed(category, code, revision) { calls.push(["failed", category, code, revision]); },
     cancelled() { calls.push(["cancelled"]); },
-    succeeded(city, failures, revision, value) { discard = value; calls.push(["succeeded", city.inspection.length, failures.length, revision]); },
-    allFilesFailed(failures, revision, value) { discard = value; calls.push(["all-failed", failures.length, revision]); },
+    succeeded(generation, city, failures, revision, value) { discard = value; calls.push(["succeeded", generation, city.inspection.length, failures.length, revision]); },
+    allFilesFailed(generation, failures, revision, value) { discard = value; calls.push(["all-failed", generation, failures.length, revision]); },
   };
 }
 
@@ -167,10 +167,10 @@ test("Analyze records positive generations and exact raw command values before i
     additionalExclusions: "raw\r\n value ",
   });
   owner.observer.event(successEvent(1));
-  assert.deepEqual(view.calls.at(-1), ["succeeded", 1, 0, REVISION]);
+  assert.deepEqual(view.calls.at(-1), ["succeeded", 1, 1, 0, REVISION]);
   owner.analyzeCalls[0].result.resolve(202);
   await flush();
-  assert.deepEqual(view.calls.at(-1), ["succeeded", 1, 0, REVISION]);
+  assert.deepEqual(view.calls.at(-1), ["succeeded", 1, 1, 0, REVISION]);
 
   controller.submit("invalid", "still raw");
   await flush();
@@ -270,7 +270,7 @@ test("stale events are ignored; cancel and discard target only the current gener
   assert.deepEqual(owner.discardCalls[0].command, { sessionId: SESSION, generation: 2 });
   owner.discardCalls[0].result.resolve(204);
   await flush();
-  assert.deepEqual(view.calls.at(-1), ["succeeded", 1, 0, REVISION], "204 without an event must retain current state");
+  assert.deepEqual(view.calls.at(-1), ["succeeded", 2, 1, 0, REVISION], "204 without an event must retain current state");
   owner.observer.event({ type: "CURRENT_DISCARDED", sessionId: SESSION, generation: 2 });
   assert.deepEqual(view.calls.at(-1), ["clear"]);
 

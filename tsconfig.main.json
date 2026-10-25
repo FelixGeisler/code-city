@@ -8,6 +8,7 @@
     "src/edge/main.ts",
     "src/edge/standalone-browser-main.ts",
     "src/edge/standalone-browser-controller.ts",
+    "src/edge/standalone-presentation-session.ts",
     "src/edge/city-presenter.ts",
     "src/application/city-payload.ts",
     "src/domain/camera-picking-policy.ts",

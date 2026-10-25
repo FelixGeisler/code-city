@@ -26,6 +26,13 @@ every recorded byte before publication.
   worker exits normally.
 . The session emits one complete JSON event per write. The browser validates
   session and generation identity before changing displayed state.
+. For success, one browser-local presentation-session coordinator stages the
+  native successful-file inventory and safe inspector, stages and commits the
+  existing presenter, and publishes one current generation. Query and sort
+  callbacks are gated by publication identity and exact snapshots; row and city
+  activation share canonical geometry indices. Any current semantic or
+  presenter failure removes the complete successful presentation as
+  `M1-PRES-1`.
 
 Successful and all-files-failed results retain their exact normalized source
 association in process memory for every successfully analyzed file and every
@@ -62,9 +69,14 @@ has no HMR or WebSocket behavior and does not write `dist/`.
 
 Installed-Chrome/CDP evidence drives the actual packaged browser, server,
 worker, parser assets, and same-origin protocol with deterministic nonshipped
-provider evidence. It covers success, continuation, replacement, cancellation,
-discard, loss, capacity, page loss, private-file `404`, and exact browser
-network closure without live GitHub.
+provider evidence. It covers the visible five-file successful inventory,
+literal filter behavior, all three raw-metric sorts, row/city/inspector
+canonical-index identity, unchanged camera matrices and instance-buffer upload
+count across selection/filter/sort, mixed and all-failed publication, cleanup,
+continuation, replacement, cancellation, discard, loss, capacity, page loss,
+private-file `404`, and exact browser network closure without live GitHub. The
+harness returns only booleans, counts, and numeric rendering proof; it does not
+emit repository paths, queries, source, or inspection payloads.
 
 == Deferred outcomes
 

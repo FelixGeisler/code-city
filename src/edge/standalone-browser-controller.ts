@@ -47,8 +47,8 @@ export type StandaloneBrowserView = Readonly<{
   revision(value: string): void;
   failed(category: string, code?: string, revision?: string): void;
   cancelled(): void;
-  succeeded(city: ValidatedCity, failures: readonly BrowserFailedFile[], revision: string, discard: () => void): void;
-  allFilesFailed(failures: readonly BrowserFailedFile[], revision: string, discard: () => void): void;
+  succeeded(generation: number, city: ValidatedCity, failures: readonly BrowserFailedFile[], revision: string, discard: () => void): void;
+  allFilesFailed(generation: number, failures: readonly BrowserFailedFile[], revision: string, discard: () => void): void;
 }>;
 
 export type StandaloneBrowserController = Readonly<{
@@ -420,8 +420,8 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     const discard = (): void => {
       if (!disposed && currentGeneration === event.generation) void discardGeneration(epoch, event.generation);
     };
-    if (event.type === "ANALYSIS_ALL_FILES_FAILED") view.allFilesFailed(event.notAnalyzedFiles, event.revision, discard);
-    else view.succeeded(event.city, event.notAnalyzedFiles, event.revision, discard);
+    if (event.type === "ANALYSIS_ALL_FILES_FAILED") view.allFilesFailed(event.generation, event.notAnalyzedFiles, event.revision, discard);
+    else view.succeeded(event.generation, event.city, event.notAnalyzedFiles, event.revision, discard);
   };
 
   const openOwner = (): Readonly<{ owner: BrowserSessionOwner; epoch: number }> => {

@@ -47,7 +47,9 @@ test("current-state requirements and architecture distinguish implemented M5 fro
   assert.match(source, /Standalone M5 implements server-owned source acquisition and analysis[\s\S]*supported per-file continuation[\s\S]*temporary source-result association/u);
   assert.match(city, /current standalone M5 implementation has server-owned acquisition and analysis in a dedicated Node\.js worker/u);
   assert.match(city, /successful current result retains its exact analyzed-source association in process memory[\s\S]*browser receives only the source-free city and sanitized failed-file rows/u);
+  assert.match(city, /now exposes every successful fact[\s\S]*searchable and three-way sortable inventory[\s\S]*shared canonical-index selection[\s\S]*do not move or focus the camera/u);
   assert.match(risks, /Standalone M5 has completed the move to server-owned acquisition and analysis[\s\S]*per-file continuation/u);
+  assert.match(risks, /now has the complete successful-file inventory and selection without camera movement/u);
   for (const category of [
     "Source text is not supported",
     "Syntax could not be analyzed",
@@ -66,6 +68,8 @@ test("current-state requirements and architecture distinguish implemented M5 fro
     /move from browser-owned acquisition and analysis to server authority/iu,
     /without claiming that a server is implemented or deployed/iu,
     /At `9bcf7c8`[\s\S]{0,200}per-file failure continuation/iu,
+    /sortable successful-file inventory, or target camera policy/iu,
+    /Path-search activation selects and moves the camera/iu,
   ]) assert.doesNotMatch(currentStateDocumentation, staleClaim);
 });
 

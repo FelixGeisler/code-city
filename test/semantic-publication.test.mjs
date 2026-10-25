@@ -174,6 +174,7 @@ test("context publication is safe, selected context wins by supplied controller 
   assert.equal(text.textContent, "one/two");
   assert.equal(inspector.hidden, false);
   assert.equal(byDataset(inspector, "canonicalPath").textContent, selected.canonicalPath);
+  assert.equal(byDataset(inspector, "canonicalPath").attributes.get("dir"), "auto");
   const selectedDistrict = byDataset(inspector, "selectedDistrict");
   assert.equal(selectedDistrict.tagName, "BDI");
   assert.equal(selectedDistrict.attributes.get("dir"), "auto");
