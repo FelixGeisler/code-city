@@ -74,15 +74,17 @@ memory, and deployment qualification remain pending.
 `npm run verify` type-checks, runs tests, builds once, reproduces the manifest
 and every recorded byte, drives the actual packaged server, worker, parser
 assets, and browser with deterministic nonshipped provider evidence, verifies
-joined signal shutdown, audits the retirement notice and former analyzer URL
-inventory, and builds this documentation. Missing or stale artifacts fail
-closed.
+joined signal shutdown, validates the immutable retirement evidence, and builds
+this documentation. Missing or stale artifacts fail closed.
 
 A protected-main publication uploads the exact audited manifest-bound
-standalone artifact. GitHub Pages receives a separate versioned, script-free
-notice stating only that the in-browser analyzer is retired and the standalone
-artifact is deliverable. The notice is not a hosted Code City service and does
-not claim that the Pages repository setting is disabled.
+standalone artifact and its exact manifest/run publication record. Pages upload
+and deployment capability plus hosted-analyzer observation were removed only
+after the #625 cutover run, notice bytes, and all eight former analyzer `404`
+responses passed the live gate recorded in
+`publication/retirement-live-verification-v1.json`. The last script-free notice
+may remain reachable. No claim is made that the Pages repository setting is
+disabled, deleted, or changed.
 
 == Approved whole-core target beyond standalone M5
 

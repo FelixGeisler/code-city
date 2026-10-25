@@ -18,4 +18,5 @@ vendor/tree-sitter-typescript/provenance.json text eol=lf
 vendor/tree-sitter-typescript/wasm/*.wasm -text
 index.html text eol=lf
 publication/former-analyzer-assets-v1.json text eol=lf
+publication/retirement-live-verification-v1.json text eol=lf
 publication/retirement-notice-v1/index.html text eol=lf

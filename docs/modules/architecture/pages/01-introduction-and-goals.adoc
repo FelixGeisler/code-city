@@ -39,8 +39,9 @@ keep server, worker, parser, manifest, and source bytes private.
 
 |Verifiable delivery
 |Build one manifest-bound standalone artifact, reproduce every recorded byte,
-drive its actual server and browser, and publish it separately from the
-script-free Pages retirement notice.
+drive its actual server and browser, upload it with exact run identity, and
+retain immutable evidence that the separate retirement notice replaced the
+former analyzer before Pages deployment capability was removed.
 |===
 
 == Reading guide
