@@ -82,12 +82,20 @@ test("active standalone inventory documentation excludes non-mounted legacy sema
   assert.match(city, /retained legacy semantic row, legend, and search-reveal capabilities are historical implementation references, not current standalone behavior/iu);
   assert.match(city, /Camera action[\s\S]*active coordinator's no-op projection callback[\s\S]*no contextual row is published/iu);
   assert.match(city, /Resize[\s\S]*retain target\/orientation\/magnification[\s\S]*no-op projection callback has no DOM effect/iu);
+  assert.match(city, /Canonical paths already cross the existing provider-acquisition and source-free same-origin session boundaries[\s\S]*inventory query remains browser-local[\s\S]*Filtering, sorting, and selection introduce no additional provider or HTTP request/iu);
+  assert.match(city, /successful paths are published only in analyzed-list rows and the selected inspector[\s\S]*failed paths only in the separate `Not analyzed files` list[\s\S]*inert `<bdi dir="auto">` nodes assigned through `textContent`/iu);
+  assert.match(city, /Canonical paths already pass through the existing provider acquisition and the source-free same-origin session DTO[\s\S]*analyzed list, selected inspector, and separate `Not analyzed files` list/iu);
+  assert.match(city, /Inventory interaction derives no path- or query-based[\s\S]*release evidence and sends no source payload/iu);
+  assert.match(city, /Interaction derives no path- or query-based[\s\S]*evidence payload and sends no source payload/iu);
 
   for (const staleCurrentClaim of [
     /Every committed city reserves one `20px` normal-flow contextual row/iu,
     /Every committed city has one persistent, noninteractive legend/iu,
     /accepted camera action, wheel, resize, Reset, and search reveal invalidate/iu,
     /search-triggered camera reveal, and the current absence of source viewing are not the approved whole-core target/iu,
+    /Paths and queries never enter[\s\S]{0,160}provider traffic/iu,
+    /Repository paths may reach only inert inventory-row and selected-inspector/iu,
+    /Paths and queries do not enter[\s\S]{0,160}network traffic/iu,
   ]) assert.doesNotMatch(city, staleCurrentClaim);
 });
 

@@ -404,12 +404,18 @@ The complete list has no cap below the existing 4,000-module envelope and uses
 in normal flow and cannot overlay the city, inspector, Reset control, or
 separate `Not analyzed files` list.
 
-Each repository-derived path is published only as inert `<bdi dir="auto">`
-`textContent`. Paths and queries never enter attributes, IDs, classes, styles,
-URLs, object keys, logs, provider traffic, WebGL, telemetry, or release
-evidence. Ordinary native editing, select, scrolling, button activation, and
-Tab order apply. The controls are not autofocused and add no custom keyboard
-shortcuts.
+Canonical paths already cross the existing provider-acquisition and source-free
+same-origin session boundaries as successful inspection facts or sanitized
+failed-file rows. The inventory query remains browser-local. Filtering, sorting,
+and selection introduce no additional provider or HTTP request. In the
+interaction layer, successful paths are published only in analyzed-list rows and
+the selected inspector, and failed paths only in the separate `Not analyzed
+files` list, using inert `<bdi dir="auto">` nodes assigned through `textContent`.
+Inventory interaction derives no path- or query-based attributes, IDs, classes,
+styles, URLs, object keys, logs, WebGL values, telemetry, or release evidence and
+sends no source payload. Ordinary native editing, select, scrolling, button
+activation, and Tab order apply. The controls are not autofocused and add no
+custom keyboard shortcuts.
 
 The standalone presentation-session coordinator owns the presenter, inventory,
 and safe metric inspector for one generation. Control and row callbacks carry
@@ -952,10 +958,15 @@ Stale generations, sessions, tokens, callbacks, and frame epochs only clean up.
 There is no new category, raw diagnostic, retry, fallback, restoration, or
 partial city.
 
-Repository paths may reach only inert inventory-row and selected-inspector
-`<bdi dir="auto">` nodes through `textContent`. Paths and queries do not enter
-attributes, object keys, WebGL values, network traffic, logs, telemetry, or
-evidence payloads. Source bodies, provider locators and values, parser values,
+Canonical paths already pass through the existing provider acquisition and the
+source-free same-origin session DTO: successful paths are inspection facts and
+sanitized failures are failed-file rows. Browser publication places those paths
+only in inert `<bdi dir="auto">` nodes assigned through `textContent` in the
+analyzed list, selected inspector, and separate `Not analyzed files` list. The
+inventory query remains browser-local, and filtering, sorting, or selection adds
+no provider or HTTP call. Interaction derives no path- or query-based attribute,
+object key, URL, log, WebGL value, telemetry, or evidence payload and sends no
+source payload. Source bodies, provider locators and values, parser values,
 credentials, raw diagnostics, telemetry, and persisted product state do not
 reach interaction, inspection, WebGL, or release evidence. Packaged-browser
 evidence compares controlled fixture values inside the page and returns only
