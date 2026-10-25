@@ -2,11 +2,14 @@
 
 == Approved whole-core source and analysis target
 
-The requirements in this section are the approved target. The detailed language
-and metric rules later on this page are the single authoritative algorithms for
-both the current implementation and the initial server-owned target. Current
-browser acquisition and whole-attempt parser behavior remain transitional
-implementation facts; they are not the approved ownership or failure target.
+The requirements in this section are the approved whole-core target. The
+detailed language and metric rules later on this page are the single
+authoritative algorithms for both the implemented standalone M5 slice and the
+later whole-core target. Standalone M5 implements server-owned source
+acquisition and analysis, complete acquisition before file processing,
+supported per-file continuation, and temporary source-result association.
+Browser source viewing and saved investigations remain later whole-core
+outcomes.
 
 [[CC-CORE-SRC-01]]
 === Public repository input
@@ -125,12 +128,15 @@ classification.
 
 The suffixes, pinned grammar selection, strict UTF-8, BOM, newline, and NUL
 handling, unit ownership, syntax coverage, and metric algorithms below are the
-initial target contract and grammar authority. The pinned assets, provenance
-evidence, and current tests support these rules without implying
-that server acquisition, recursive presentation, or persistence exists.
-Current evidence is in `test/base-metrics.test.mjs`,
-`test/complexity.test.mjs`, `test/csharp-qualification.test.mjs`, and
-`test/source-admission.test.mjs`.
+initial target contract and grammar authority. Standalone M5 applies these
+rules in its server-owned worker and continues supported per-file failures as
+`Source text is not supported`, `Syntax could not be analyzed`, or `Metrics
+could not be computed`. This does not imply the later recursive presentation,
+browser source view, or persistence outcomes. Algorithm evidence is in
+`test/base-metrics.test.mjs`, `test/complexity.test.mjs`,
+`test/csharp-qualification.test.mjs`, and `test/source-admission.test.mjs`;
+server-owned continuation evidence is in `test/project-analysis.test.mjs` and
+`test/node-worker-runtime.test.mjs`.
 
 [[authoritative-admission]]
 == Admission
