@@ -31,6 +31,7 @@ export type StartNodeWorkerAttemptOptions = Readonly<{
   workerUrl?: URL;
   workerFactory?: NodeWorkerFactory;
   release?: () => void;
+  onRevisionSelected?: (revision: string) => void;
 }>;
 
 function providerFailure(attemptId: string, generation: number, revision?: string): NodeWorkerFailure {
@@ -148,6 +149,8 @@ export function startNodeWorkerAttempt(options: StartNodeWorkerAttemptOptions): 
     if (event.type === "REVISION_SELECTED") {
       if (selectedRevision !== undefined) { terminateInvalid(); return; }
       selectedRevision = event.revision;
+      try { options.onRevisionSelected?.(event.revision); }
+      catch { terminateInvalid(); }
       return;
     }
     if ("revision" in event) {

@@ -68,28 +68,37 @@ the configured canonical host and actual port. Native HTTP ingress applies one
 fail-closed Host, target, method, Origin, media-type, expectation, framing, and
 bounded-body sequence. Static GET and HEAD serve only prevalidated public
 fixture bytes. Rejections close the connection without draining a body or
-dispatching later pipelined work. Reserved session and command routes have no
-production handlers and therefore return unavailable responses without reading
-a body or creating state. The inactive worker boundary and perimeter are not
-connected; session, capacity, discard, loss, and shutdown orchestration remain
-unimplemented.
+dispatching later pipelined work. When the inactive session runtime is
+constructed, the reserved routes implement one persistent session response and
+separate analyze, cancel, and discard commands. Every command body completes,
+strictly decodes, and exactly parses before lifecycle or capacity changes.
 
-The accepted complete standalone slice will run the browser application and
-internal application requests on that same-origin service. The implemented
-inactive attempt boundary creates one dedicated `worker_threads` worker. Its
-parent terminates and awaits exit of a worker that must stop, and stale worker
-messages cannot publish discarded state. Later session orchestration will own
-admission and disposal around this boundary. This same-process worker boundary
-does not sandbox source or guarantee survival of process or host out-of-memory
-failure.
+A valid Analyze first advances its generation and joins/releases any prior
+active or current state. It then atomically reserves one worker slot and the
+full 40 MiB source envelope before creating the dedicated `worker_threads`
+worker. A successful joined result shrinks that reservation to exact retained
+normalized bytes; failure releases it. Cancel and discard make work ineligible,
+terminate and join active work, release ownership, and only then emit their
+control event. Replacement emits no synthetic event, and stale completion
+cannot promote discarded state.
+
+Each session writes one complete JSON line per `res.write`. One false return
+waits for `drain` without a lower frame limit. A second event or mutating command
+while blocked initiates session loss without another write. Reported request
+abort, response close/error, and owning-socket close use the same idempotent
+loss path. SIGINT and SIGTERM stop admission, invalidate work, join workers,
+discard retained state, close responses, and complete only with zero ownership
+counters. This same-process worker boundary does not sandbox source or guarantee
+survival of process or host out-of-memory failure.
 
 The xref:requirements:standalone-m5-operating-policy.adoc[standalone M5
 operating policy] owns temporary process-memory custody, session-loss and
 shutdown cleanup, loopback-first exposure, and finite operator-set admission.
-Session and event payloads, lifecycle states, session-loss detection,
-deployment values, and capacity values remain later implementation contracts.
-The perimeter is not packaged, activated, or deployed, and no Raspberry Pi
-behavior is qualified by this baseline.
+The internal session/event payloads, lifecycle states, and reported-loss
+handling are implemented by this inactive runtime. Deployment values and
+calibrated capacity values remain later operator/deployment contracts. The
+perimeter and runtime are not packaged, activated, or deployed, and no
+Raspberry Pi behavior is qualified by this baseline.
 
 == Accepted whole-core runtime outcomes
 

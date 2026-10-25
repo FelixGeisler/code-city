@@ -52,7 +52,7 @@ parentPort.on("message", (command) => {
   return pathToFileURL(file);
 }
 
-function run(url, mode, release = () => {}, capture = () => {}) {
+function run(url, mode, release = () => {}, capture = () => {}, onRevisionSelected) {
   return startNodeWorkerAttempt({
     repository: REPOSITORY, generation: 11, workerUrl: url,
     workerFactory: (entry) => {
@@ -61,6 +61,7 @@ function run(url, mode, release = () => {}, capture = () => {}) {
       return worker;
     },
     release,
+    onRevisionSelected,
   });
 }
 
@@ -93,6 +94,14 @@ function workerMessageBarrier(predicate) {
     worker: () => worker,
   };
 }
+
+test("validated revision selection is exposed once before the joined terminal result", async (t) => {
+  const url = await faultWorker(t);
+  const revisions = [];
+  const attempt = run(url, "normal-delay", () => {}, () => {}, (revision) => revisions.push(revision));
+  assert.equal((await attempt.result).type, "FAILURE");
+  assert.deepEqual(revisions, [SHA]);
+});
 
 test("terminal values remain provisional until a joined normal exit", async (t) => {
   const url = await faultWorker(t);
