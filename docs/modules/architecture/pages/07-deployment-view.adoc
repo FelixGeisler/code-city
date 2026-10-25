@@ -19,27 +19,33 @@ security audit, the isolated Node type check, and `npm run verify`. That root
 gate runs type checking and tests, builds the canonical artifact once,
 reproduces its manifest and every recorded byte in an isolated directory,
 drives the actual packaged server/worker/parser/browser, verifies signal
-shutdown, audits the notice and former-asset inventory, and builds the docs.
-It does not publish.
+shutdown, validates the immutable retirement evidence, and builds the docs. It
+does not publish.
 
 == Main publication path
 
 A protected-main push repeats the same gates and creates a publication record
 bound to `dist/package-manifest.json`, the exact commit, and the workflow run.
-It uploads the exact audited `dist/` directory as the standalone artifact.
+It uploads the exact audited `dist/` directory as the standalone artifact and
+uploads the manifest plus publication record as internal identity evidence.
+No Pages upload or deployment action, Pages or ID-token write permission,
+`github-pages` environment, eligibility query, or hosted analyzer observation
+job remains.
 
-The same workflow separately uploads `build/pages/`, which contains only the
-exact audited versioned retirement `index.html`, to the existing Pages deploy
-path. The notice contains no script, analyzer, worker, parser, grammar, form,
-provider request, or application client. GitHub Pages therefore hosts no Code
-City service.
+== Completed retirement cleanup
 
-The former in-browser analyzer JavaScript, browser-worker, and parser/grammar
-WASM URLs are versioned in
-`publication/former-analyzer-assets-v1.json`. They are the live-404 subject for
-the subsequent cleanup gate. The existing Pages and hosted-observation
-machinery remains until that exact live evidence is collected; its presence
-does not make the retirement notice an analyzer.
+`publication/retirement-live-verification-v1.json` records the exact #625 merge
+commit and successful automatic Publish run, every uploaded artifact ID and
+downloaded ZIP SHA-256, equality of the uploaded standalone manifest and its
+publication-record binding, exact live root and `/index.html` notice bytes, and
+`404` responses for all eight URLs in
+`publication/former-analyzer-assets-v1.json`. Its request and checkout
+timestamps establish that the live gate completed before cleanup editing.
+
+The cleanup removed repository workflow deployment capability and the obsolete
+hosted-analyzer observer only after that gate passed. The last script-free
+notice may remain reachable. This repository makes no claim that the GitHub
+Pages repository setting was disabled, deleted, or changed.
 
 == Later deployment design
 

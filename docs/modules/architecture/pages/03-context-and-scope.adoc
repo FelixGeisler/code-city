@@ -29,8 +29,10 @@ file retrieval
 |The bound canonical origin and shutdown diagnostics
 |===
 
-GitHub Pages is not the application service. It hosts only the versioned,
-script-free retirement notice for the former in-browser analyzer.
+GitHub Pages is not the application service. The last versioned, script-free
+retirement notice from the cutover may remain reachable, but repository
+workflows no longer deploy to Pages. No claim is made that the Pages repository
+setting is disabled.
 
 == Trust boundaries
 

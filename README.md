@@ -54,9 +54,9 @@ The service is loopback-first. Deliberate trusted-LAN use is limited to public G
 npm run verify
 ```
 
-This gate type-checks, tests, builds the canonical artifact once, reproduces every manifest-recorded byte, audits the actual packaged server/worker/parser/browser, verifies signal shutdown and the script-free retirement notice, and builds the documentation.
+This gate type-checks, tests, builds the canonical artifact once, reproduces every manifest-recorded byte, audits the actual packaged server/worker/parser/browser, verifies signal shutdown, validates the immutable retirement evidence, and builds the documentation.
 
-Pull requests run the same gate after locked install, dependency closure, security audit, and the isolated Node type check. A protected push to `main` uploads the exact audited `dist/` artifact and separately deploys the exact audited retirement notice to Pages. The former analyzer URL inventory for the subsequent live-404 check is versioned at `publication/former-analyzer-assets-v1.json`.
+Pull requests run the same gate after locked install, dependency closure, security audit, and the isolated Node type check. A protected push to `main` uploads the exact audited `dist/` artifact and its manifest-bound publication record. Pages deployment and hosted analyzer observation were removed after the cutover notice and all eight former analyzer URLs were verified live. The last notice may remain reachable; the repository does not claim that the Pages setting is disabled. The immutable verification is `publication/retirement-live-verification-v1.json`.
 
 ## Documentation
 

@@ -223,6 +223,7 @@ test("the declared byte-fidelity attributes remain exact and effective", async (
     "vendor/tree-sitter-typescript/wasm/*.wasm -text",
     "index.html text eol=lf",
     "publication/former-analyzer-assets-v1.json text eol=lf",
+    "publication/retirement-live-verification-v1.json text eol=lf",
     "publication/retirement-notice-v1/index.html text eol=lf",
     "",
   ].join("\n");
@@ -257,6 +258,7 @@ test("the declared byte-fidelity attributes remain exact and effective", async (
     ...parserTextPaths,
     "index.html",
     "publication/former-analyzer-assets-v1.json",
+    "publication/retirement-live-verification-v1.json",
     "publication/retirement-notice-v1/index.html",
   ];
   const output = execFileSync("git", ["check-attr", "text", "eol", "--", ...lfPaths, ...binaryPaths], { cwd: projectRoot, encoding: "utf8" });
@@ -765,8 +767,7 @@ test("commands preserve the canonical package audit sequence and CI separates re
     typecheck: "tsc -p tsconfig.main.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.node.json",
     test: "node --test",
     "test:manifest": "node --test test/package-manifest.test.mjs test/publication-record.test.mjs",
-    "collect:production-evidence": "node tools/collect-production-evidence.mjs",
-    build: "node tools/build-standalone.mjs && node tools/build-retirement-notice.mjs",
+    build: "node tools/build-standalone.mjs",
     "test:reproducibility": "node tools/check-standalone-reproducibility.mjs && node tools/audit-cutover.mjs",
     start: "node dist/server/standalone.mjs",
     "test:package": "node tools/audit-standalone-package.mjs && node tools/check-standalone-signals.mjs && node tools/check-standalone-browser.mjs",
@@ -802,22 +803,31 @@ test("commands preserve the canonical package audit sequence and CI separates re
     assert.doesNotMatch(workflow, /check-security-audit|npm audit[^\n]*(?:--omit=dev|--production|\|\||continue-on-error)/u);
   }
   assert.doesNotMatch(ci, /upload-artifact|deploy-pages|configure-pages|environment:|pages:\s*write|id-token:\s*write|contents:\s*write/i);
+  assert.doesNotMatch(publish, /upload-pages-artifact|deploy-pages|configure-pages|github-pages|environment:|pages:\s*write|id-token:\s*write|eligibility|production-evidence|collect-production-evidence/i);
 });
 
-test("both evidence observers require SUCCESS.city.geometry and contain no inspection access or retention surface", async () => {
+test("the packaged browser observer requires SUCCESS.city.geometry and has no inspection access or retention surface", async () => {
   const browserEvidence = await readText("tools/check-browser-evidence.mjs");
   const browserStart = browserEvidence.indexOf("function pageObservationSource");
   const browserEnd = browserEvidence.indexOf("async function checkProductionSuccessPath", browserStart);
   const browserObserver = browserEvidence.slice(browserStart, browserEnd);
-  const productionObserver = await readText("tools/collect-production-evidence.mjs");
   assert.equal((browserObserver.match(/message\.city\.geometry/gu) ?? []).length, 2);
-  const productionStart = productionObserver.indexOf("export function createWorkerObserverSource");
-  const productionEnd = productionObserver.indexOf("\nexport ", productionStart + 1);
-  const productionWorkerObserver = productionObserver.slice(productionStart, productionEnd);
-  assert.match(productionWorkerObserver, /descriptors\.city\.value[\s\S]*getOwnPropertyDescriptor\(city,"geometry"\)/u);
-  for (const [name, source] of [["browser-package", browserObserver], ["production", productionWorkerObserver]]) {
-    assert.doesNotMatch(source, /inspection|canonicalPath/iu, `${name} observer must have no inspection field vocabulary`);
-  }
+  assert.doesNotMatch(browserObserver, /inspection|canonicalPath/iu);
+
+  for (const obsolete of [
+    "tools/collect-production-evidence.mjs",
+    "tools/production-evidence-schema.mjs",
+    "tools/evidence-packet-files.mjs",
+    "tools/finalize-production-evidence.mjs",
+    "tools/build-retirement-notice.mjs",
+    "test/production-evidence-collector.test.mjs",
+    "test/production-evidence-schema.test.mjs",
+    "test/evidence-packet-files.test.mjs",
+    "test/finalize-production-evidence.test.mjs",
+    "test/fixtures/evidence-packet-files-seams.mjs",
+    "test/fixtures/evidence-packet-fixture.mjs",
+    "test/fixtures/publication-workflow-seams.mjs",
+  ]) await assert.rejects(lstat(path.join(projectRoot, obsolete)), { code: "ENOENT" }, obsolete);
 });
 
 test("the packaged-Chrome watchdog is the exact ten-minute whole-harness bound", async () => {

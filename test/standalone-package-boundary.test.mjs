@@ -6,7 +6,7 @@ const packageManifest = JSON.parse(await readFile(new URL("../package.json", imp
 
 test("root commands atomically activate the canonical standalone artifact", () => {
   assert.equal(packageManifest.scripts.dev, "node tools/develop-standalone.mjs");
-  assert.equal(packageManifest.scripts.build, "node tools/build-standalone.mjs && node tools/build-retirement-notice.mjs");
+  assert.equal(packageManifest.scripts.build, "node tools/build-standalone.mjs");
   assert.equal(packageManifest.scripts.start, "node dist/server/standalone.mjs");
   assert.equal(packageManifest.scripts["test:reproducibility"], "node tools/check-standalone-reproducibility.mjs && node tools/audit-cutover.mjs");
   assert.equal(packageManifest.scripts["test:package"], "node tools/audit-standalone-package.mjs && node tools/check-standalone-signals.mjs && node tools/check-standalone-browser.mjs");

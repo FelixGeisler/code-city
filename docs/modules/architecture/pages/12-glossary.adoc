@@ -31,8 +31,10 @@ cancelled, or stale work from becoming current.
 |The full commit identity selected only by explicit analysis.
 
 |Retirement notice
-|The separate versioned script-free Pages document stating that the former
-in-browser analyzer is retired and the standalone artifact is deliverable.
+|The separate versioned script-free document deployed at cutover to state that
+the former in-browser analyzer is retired and the standalone artifact is
+deliverable. It may remain reachable; repository workflows no longer deploy it
+and do not claim that the Pages setting is disabled.
 
 |Saved investigation
 |The later immutable server-owned snapshot created only by explicit Save. It is

@@ -33,9 +33,11 @@ workers before release.
 events, suppress stale state, and render the city.
 
 |Delivery
-|Builder, manifest, audits, notice, inventory, workflows
+|Builder, manifest, audits, retirement evidence, workflows
 |Create deterministic canonical bytes, reproduce and drive the actual package,
-bind artifact upload, and deploy the separate retirement notice.
+bind standalone artifact upload, and validate the immutable cutover run,
+notice, and former-asset observations. Repository workflows do not deploy to
+Pages.
 |===
 
 [[data-boundaries]]

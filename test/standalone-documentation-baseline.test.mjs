@@ -92,7 +92,7 @@ test("obsolete browser-only architecture diagrams remain removed", async () => {
   }
 });
 
-test("architecture describes canonical package, publication separation, and pending qualification", async () => {
+test("architecture describes canonical package, standalone publication, completed retirement cleanup, and pending qualification", async () => {
   const [constraints, runtime, deployment, quality] = await Promise.all([
     read("docs/modules/architecture/pages/02-architecture-constraints.adoc"),
     read("docs/modules/architecture/pages/06-runtime-view.adoc"),
@@ -108,7 +108,9 @@ test("architecture describes canonical package, publication separation, and pend
   assert.doesNotMatch(runtime, /all-files-failed result retains only the accepted current failure association/iu);
   assert.match(runtime, /first complete NDJSON frame makes `res\.write` return false[\s\S]*retains that blocked frame and waits for `drain`[\s\S]*blocked write alone does not cause session loss[\s\S]*session, any retained source, and their admission capacity remain owned[\s\S]*Another event or a mutating command while the frame is blocked initiates joined session loss without another write/u);
   assert.match(runtime, /`npm run dev -- <flags>`[\s\S]*`build\/development\/`[\s\S]*no HMR or WebSocket/u);
-  assert.match(deployment, /uploads the exact audited `dist\/`[\s\S]*separately uploads `build\/pages\/`/u);
-  assert.match(deployment, /former in-browser analyzer JavaScript, browser-worker, and parser\/grammar WASM URLs/u);
+  assert.match(deployment, /uploads the exact audited `dist\/`[\s\S]*manifest plus publication record as internal identity evidence/u);
+  assert.match(deployment, /No Pages upload or deployment action[\s\S]*hosted analyzer observation job remains/u);
+  assert.match(deployment, /retirement-live-verification-v1\.json[\s\S]*all eight URLs/u);
+  assert.match(deployment, /last script-free notice may remain reachable[\s\S]*no claim that the GitHub Pages repository setting was disabled/u);
   assert.match(quality, /No Raspberry Pi performance, concurrency, memory, or deployment threshold is claimed/u);
 });
