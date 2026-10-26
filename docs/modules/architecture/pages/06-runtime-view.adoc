@@ -20,8 +20,13 @@ every recorded byte before publication.
 . Replacement joins and releases prior work. Capacity is reserved atomically
   before worker creation.
 . The worker selects an immutable revision, validates the complete source
-  inventory, reports acquisition `0/N` immediately before the first candidate
-  read and completion after each considered candidate, initializes the parser
+  inventory and every eligible blob identity, then owns a fixed window of at
+  most eight raw reads started in canonical order. Pending and completed but
+  unconsumed reads occupy the window; outcomes are consumed canonically, and a
+  known raw-failure horizon stops admission while preserving only the prefix
+  needed for serial-equivalent precedence. The worker reports acquisition
+  `0/N` before the first launch and completion after each considered candidate,
+  settles all raw reads before leaving acquisition, initializes the parser
   once, reports analysis `0/T` immediately before the first text-valid project
   call and completion only after each parser attempt's required cleanup,
   continues supported per-file failures, and reports city construction only

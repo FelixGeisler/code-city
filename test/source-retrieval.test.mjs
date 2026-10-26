@@ -9,12 +9,29 @@ registerHooks({
 });
 
 const { acquireProjectSources, retrieveAdmittedSources } = await import("../src/application/source-retrieval.ts");
+const { analyzeProjectSources } = await import("../src/application/project-analysis.ts");
+const { createNodeTreeSitterAdapter } = await import("../src/edge/node/parser-assets.ts");
 
 const REPOSITORY = { owner: "owner", repository: "repo", branch: null };
 const SHA40 = "a".repeat(40);
 const SHA64 = "b".repeat(64);
 const BLOB40 = "c".repeat(40);
 const regular = (path, sha = BLOB40) => ({ path, mode: "100644", type: "blob", sha });
+const encoder = new TextEncoder();
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolveValue, rejectValue) => {
+    resolve = resolveValue;
+    reject = rejectValue;
+  });
+  return { promise, resolve, reject };
+}
+
+function rawSource(text) {
+  return { kind: "source", rawBytes: encoder.encode(text) };
+}
 
 function gateway(entries, readSource = async () => ({ kind: "source", decodedSource: "" })) {
   const calls = [];
@@ -356,6 +373,366 @@ test("project acquisition enforces inclusive normalized limits and discards a la
   assert.deepEqual(cancelled, { kind: "cancelled" });
   assert.equal(Object.hasOwn(cancelled, "modules"), false);
   assert.equal(Object.hasOwn(cancelled, "notAnalyzedFiles"), false);
+});
+
+test("bounded raw acquisition owns at most eight pending or completed outcomes and a slow first file blocks candidate eight", async () => {
+  const entries = Array.from({ length: 10 }, (_, index) => regular(`${String(index).padStart(2, "0")}.ts`));
+  const controls = new Map();
+  const starts = [];
+  let owned = 0;
+  let peakOwned = 0;
+  const firstWindow = deferred();
+  const ninthStart = deferred();
+  const outcome = (index) => {
+    const rawBytes = encoder.encode(`source-${index}`);
+    return {
+      kind: "source",
+      get rawBytes() {
+        owned -= 1;
+        return rawBytes;
+      },
+    };
+  };
+  const pending = acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries }; },
+    readRawSource(_repository, _selected, candidate) {
+      const index = Number.parseInt(candidate.canonicalPath, 10);
+      starts.push(index);
+      owned += 1;
+      peakOwned = Math.max(peakOwned, owned);
+      assert(owned <= 8, `owned raw outcomes exceeded the window at ${index}`);
+      if (starts.length === 8) firstWindow.resolve();
+      if (starts.length === 9) ninthStart.resolve();
+      if (index >= 8) return Promise.resolve(outcome(index));
+      const control = deferred();
+      controls.set(index, control);
+      return control.promise;
+    },
+  });
+
+  await firstWindow.promise;
+  assert.deepEqual(starts, [0, 1, 2, 3, 4, 5, 6, 7]);
+  for (let index = 1; index < 8; index += 1) controls.get(index).resolve(outcome(index));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(starts, [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(owned, 8, "completed but unconsumed outcomes retain their slots");
+
+  controls.get(0).resolve(outcome(0));
+  await ninthStart.promise;
+  assert.deepEqual(starts.slice(0, 9), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  const result = await pending;
+  assert.equal(result.kind, "acquired");
+  assert.deepEqual(result.modules.map(({ canonicalPath }) => canonicalPath), entries.map(({ path }) => path));
+  assert.deepEqual(starts, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.equal(peakOwned, 8);
+  assert.equal(owned, 0);
+});
+
+test("reverse raw completion preserves canonical modules, failed rows, starts, and acquisition progress", async () => {
+  const entries = Array.from({ length: 12 }, (_, index) => regular(`${String(index).padStart(2, "0")}.ts`));
+  const controls = new Map();
+  const starts = [];
+  const progress = [];
+  const firstWindow = deferred();
+  const pending = acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries: [...entries].reverse() }; },
+    readRawSource(_repository, _selected, candidate) {
+      const index = Number.parseInt(candidate.canonicalPath, 10);
+      starts.push(index);
+      if (starts.length === 8) firstWindow.resolve();
+      if (index >= 8) return Promise.resolve(index === 10 ? { kind: "source", rawBytes: Uint8Array.of(0xff) } : rawSource(`${index}\r\n`));
+      const control = deferred();
+      controls.set(index, control);
+      return control.promise;
+    },
+  }, (ownership) => {
+    if (ownership.phase === "provider-candidate" || (ownership.phase === "provider-cleared" && ownership.candidateIndex !== undefined)) {
+      progress.push(ownership.candidateIndex);
+    }
+  });
+
+  await firstWindow.promise;
+  for (let index = 7; index >= 0; index -= 1) controls.get(index).resolve(index === 3
+    ? { kind: "source", rawBytes: Uint8Array.of(0xff) }
+    : rawSource(`${index}\r\n`));
+  const result = await pending;
+  assert.equal(result.kind, "acquired");
+  assert.deepEqual(starts, Array.from({ length: 12 }, (_, index) => index));
+  assert.deepEqual(result.modules.map(({ canonicalPath, normalizedSource }) => [canonicalPath, normalizedSource]), [
+    ["00.ts", "0\n"], ["01.ts", "1\n"], ["02.ts", "2\n"], ["04.ts", "4\n"], ["05.ts", "5\n"],
+    ["06.ts", "6\n"], ["07.ts", "7\n"], ["08.ts", "8\n"], ["09.ts", "9\n"], ["11.ts", "11\n"],
+  ]);
+  assert.deepEqual(result.notAnalyzedFiles, [
+    { canonicalPath: "03.ts", category: "Source text is not supported" },
+    { canonicalPath: "10.ts", category: "Source text is not supported" },
+  ]);
+  assert.deepEqual(progress, Array.from({ length: 13 }, (_, index) => index));
+});
+
+test("reverse and mixed inventory and raw completion preserve complete qualified-parser city output", async () => {
+  const sources = new Map([
+    ["a.js", "export function alpha(value) { return value ? 1 : 0; }\n"],
+    ["b.ts", "export const beta: number = 2;\n"],
+    ["c.tsx", "export const Gamma = () => <section />;\n"],
+    ["d.cs", "class Delta { int Measure(bool value) { return value ? 1 : 0; } }\n"],
+  ]);
+  const canonicalPaths = [...sources.keys()];
+  const scenarios = [
+    { inventory: canonicalPaths, completion: canonicalPaths },
+    { inventory: [...canonicalPaths].reverse(), completion: [...canonicalPaths].reverse() },
+    { inventory: ["c.tsx", "a.js", "d.cs", "b.ts"], completion: ["b.ts", "d.cs", "a.js", "c.tsx"] },
+  ];
+  const parser = createNodeTreeSitterAdapter();
+  const analyses = [];
+
+  for (const scenario of scenarios) {
+    const controls = new Map();
+    const starts = [];
+    const allStarted = deferred();
+    const pending = acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+      async loadInventory() {
+        return { kind: "inventory", entries: scenario.inventory.map((canonicalPath) => regular(canonicalPath)) };
+      },
+      readRawSource(_repository, _selected, candidate) {
+        starts.push(candidate.canonicalPath);
+        const control = deferred();
+        controls.set(candidate.canonicalPath, control);
+        if (controls.size === sources.size) allStarted.resolve();
+        return control.promise;
+      },
+    });
+
+    await allStarted.promise;
+    assert.deepEqual(starts, canonicalPaths);
+    for (const canonicalPath of scenario.completion) controls.get(canonicalPath).resolve(rawSource(sources.get(canonicalPath)));
+    const acquired = await pending;
+    assert.equal(acquired.kind, "acquired");
+    const analyzed = await analyzeProjectSources(acquired, parser);
+    assert.equal(analyzed.kind, "analyzed");
+    assert.deepEqual(analyzed.result.city.inspection.map(({ canonicalPath }) => canonicalPath), canonicalPaths);
+    analyses.push(analyzed);
+  }
+
+  assert.deepEqual(analyses[1], analyses[0]);
+  assert.deepEqual(analyses[2], analyses[0]);
+});
+
+test("the lowest known raw failure horizon stops admission, preserves the earlier prefix, and ignores internal abort outcomes", async () => {
+  const entries = Array.from({ length: 10 }, (_, index) => regular(`${index}.ts`));
+  const first = deferred();
+  const higherAborted = deferred();
+  const starts = [];
+  let abortedHigher = 0;
+  let outstanding = 0;
+  const pending = acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries }; },
+    readRawSource(_repository, _selected, candidate, signal) {
+      const index = Number.parseInt(candidate.canonicalPath, 10);
+      starts.push(index);
+      outstanding += 1;
+      if (index === 0) return first.promise.finally(() => { outstanding -= 1; });
+      if (index === 4) {
+        outstanding -= 1;
+        return Promise.resolve({ kind: "product-limit" });
+      }
+      if (index > 4) {
+        return new Promise((resolve) => signal.addEventListener("abort", () => {
+          abortedHigher += 1;
+          outstanding -= 1;
+          resolve({ kind: "provider-failure" });
+          if (abortedHigher === 3) higherAborted.resolve();
+        }, { once: true }));
+      }
+      outstanding -= 1;
+      return Promise.resolve(rawSource(`${index}`));
+    },
+  });
+
+  await higherAborted.promise;
+  assert.deepEqual(starts, [0, 1, 2, 3, 4, 5, 6, 7]);
+  first.resolve({ kind: "provider-failure" });
+  assert.deepEqual(await pending, { kind: "failure", category: "Provider/resolution failure" });
+  assert.equal(outstanding, 0);
+  assert.equal(starts.includes(8), false);
+});
+
+test("canonical observer and ownership failures precede prefetched raw failures", async () => {
+  const entries = Array.from({ length: 8 }, (_, index) => regular(`${index}.ts`));
+  const observerResult = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries }; },
+    async readRawSource(_repository, _selected, candidate) {
+      return candidate.canonicalPath === "2.ts" ? { kind: "product-limit" } : rawSource(candidate.canonicalPath);
+    },
+  }, (ownership) => {
+    if (ownership.phase === "provider-candidate" && ownership.candidateIndex === 2) throw new Error("observer");
+  });
+  assert.deepEqual(observerResult, { kind: "failure", category: "Provider/resolution failure" });
+
+  const target = {
+    async loadInventory() { return { kind: "inventory", entries }; },
+    async readRawSource(_repository, _selected, candidate) {
+      return candidate.canonicalPath === "4.ts" ? { kind: "product-limit" } : rawSource(candidate.canonicalPath);
+    },
+  };
+  const ownershipFault = new Proxy(target, {
+    getOwnPropertyDescriptor() { throw new Error("ownership"); },
+  });
+  assert.deepEqual(await acquireProjectSources(
+    REPOSITORY, SHA40, new AbortController().signal, ownershipFault,
+  ), { kind: "failure", category: "Provider/resolution failure" });
+});
+
+test("a lower canonical aggregate overflow precedes a known higher raw provider failure", async () => {
+  const entries = Array.from({ length: 28 }, (_, index) => regular(`${String(index).padStart(2, "0")}.ts`));
+  const exact = encoder.encode("x".repeat(2_097_152));
+  const result = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries }; },
+    async readRawSource(_repository, _selected, candidate) {
+      const index = Number.parseInt(candidate.canonicalPath, 10);
+      if (index === 27) return { kind: "provider-failure" };
+      return { kind: "source", rawBytes: index < 20 ? exact : Uint8Array.of(0x78) };
+    },
+  });
+  assert.deepEqual(result, { kind: "failure", category: "Repository exceeds Code City limits" });
+});
+
+test("a lower raw product limit precedes a known higher raw provider failure", async () => {
+  const entries = Array.from({ length: 10 }, (_, index) => regular(`${index}.ts`));
+  const lower = deferred();
+  const higherAborted = deferred();
+  const starts = [];
+  let abortedHigher = 0;
+  const pending = acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries }; },
+    readRawSource(_repository, _selected, candidate, signal) {
+      const index = Number.parseInt(candidate.canonicalPath, 10);
+      starts.push(index);
+      if (index === 0) return lower.promise;
+      if (index === 4) return Promise.resolve({ kind: "provider-failure" });
+      if (index > 4) {
+        return new Promise((resolve) => signal.addEventListener("abort", () => {
+          abortedHigher += 1;
+          resolve({ kind: "provider-failure" });
+          if (abortedHigher === 3) higherAborted.resolve();
+        }, { once: true }));
+      }
+      return Promise.resolve(rawSource(candidate.canonicalPath));
+    },
+  });
+
+  await higherAborted.promise;
+  assert.deepEqual(starts, [0, 1, 2, 3, 4, 5, 6, 7]);
+  lower.resolve({ kind: "product-limit" });
+  assert.deepEqual(await pending, { kind: "failure", category: "Repository exceeds Code City limits" });
+  assert.equal(starts.includes(8), false);
+});
+
+test("a synchronous candidate-zero raw throw stops admission after exactly one read", async () => {
+  let reads = 0;
+  const result = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() {
+      return { kind: "inventory", entries: Array.from({ length: 10 }, (_, index) => regular(`${index}.ts`)) };
+    },
+    readRawSource() {
+      reads += 1;
+      throw new Error("synchronous");
+    },
+  });
+  assert.deepEqual(result, { kind: "failure", category: "Provider/resolution failure" });
+  assert.equal(reads, 1);
+});
+
+test("a rejected candidate-zero raw read is handled without unhandled rejection", async () => {
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    let reads = 0;
+    const result = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+      async loadInventory() {
+        return { kind: "inventory", entries: Array.from({ length: 10 }, (_, index) => regular(`${index}.ts`)) };
+      },
+      readRawSource(_repository, _selected, candidate) {
+        reads += 1;
+        return candidate.canonicalPath === "0.ts"
+          ? Promise.reject(new Error("rejected"))
+          : Promise.resolve(rawSource(candidate.canonicalPath));
+      },
+    });
+    assert.deepEqual(result, { kind: "failure", category: "Provider/resolution failure" });
+    assert(reads <= 8);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("external cancellation with lower and higher unresolved reads waits for full terminal drain", async () => {
+  const entries = Array.from({ length: 8 }, (_, index) => regular(`${index}.ts`));
+  const controller = new AbortController();
+  const drainRelease = deferred();
+  const higherAborted = deferred();
+  const allAborted = deferred();
+  let aborted = 0;
+  let abortedHigher = 0;
+  let outstanding = 0;
+  let listenerAdds = 0;
+  let listenerRemoves = 0;
+  const originalAdd = controller.signal.addEventListener.bind(controller.signal);
+  const originalRemove = controller.signal.removeEventListener.bind(controller.signal);
+  controller.signal.addEventListener = (...args) => { listenerAdds += 1; return originalAdd(...args); };
+  controller.signal.removeEventListener = (...args) => { listenerRemoves += 1; return originalRemove(...args); };
+
+  const pending = acquireProjectSources(REPOSITORY, SHA40, controller.signal, {
+    async loadInventory() { return { kind: "inventory", entries }; },
+    readRawSource(_repository, _selected, candidate, signal) {
+      const index = Number.parseInt(candidate.canonicalPath, 10);
+      if (index === 4) return Promise.resolve({ kind: "provider-failure" });
+      outstanding += 1;
+      return new Promise((resolve) => signal.addEventListener("abort", () => {
+        aborted += 1;
+        if (index > 4) {
+          abortedHigher += 1;
+          if (abortedHigher === 3) higherAborted.resolve();
+        }
+        if (aborted === 7) allAborted.resolve();
+        drainRelease.promise.then(() => {
+          outstanding -= 1;
+          resolve({ kind: "provider-failure" });
+        });
+      }, { once: true }));
+    },
+  });
+
+  await higherAborted.promise;
+  let returned = false;
+  pending.then(() => { returned = true; });
+  await Promise.resolve();
+  assert.equal(returned, false, "known horizon returned before unresolved lower reads settled");
+  controller.abort();
+  await allAborted.promise;
+  await Promise.resolve();
+  assert.equal(returned, false, "external abort returned before all owned reads settled");
+  drainRelease.resolve();
+  assert.deepEqual(await pending, { kind: "cancelled" });
+  assert.equal(outstanding, 0);
+  assert.equal(listenerAdds, 1);
+  assert.equal(listenerRemoves, 1);
+});
+
+test("candidate-zero observer cancellation launches no raw read", async () => {
+  const controller = new AbortController();
+  let reads = 0;
+  const result = await acquireProjectSources(REPOSITORY, SHA40, controller.signal, {
+    async loadInventory() { return { kind: "inventory", entries: [regular("a.ts")] }; },
+    async readRawSource() { reads += 1; return rawSource("a"); },
+  }, (ownership) => {
+    if (ownership.phase === "provider-candidate") controller.abort();
+  });
+  assert.deepEqual(result, { kind: "cancelled" });
+  assert.equal(reads, 0);
 });
 
 test("current cancellation during inventory, JSON-equivalent completion, candidate read, hash wait, and between requests wins", async () => {

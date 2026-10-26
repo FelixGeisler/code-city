@@ -192,6 +192,18 @@ records have no product count limit.
 A repository outside this envelope fails as `Repository exceeds Code City
 limits`. It is never sampled, truncated, or partially processed.
 
+After complete inventory and eligible-blob preflight, one admitted standalone
+attempt may own at most eight raw-source read slots. Pending reads and completed
+raw outcomes awaiting canonical consideration both occupy a slot. Reads start
+in canonical order, while strict text handling, byte ownership, envelope
+checks, failed-file rows, retained modules, and progress remain canonically
+ordered. A known raw failure stops further admission; only the unresolved
+canonical prefix is retained to determine the same failure precedence as
+serial acquisition. Cancellation or terminal failure aborts and settles every
+owned read before the attempt returns. With `A` active admitted attempts, this
+phase can own at most `8 × A` slots; this is neither a memory, provider-capacity,
+latency, nor throughput promise.
+
 The standalone status reports measured phase-local completion inside this
 fixed envelope. After complete inventory and preflight validation, acquisition
 reports `0/N` immediately before the first supported candidate read and then
