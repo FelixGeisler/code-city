@@ -294,6 +294,7 @@ export async function inspectDependencyClosure(rootDirectory) {
   }
 
   const nodeTypes = lock.packages["node_modules/@types/node"];
+  invariant(!Object.hasOwn(nodeTypes, "peer"), "@types/node peer metadata changed");
   invariant(
     nodeTypes.dev === true
       && JSON.stringify(nodeTypes.dependencies) === JSON.stringify({ "undici-types": ">=7.24.0 <7.24.7" })
