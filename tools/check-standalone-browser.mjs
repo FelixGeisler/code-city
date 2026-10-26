@@ -535,6 +535,7 @@ export async function checkStandaloneBrowser() {
     await installDelayedControlResponse("/_code-city/analyze");
     await submit();
     await waitForLog(harness, logStart, (rows) => rows.some(({ event }) => event === "first-acquisition-held"), "first acquisition barrier");
+    await waitForLog(harness, logStart, (rows) => rows.some(({ event }) => event === "acquisition-window-filled"), "bounded acquisition overlap");
     current = latestAnalyze();
     await waitForProgressEvent("acquisition", current.generation, current.sessionId, (event) => event.completed === 0 && event.total === 3, "acquisition zero");
     await assertMeasuredProgress("Acquiring files 0 of 3", 0, 3, "held first acquisition file");

@@ -125,6 +125,27 @@ function providerFailure(): SourceFailure {
   return { kind: "failure", category: "Provider/resolution failure" };
 }
 
+const RAW_SOURCE_READ_WINDOW = 8;
+
+type RawReadOutcome =
+  | Readonly<{ kind: "gateway"; value: RawSourceGatewayResult }>
+  | Readonly<{ kind: "thrown" }>;
+
+type RawReadSlot = {
+  readonly index: number;
+  readonly controller: AbortController;
+  settled: Promise<void>;
+  outcome?: RawReadOutcome;
+  isSettled: boolean;
+  internallyAborted: boolean;
+  released: boolean;
+};
+
+type CandidateConsumption =
+  | Readonly<{ kind: "module"; module: AcquiredProjectModule }>
+  | Readonly<{ kind: "unsupported" }>
+  | Readonly<{ kind: "fatal"; failure: SourceFailure }>;
+
 export async function acquireProjectSources(
   repository: RepositoryReference,
   selected: string,
@@ -166,60 +187,232 @@ export async function acquireProjectSources(
       return terminal({ kind: "failure", category: "Repository exceeds Code City limits" });
     }
 
+    const slots = new Map<number, RawReadSlot>();
+    let nextAdmission = 0;
+    let rawFailureHorizon: number | undefined;
+    let admissionStopped = false;
     let normalizedTotalBytes = 0;
-    for (let index = 0; index < inventory.candidates.length; index += 1) {
-      if (signal.aborted) return terminal({ kind: "cancelled" });
+    let completion: ProjectSourceAcquisitionResult | undefined;
+
+    const abortSlot = (slot: RawReadSlot, internal: boolean): void => {
+      if (slot.isSettled || slot.controller.signal.aborted) return;
+      slot.internallyAborted ||= internal;
+      slot.controller.abort();
+    };
+    const abortAllOwned = (internal: boolean): void => {
+      admissionStopped = true;
+      for (const slot of slots.values()) abortSlot(slot, internal);
+    };
+    const updateRawFailureHorizon = (index: number): void => {
+      if (rawFailureHorizon !== undefined && rawFailureHorizon <= index) return;
+      rawFailureHorizon = index;
+      admissionStopped = true;
+      for (const slot of slots.values()) {
+        if (slot.index <= index) continue;
+        if (slot.isSettled) slot.outcome = undefined;
+        else abortSlot(slot, true);
+      }
+    };
+    const settleSlot = (slot: RawReadSlot, outcome: RawReadOutcome): void => {
+      slot.isSettled = true;
+      if (slot.internallyAborted || signal.aborted) {
+        slot.outcome = undefined;
+        return;
+      }
+      slot.outcome = outcome;
+      if (outcome.kind === "thrown") {
+        updateRawFailureHorizon(slot.index);
+        return;
+      }
+      try {
+        if (outcome.value.kind === "provider-failure" || outcome.value.kind === "product-limit") {
+          updateRawFailureHorizon(slot.index);
+        } else if (outcome.value.kind !== "source") {
+          slot.outcome = { kind: "thrown" };
+          updateRawFailureHorizon(slot.index);
+        }
+      } catch {
+        slot.outcome = { kind: "thrown" };
+        updateRawFailureHorizon(slot.index);
+      }
+    };
+    const launch = (index: number): void => {
+      if (signal.aborted || admissionStopped) return;
       const candidate = inventory.candidates[index]!;
-      const expectedBlobId = candidate.expectedBlobId!;
-      observe({
-        phase: "provider-candidate",
-        candidateIndex: index,
-        candidateCount: inventory.candidates.length,
-        projectedInventory: true,
-        providerResource: false,
-      });
-      const source = await gateway.readRawSource(repository, selected, { ...candidate, expectedBlobId }, signal);
-      if (signal.aborted) return terminal({ kind: "cancelled" });
-      if (source.kind === "provider-failure") return terminal(providerFailure());
-      if (source.kind === "product-limit") {
-        return terminal({ kind: "failure", category: "Repository exceeds Code City limits" });
+      const controller = new AbortController();
+      const slot: RawReadSlot = {
+        index,
+        controller,
+        settled: Promise.resolve(),
+        isSettled: false,
+        internallyAborted: false,
+        released: false,
+      };
+      slots.set(index, slot);
+      try {
+        const pending = Promise.resolve(gateway.readRawSource(
+          repository,
+          selected,
+          { ...candidate, expectedBlobId: candidate.expectedBlobId! },
+          controller.signal,
+        ));
+        slot.settled = pending.then(
+          (value) => settleSlot(slot, { kind: "gateway", value }),
+          () => settleSlot(slot, { kind: "thrown" }),
+        );
+      } catch {
+        settleSlot(slot, { kind: "thrown" });
+      }
+    };
+    const fillWindow = (): void => {
+      while (!signal.aborted && !admissionStopped && nextAdmission < inventory.candidates.length
+        && slots.size < RAW_SOURCE_READ_WINDOW) {
+        launch(nextAdmission);
+        nextAdmission += 1;
+      }
+    };
+    const releaseSlot = (slot: RawReadSlot): void => {
+      if (slot.released) return;
+      slot.outcome = undefined;
+      slot.released = true;
+      slots.delete(slot.index);
+    };
+    const consumeSlot = (slot: RawReadSlot, candidate: SourceCandidate): CandidateConsumption => {
+      const outcome = slot.outcome;
+      slot.outcome = undefined;
+      if (!outcome || outcome.kind === "thrown") {
+        return { kind: "fatal", failure: providerFailure() };
+      }
+      try {
+        if (outcome.value.kind === "provider-failure") {
+          return { kind: "fatal", failure: providerFailure() };
+        }
+        if (outcome.value.kind === "product-limit") {
+          return { kind: "fatal", failure: { kind: "failure", category: "Repository exceeds Code City limits" } };
+        }
+        let decodedSource: string;
+        try {
+          decodedSource = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(outcome.value.rawBytes);
+        } catch {
+          return { kind: "unsupported" };
+        }
+        const normalized = normalizeSourceText(decodedSource);
+        if (!normalized) return { kind: "unsupported" };
+        applyRequestedSourceByteOwnership(gateway, normalized.normalizedUtf8);
+        if (normalized.normalizedUtf8.byteLength > MAX_NORMALIZED_MODULE_BYTES
+          || normalizedTotalBytes + normalized.normalizedUtf8.byteLength > MAX_NORMALIZED_TOTAL_BYTES) {
+          return { kind: "fatal", failure: { kind: "failure", category: "Repository exceeds Code City limits" } };
+        }
+        return {
+          kind: "module",
+          module: {
+            canonicalPath: candidate.canonicalPath,
+            normalizedSource: normalized.normalizedSource,
+            normalizedUtf8: normalized.normalizedUtf8,
+          },
+        };
+      } catch {
+        return { kind: "fatal", failure: providerFailure() };
+      }
+    };
+    const drainOwned = async (): Promise<void> => {
+      const owned = [...slots.values()];
+      for (const slot of owned) {
+        slot.outcome = undefined;
+        abortSlot(slot, true);
+      }
+      await Promise.all(owned.map((slot) => slot.settled));
+      for (const slot of owned) releaseSlot(slot);
+    };
+    const externalAbort = (): void => abortAllOwned(false);
+    signal.addEventListener("abort", externalAbort, { once: true });
+
+    try {
+      if (signal.aborted) {
+        abortAllOwned(false);
+      } else {
+        observe({
+          phase: "provider-candidate",
+          candidateIndex: 0,
+          candidateCount: inventory.candidates.length,
+          projectedInventory: true,
+          providerResource: false,
+        });
+        if (signal.aborted) abortAllOwned(false);
+        else fillWindow();
       }
 
-      let decodedSource: string;
-      try {
-        decodedSource = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(source.rawBytes);
-      } catch {
-        notAnalyzedFiles.push({ canonicalPath: candidate.canonicalPath, category: "Source text is not supported" });
-        continue;
+      for (let index = 0; index < inventory.candidates.length && !completion; index += 1) {
+        if (signal.aborted) {
+          abortAllOwned(false);
+          break;
+        }
+        const slot = slots.get(index);
+        if (!slot) {
+          completion = providerFailure();
+          abortAllOwned(true);
+          break;
+        }
+        if (index > 0) {
+          observe({
+            phase: "provider-candidate",
+            candidateIndex: index,
+            candidateCount: inventory.candidates.length,
+            projectedInventory: true,
+            providerResource: false,
+          });
+          if (signal.aborted) {
+            abortAllOwned(false);
+            break;
+          }
+        }
+        await slot.settled;
+        if (signal.aborted) {
+          abortAllOwned(false);
+          break;
+        }
+        const consumed = consumeSlot(slot, inventory.candidates[index]!);
+        releaseSlot(slot);
+        if (consumed.kind === "fatal") {
+          completion = consumed.failure;
+          abortAllOwned(true);
+          break;
+        }
+        if (consumed.kind === "unsupported") {
+          notAnalyzedFiles.push({
+            canonicalPath: inventory.candidates[index]!.canonicalPath,
+            category: "Source text is not supported",
+          });
+        } else {
+          normalizedTotalBytes += consumed.module.normalizedUtf8.byteLength;
+          modules.push(consumed.module);
+        }
+        fillWindow();
       }
-      const normalized = normalizeSourceText(decodedSource);
-      if (!normalized) {
-        notAnalyzedFiles.push({ canonicalPath: candidate.canonicalPath, category: "Source text is not supported" });
-        continue;
+
+      if (!completion && !signal.aborted) {
+        observe({
+          phase: "provider-cleared",
+          candidateIndex: inventory.candidates.length,
+          candidateCount: inventory.candidates.length,
+          projectedInventory: false,
+          providerResource: false,
+        });
+        if (!signal.aborted) {
+          observe({ phase: "static", projectedInventory: false, providerResource: false });
+        }
+        if (!signal.aborted) completion = { kind: "acquired", selected, modules, notAnalyzedFiles };
       }
-      applyRequestedSourceByteOwnership(gateway, normalized.normalizedUtf8);
-      if (normalized.normalizedUtf8.byteLength > MAX_NORMALIZED_MODULE_BYTES
-        || normalizedTotalBytes + normalized.normalizedUtf8.byteLength > MAX_NORMALIZED_TOTAL_BYTES) {
-        return terminal({ kind: "failure", category: "Repository exceeds Code City limits" });
-      }
-      normalizedTotalBytes += normalized.normalizedUtf8.byteLength;
-      modules.push({
-        canonicalPath: candidate.canonicalPath,
-        normalizedSource: normalized.normalizedSource,
-        normalizedUtf8: normalized.normalizedUtf8,
-      });
+    } catch {
+      completion = providerFailure();
+      abortAllOwned(true);
     }
 
-    observe({
-      phase: "provider-cleared",
-      candidateIndex: inventory.candidates.length,
-      candidateCount: inventory.candidates.length,
-      projectedInventory: false,
-      providerResource: false,
-    });
+    await drainOwned();
+    signal.removeEventListener("abort", externalAbort);
     if (signal.aborted) return terminal({ kind: "cancelled" });
-    observe({ phase: "static", projectedInventory: false, providerResource: false });
-    return { kind: "acquired", selected, modules, notAnalyzedFiles };
+    if (!completion || completion.kind === "cancelled") return terminal(completion ?? providerFailure());
+    return completion.kind === "failure" ? terminal(completion) : completion;
   } catch {
     return terminal(signal.aborted ? { kind: "cancelled" } : providerFailure());
   }

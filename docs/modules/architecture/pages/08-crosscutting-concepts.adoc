@@ -16,14 +16,16 @@ never executed.
 |xref:requirements:source-and-metrics.adoc[Source and Metrics], boundary tests
 
 |Deterministic processing
-|Captured exclusions, canonical paths, parser assets, metrics, city
-construction, package paths, and manifests have closed ordering and validation.
+|Captured exclusions, canonical paths, raw-read starts, canonical raw-outcome
+consumption, parser assets, metrics, city construction, package paths, and
+manifests have closed ordering and validation.
 |requirements, domain tests, standalone manifest and reproducibility tests
 
 |Temporary ownership
-|Explicit capacity is reserved before work. Source/result association remains
-in process memory and is released after joined replacement, control, loss, or
-shutdown cleanup.
+|Explicit capacity is reserved before work. Each acquiring attempt owns at most
+eight pending or completed-not-consumed raw-read slots and settles them before
+leaving acquisition. Source/result association remains in process memory and
+is released after joined replacement, control, loss, or shutdown cleanup.
 |xref:requirements:standalone-m5-operating-policy.adoc[Operating Policy],
 session and signal tests
 

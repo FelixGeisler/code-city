@@ -11,9 +11,11 @@ camera and picking policy
 
 |Application
 |Raw-source acquisition and project analysis
-|Validate complete inventory and source ownership, continue supported per-file
-failures, construct the city, and retain the exact successful source
-association for the current temporary result.
+|Validate complete inventory and source ownership, schedule at most eight
+per-attempt raw reads while consuming outcomes canonically, settle acquisition
+before analysis, continue supported per-file failures, construct the city, and
+retain the exact successful source association for the current temporary
+result.
 
 |Node edge
 |GitHub gateways, parser adapter/assets, analysis worker

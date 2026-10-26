@@ -9,8 +9,10 @@
   mutation, replaces prior work through joined cleanup, and atomically reserves
   worker and source capacity.
 . One worker resolves the selected branch or default head to an immutable
-  commit, validates commit and tree evidence, acquires admitted blobs, and
-  retains normalized source only for the current temporary result.
+  commit, validates commit and tree evidence, acquires admitted blobs through a
+  bounded eight-slot raw-read window with canonical outcome consumption and
+  joined cleanup, and retains normalized source only for the current temporary
+  result.
 . One initialized parser capability continues supported per-file text, syntax,
   and metric failures, constructs a deterministic city from successful facts,
   and returns sanitized failed-file rows.
