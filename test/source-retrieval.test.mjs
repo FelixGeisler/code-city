@@ -9,6 +9,8 @@ registerHooks({
 });
 
 const { acquireProjectSources, retrieveAdmittedSources } = await import("../src/application/source-retrieval.ts");
+const { analyzeProjectSources } = await import("../src/application/project-analysis.ts");
+const { createNodeTreeSitterAdapter } = await import("../src/edge/node/parser-assets.ts");
 
 const REPOSITORY = { owner: "owner", repository: "repo", branch: null };
 const SHA40 = "a".repeat(40);
@@ -468,6 +470,54 @@ test("reverse raw completion preserves canonical modules, failed rows, starts, a
   assert.deepEqual(progress, Array.from({ length: 13 }, (_, index) => index));
 });
 
+test("reverse and mixed inventory and raw completion preserve complete qualified-parser city output", async () => {
+  const sources = new Map([
+    ["a.js", "export function alpha(value) { return value ? 1 : 0; }\n"],
+    ["b.ts", "export const beta: number = 2;\n"],
+    ["c.tsx", "export const Gamma = () => <section />;\n"],
+    ["d.cs", "class Delta { int Measure(bool value) { return value ? 1 : 0; } }\n"],
+  ]);
+  const canonicalPaths = [...sources.keys()];
+  const scenarios = [
+    { inventory: canonicalPaths, completion: canonicalPaths },
+    { inventory: [...canonicalPaths].reverse(), completion: [...canonicalPaths].reverse() },
+    { inventory: ["c.tsx", "a.js", "d.cs", "b.ts"], completion: ["b.ts", "d.cs", "a.js", "c.tsx"] },
+  ];
+  const parser = createNodeTreeSitterAdapter();
+  const analyses = [];
+
+  for (const scenario of scenarios) {
+    const controls = new Map();
+    const starts = [];
+    const allStarted = deferred();
+    const pending = acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+      async loadInventory() {
+        return { kind: "inventory", entries: scenario.inventory.map((canonicalPath) => regular(canonicalPath)) };
+      },
+      readRawSource(_repository, _selected, candidate) {
+        starts.push(candidate.canonicalPath);
+        const control = deferred();
+        controls.set(candidate.canonicalPath, control);
+        if (controls.size === sources.size) allStarted.resolve();
+        return control.promise;
+      },
+    });
+
+    await allStarted.promise;
+    assert.deepEqual(starts, canonicalPaths);
+    for (const canonicalPath of scenario.completion) controls.get(canonicalPath).resolve(rawSource(sources.get(canonicalPath)));
+    const acquired = await pending;
+    assert.equal(acquired.kind, "acquired");
+    const analyzed = await analyzeProjectSources(acquired, parser);
+    assert.equal(analyzed.kind, "analyzed");
+    assert.deepEqual(analyzed.result.city.inspection.map(({ canonicalPath }) => canonicalPath), canonicalPaths);
+    analyses.push(analyzed);
+  }
+
+  assert.deepEqual(analyses[1], analyses[0]);
+  assert.deepEqual(analyses[2], analyses[0]);
+});
+
 test("the lowest known raw failure horizon stops admission, preserves the earlier prefix, and ignores internal abort outcomes", async () => {
   const entries = Array.from({ length: 10 }, (_, index) => regular(`${index}.ts`));
   const first = deferred();
@@ -547,27 +597,71 @@ test("a lower canonical aggregate overflow precedes a known higher raw provider 
   assert.deepEqual(result, { kind: "failure", category: "Repository exceeds Code City limits" });
 });
 
-test("synchronous and rejected raw reads are handled immediately without unhandled rejection", async () => {
+test("a lower raw product limit precedes a known higher raw provider failure", async () => {
+  const entries = Array.from({ length: 10 }, (_, index) => regular(`${index}.ts`));
+  const lower = deferred();
+  const higherAborted = deferred();
+  const starts = [];
+  let abortedHigher = 0;
+  const pending = acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() { return { kind: "inventory", entries }; },
+    readRawSource(_repository, _selected, candidate, signal) {
+      const index = Number.parseInt(candidate.canonicalPath, 10);
+      starts.push(index);
+      if (index === 0) return lower.promise;
+      if (index === 4) return Promise.resolve({ kind: "provider-failure" });
+      if (index > 4) {
+        return new Promise((resolve) => signal.addEventListener("abort", () => {
+          abortedHigher += 1;
+          resolve({ kind: "provider-failure" });
+          if (abortedHigher === 3) higherAborted.resolve();
+        }, { once: true }));
+      }
+      return Promise.resolve(rawSource(candidate.canonicalPath));
+    },
+  });
+
+  await higherAborted.promise;
+  assert.deepEqual(starts, [0, 1, 2, 3, 4, 5, 6, 7]);
+  lower.resolve({ kind: "product-limit" });
+  assert.deepEqual(await pending, { kind: "failure", category: "Repository exceeds Code City limits" });
+  assert.equal(starts.includes(8), false);
+});
+
+test("a synchronous candidate-zero raw throw stops admission after exactly one read", async () => {
+  let reads = 0;
+  const result = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+    async loadInventory() {
+      return { kind: "inventory", entries: Array.from({ length: 10 }, (_, index) => regular(`${index}.ts`)) };
+    },
+    readRawSource() {
+      reads += 1;
+      throw new Error("synchronous");
+    },
+  });
+  assert.deepEqual(result, { kind: "failure", category: "Provider/resolution failure" });
+  assert.equal(reads, 1);
+});
+
+test("a rejected candidate-zero raw read is handled without unhandled rejection", async () => {
   const unhandled = [];
   const onUnhandled = (reason) => unhandled.push(reason);
   process.on("unhandledRejection", onUnhandled);
   try {
-    for (const mode of ["throw", "reject"]) {
-      let reads = 0;
-      const result = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
-        async loadInventory() { return { kind: "inventory", entries: Array.from({ length: 10 }, (_, index) => regular(`${index}.ts`)) }; },
-        readRawSource(_repository, _selected, candidate) {
-          reads += 1;
-          if (candidate.canonicalPath === "0.ts") {
-            if (mode === "throw") throw new Error("synchronous");
-            return Promise.reject(new Error("rejected"));
-          }
-          return Promise.resolve(rawSource(candidate.canonicalPath));
-        },
-      });
-      assert.deepEqual(result, { kind: "failure", category: "Provider/resolution failure" });
-      assert(reads <= 8, mode);
-    }
+    let reads = 0;
+    const result = await acquireProjectSources(REPOSITORY, SHA40, new AbortController().signal, {
+      async loadInventory() {
+        return { kind: "inventory", entries: Array.from({ length: 10 }, (_, index) => regular(`${index}.ts`)) };
+      },
+      readRawSource(_repository, _selected, candidate) {
+        reads += 1;
+        return candidate.canonicalPath === "0.ts"
+          ? Promise.reject(new Error("rejected"))
+          : Promise.resolve(rawSource(candidate.canonicalPath));
+      },
+    });
+    assert.deepEqual(result, { kind: "failure", category: "Provider/resolution failure" });
+    assert(reads <= 8);
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(unhandled, []);
   } finally {
@@ -575,12 +669,14 @@ test("synchronous and rejected raw reads are handled immediately without unhandl
   }
 });
 
-test("external cancellation during terminal drain wins and return waits for every owned raw read", async () => {
+test("external cancellation with lower and higher unresolved reads waits for full terminal drain", async () => {
   const entries = Array.from({ length: 8 }, (_, index) => regular(`${index}.ts`));
   const controller = new AbortController();
   const drainRelease = deferred();
+  const higherAborted = deferred();
   const allAborted = deferred();
   let aborted = 0;
+  let abortedHigher = 0;
   let outstanding = 0;
   let listenerAdds = 0;
   let listenerRemoves = 0;
@@ -593,10 +689,14 @@ test("external cancellation during terminal drain wins and return waits for ever
     async loadInventory() { return { kind: "inventory", entries }; },
     readRawSource(_repository, _selected, candidate, signal) {
       const index = Number.parseInt(candidate.canonicalPath, 10);
-      if (index === 0) return Promise.resolve({ kind: "provider-failure" });
+      if (index === 4) return Promise.resolve({ kind: "provider-failure" });
       outstanding += 1;
       return new Promise((resolve) => signal.addEventListener("abort", () => {
         aborted += 1;
+        if (index > 4) {
+          abortedHigher += 1;
+          if (abortedHigher === 3) higherAborted.resolve();
+        }
         if (aborted === 7) allAborted.resolve();
         drainRelease.promise.then(() => {
           outstanding -= 1;
@@ -606,12 +706,15 @@ test("external cancellation during terminal drain wins and return waits for ever
     },
   });
 
-  await allAborted.promise;
+  await higherAborted.promise;
   let returned = false;
   pending.then(() => { returned = true; });
   await Promise.resolve();
-  assert.equal(returned, false);
+  assert.equal(returned, false, "known horizon returned before unresolved lower reads settled");
   controller.abort();
+  await allAborted.promise;
+  await Promise.resolve();
+  assert.equal(returned, false, "external abort returned before all owned reads settled");
   drainRelease.resolve();
   assert.deepEqual(await pending, { kind: "cancelled" });
   assert.equal(outstanding, 0);

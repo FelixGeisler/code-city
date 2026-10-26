@@ -26,8 +26,11 @@ manifests have closed ordering and validation.
 eight pending or completed-not-consumed raw-read slots and settles them before
 leaving acquisition. Source/result association remains in process memory and
 is released after joined replacement, control, loss, or shutdown cleanup.
-|xref:requirements:standalone-m5-operating-policy.adoc[Operating Policy],
-session and signal tests
+|xref:requirements:source-and-metrics.adoc[Source and Metrics] and focused
+source-acquisition and GitHub-gateway tests govern the raw-read window and
+settlement. xref:requirements:standalone-m5-operating-policy.adoc[Operating
+Policy] governs privacy, attempt admission and capacity, and source custody;
+session and signal tests cover joined lifecycle cleanup.
 
 |Controlled publication
 |The browser receives only source-free validated events and inert path/failure
