@@ -67,7 +67,7 @@ export function createGithubRawSourceGateway() { return {
     }
     return { kind:"inventory", entries:[...(sources.has("src/Zeta.js")?[{path:"src",mode:"040000",type:"tree"}]:[]),...[...sources].map(([sourcePath,value])=>({path:sourcePath,mode:"100644",type:"blob",sha:value.sha}))] };
   },
-  async readRawSource(_repository,_selected,candidate,signal) { const source=sources.get(candidate.rawPath); if(source===undefined)return {kind:"provider-failure"}; if(scenario.mode==="progress-barriers"&&sourceReads++===0){record("first-acquisition-held");await waitForRelease(${JSON.stringify(acquisitionRelease)},signal);record("first-acquisition-released");}record("source"); return {kind:"source",rawBytes:source.rawBytes}; },
+  async readRawSource(_repository,_selected,candidate,signal) { const source=sources.get(candidate.rawPath); if(source===undefined)return {kind:"provider-failure"}; if(scenario.mode==="progress-barriers"){const sourceIndex=sourceReads++;if(sourceReads===3)record("acquisition-window-filled");if(sourceIndex===0){record("first-acquisition-held");await waitForRelease(${JSON.stringify(acquisitionRelease)},signal);record("first-acquisition-released");}}record("source"); return {kind:"source",rawBytes:source.rawBytes}; },
 }; }
 `, "utf8");
   await writeFile(parserModule, `${shared}

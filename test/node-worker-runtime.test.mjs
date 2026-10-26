@@ -134,7 +134,11 @@ runNodeAnalysisWorker(parentPort, {
       return { kind: "inventory", entries: inventory.map(([file]) => regular(file)) };
     },
     async readRawSource(_repository, _revision, candidate) {
-      if (workerData.scenario === "progressBarriers" && sourceReadCount++ === 0) await waitForRelease("first-acquisition");
+      if (workerData.scenario === "progressBarriers") {
+        const sourceIndex = sourceReadCount++;
+        if (sourceReadCount === 3) entered("acquisition-window-filled");
+        if (sourceIndex === 0) await waitForRelease("first-acquisition");
+      }
       if (workerData.scenario === "sourceProvider") return { kind: "provider-failure" };
       if (workerData.scenario === "productLimit") return { kind: "product-limit" };
       const row = inventory.find(([file]) => file === candidate.canonicalPath);
@@ -357,6 +361,7 @@ test("actual worker exposes zero and nonzero acquisition and analysis progress a
   t.after(() => controlled.close());
 
   await controlled.reached("first-acquisition");
+  await controlled.reached("acquisition-window-filled");
   assert.deepEqual(controlled.progress.map(({ stage, completed, total }) => ({ stage, completed, total })), [
     { stage: "acquisition", completed: 0, total: 3 },
   ]);

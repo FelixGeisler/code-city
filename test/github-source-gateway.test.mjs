@@ -314,6 +314,48 @@ test("aborting an active raw read cancels its acquired reader and releases its l
   assert.equal(released, 1);
 });
 
+test("native fake-fetch streams cancel overflow, propagate abort errors, and release reader locks", async () => {
+  const overflowBytes = new Uint8Array(RAW_CONTENT_CAP + 1);
+  let overflowCancelled = 0;
+  let overflowDigestCalls = 0;
+  const overflowStream = new ReadableStream({
+    start(controller) { controller.enqueue(overflowBytes); },
+    cancel() { overflowCancelled += 1; },
+  });
+  const overflow = createGithubRawSourceGateway(async (url) => ({
+    body: overflowStream, redirected: false, status: 200, url,
+  }), async () => {
+    overflowDigestCalls += 1;
+    throw new Error("overflow must not hash");
+  });
+  assert.deepEqual(await overflow.readRawSource(
+    REPOSITORY, SHA40, { canonicalPath: "a.ts", rawPath: "a.ts", expectedBlobId: SHA40 }, new AbortController().signal,
+  ), { kind: "product-limit" });
+  assert.equal(overflowCancelled, 1);
+  assert.equal(overflowDigestCalls, 0);
+  assert.equal(overflowStream.locked, false);
+
+  const controller = new AbortController();
+  let streamController;
+  let fetchStarted;
+  const started = new Promise((resolve) => { fetchStarted = resolve; });
+  const abortedStream = new ReadableStream({
+    start(value) { streamController = value; },
+  });
+  const aborted = createGithubRawSourceGateway(async (url, options) => {
+    options.signal.addEventListener("abort", () => streamController.error(new Error("native stream aborted")), { once: true });
+    fetchStarted();
+    return { body: abortedStream, redirected: false, status: 200, url };
+  });
+  const pending = aborted.readRawSource(
+    REPOSITORY, SHA40, { canonicalPath: "b.ts", rawPath: "b.ts", expectedBlobId: SHA40 }, controller.signal,
+  );
+  await started;
+  controller.abort();
+  await assert.rejects(pending, /native stream aborted/);
+  assert.equal(abortedStream.locked, false);
+});
+
 test("raw stream cap accepts exactly 4,194,307 bytes and the next byte cancels before hashing", async () => {
   assert.equal(RAW_CONTENT_CAP, 4_194_307);
   const exactBytes = new Uint8Array(RAW_CONTENT_CAP);
