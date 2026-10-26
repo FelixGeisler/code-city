@@ -47,7 +47,7 @@ export async function inspectDependencyClosure(rootDirectory) {
     "@antora/site-generator": "3.2.1",
     "@types/node": "24.19.2",
     typescript: "7.0.2",
-    vite: "8.3.4",
+    vite: "8.3.5",
   };
   invariant(
     JSON.stringify(packageManifest.devDependencies) === JSON.stringify(expectedDevDependencies),
@@ -111,9 +111,9 @@ export async function inspectDependencyClosure(rootDirectory) {
       license: "MPL-2.0",
     },
     vite: {
-      version: "8.3.4",
-      resolved: "https://registry.npmjs.org/vite/-/vite-8.3.4.tgz",
-      integrity: "sha512-IftLE8phJhdNRIGNEV4JCCvfNScoZQVfcXaN8TQropWGJtOHcu+iAB9pHcuGvmEb/kddw0LBe/jS8ztdC6xdiQ==",
+      version: "8.3.5",
+      resolved: "https://registry.npmjs.org/vite/-/vite-8.3.5.tgz",
+      integrity: "sha512-z1YpjieJ9g0ebTmQpLBv/oq9E3F9EIlOe+7LahW8SrE3LTiG3udBRUXQOlYXP9b+IC2q2phHeVxj9xGlw34OEQ==",
       license: "MIT",
     },
     "js-yaml": {
@@ -157,6 +157,47 @@ export async function inspectDependencyClosure(rootDirectory) {
       `${name} lock provenance differs from accepted evidence`,
     );
   }
+
+  const vite = lock.packages["node_modules/vite"];
+  invariant(vite.dev === true, "Vite must remain development-only");
+  invariant(
+    JSON.stringify(vite.dependencies) === JSON.stringify({
+      lightningcss: "^1.33.0",
+      picomatch: "^4.0.7",
+      postcss: "^8.5.30",
+      rolldown: "~1.2.14",
+      tinyglobby: "^0.2.17",
+    }),
+    "Vite dependency declarations differ from the qualified 8.3.5 record",
+  );
+  invariant(
+    JSON.stringify(vite.optionalDependencies) === JSON.stringify({ fsevents: "~2.3.3" }),
+    "Vite optional dependency declarations changed",
+  );
+  invariant(
+    JSON.stringify(vite.peerDependencies) === JSON.stringify({
+      "@types/node": "^20.19.0 || >=22.12.0",
+      "@vitejs/devtools": "^0.7.1 || ^0.8.0",
+      esbuild: "^0.27.0 || ^0.28.0",
+      jiti: ">=1.21.0",
+      less: "^4.0.0",
+      sass: "^1.70.0",
+      "sass-embedded": "^1.70.0",
+      stylus: ">=0.54.8",
+      sugarss: "^5.0.0",
+      terser: "^5.16.0",
+      tsx: "^4.8.1",
+      yaml: "^2.4.2",
+    }),
+    "Vite peer dependency declarations differ from the qualified 8.3.5 record",
+  );
+  invariant(
+    JSON.stringify(vite.peerDependenciesMeta) === JSON.stringify(Object.fromEntries(
+      ["@types/node", "@vitejs/devtools", "esbuild", "jiti", "less", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"]
+        .map((name) => [name, { optional: true }])),
+    ),
+    "Vite optional peer metadata differs from the qualified 8.3.5 record",
+  );
 
   const expectedHighClosure = {
     "@antora/cli": {
@@ -253,6 +294,7 @@ export async function inspectDependencyClosure(rootDirectory) {
   }
 
   const nodeTypes = lock.packages["node_modules/@types/node"];
+  invariant(!Object.hasOwn(nodeTypes, "peer"), "@types/node peer metadata changed");
   invariant(
     nodeTypes.dev === true
       && JSON.stringify(nodeTypes.dependencies) === JSON.stringify({ "undici-types": ">=7.24.0 <7.24.7" })

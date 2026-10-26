@@ -71,6 +71,28 @@ test("the dependency manifest and complete lock closure match the accepted pins"
   assert(result.registryPackageCount > 0);
 });
 
+test("the dependency closure guard rejects @types/node peer metadata independently", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "code-city-node-types-peer-"));
+  try {
+    await cp(path.join(projectRoot, "vendor"), path.join(root, "vendor"), { recursive: true });
+    await cp(path.join(projectRoot, "package.json"), path.join(root, "package.json"));
+    const lockPath = path.join(root, "package-lock.json");
+    await cp(path.join(projectRoot, "package-lock.json"), lockPath);
+    await inspectDependencyClosure(root);
+
+    const lock = JSON.parse(await readFile(lockPath, "utf8"));
+    lock.packages["node_modules/@types/node"].peer = true;
+    await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
+
+    await assert.rejects(
+      () => inspectDependencyClosure(root),
+      /@types\/node peer metadata changed/u,
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 test("selected parser assets, notices, provenance, ABI envelope, dylink, and canonical inventory match accepted evidence", async () => {
   await checkParserAssets();
 });
