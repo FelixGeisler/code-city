@@ -112,6 +112,7 @@ const bytes = new TextEncoder();
 let sourceReadCount = 0;
 let projectCount = 0;
 if (workerData.scenario === "earlyExit") {
+  await waitForRelease("early-exit");
   parentPort.close();
 } else runNodeAnalysisWorker(parentPort, {
   async revisionGateway(_repository, signal) {
@@ -297,7 +298,15 @@ function startTracked(bundle, scenario, release = () => {}) {
   };
 }
 
-async function startControlledWorker(bundle, scenario, { holdProgress, onAttemptRelease = () => {} } = {}) {
+async function startControlledWorker(bundle, scenario, {
+  holdProgress,
+  onAttemptRelease = () => {},
+  workerFactory = (url, port) => new Worker(url, {
+    workerData: { scenario, mode: scenario, control: port }, transferList: [port],
+  }),
+  onTerminal = () => {},
+  onExplicitPortClose = () => {},
+} = {}) {
   const { port1, port2 } = new MessageChannel();
   const phases = [];
   const progress = [];
@@ -315,7 +324,10 @@ async function startControlledWorker(bundle, scenario, { holdProgress, onAttempt
   const closePorts = () => {
     if (portsClosed) return;
     portsClosed = true;
+    port1.off("message", onControlMessage);
+    onExplicitPortClose("port1");
     port1.close();
+    onExplicitPortClose("port2");
     port2.close();
   };
   const rejectWaiters = (result) => {
@@ -337,7 +349,7 @@ async function startControlledWorker(bundle, scenario, { holdProgress, onAttempt
       waiter.resolve();
     }
   };
-  port1.on("message", (message) => {
+  const onControlMessage = (message) => {
     if (terminal !== undefined || controlFailure !== undefined) return;
     try {
       assert.deepEqual(message, { phase: message?.phase });
@@ -353,7 +365,8 @@ async function startControlledWorker(bundle, scenario, { holdProgress, onAttempt
       phaseWaiters.splice(phaseWaiters.indexOf(waiter), 1);
       waiter.resolve();
     }
-  });
+  };
+  port1.on("message", onControlMessage);
 
   const cleanup = () => {
     cleanupPromise ??= (async () => {
@@ -371,9 +384,7 @@ async function startControlledWorker(bundle, scenario, { holdProgress, onAttempt
       repository: REPOSITORY,
       generation: 3,
       workerUrl: bundle,
-      workerFactory: (url) => new Worker(url, {
-        workerData: { scenario, mode: scenario, control: port2 }, transferList: [port2],
-      }),
+      workerFactory: (url) => workerFactory(url, port2),
       release: onAttemptRelease,
       onProgress: (event) => {
         if (!holdReleased && holdProgress(event)) {
@@ -389,9 +400,12 @@ async function startControlledWorker(bundle, scenario, { holdProgress, onAttempt
     throw error;
   }
 
-  void attempt.result.then((result) => {
+  const terminalCleanup = attempt.result.then(async (result) => {
     terminal = result;
     rejectWaiters(result);
+    onTerminal(result);
+    await cleanup();
+    return result;
   });
 
   return {
@@ -399,6 +413,9 @@ async function startControlledWorker(bundle, scenario, { holdProgress, onAttempt
     phases,
     progress,
     cleanup,
+    terminalCleanup,
+    portsAreClosed: () => portsClosed,
+    controlListenerCount: () => port1.listenerCount("message"),
     async reached(phase) {
       if (phases.includes(phase)) return;
       if (controlFailure !== undefined) throw controlFailure;
@@ -598,20 +615,78 @@ test("actual worker exposes zero and nonzero acquisition and analysis progress a
   assert.equal(controlled.progress.filter(({ stage }) => stage === "city-construction").length, 1);
 });
 
-test("phase and progress gates reject when their owned worker exits before either condition", async (t) => {
+test("phase and progress gates reject with the owned terminal before and after worker exit", async (t) => {
   let controlled;
   t.after(async () => controlled?.cleanup());
   const { analysis } = await compiledWorkerFixture(t);
   controlled = await startControlledWorker(analysis, "earlyExit");
-  const [phase, progress] = await Promise.allSettled([
-    controlled.reached("unreachable-phase"),
-    controlled.progressReached("unreachable progress", (events) => events.length > 0),
+  await controlled.reached("early-exit");
+  const pendingPhase = controlled.reached("unreachable-phase-before-terminal");
+  const pendingProgress = controlled.progressReached(
+    "unreachable progress before terminal",
+    (events) => events.length > 0,
+  );
+  controlled.release("early-exit");
+
+  const ownedTerminal = await controlled.attempt.result;
+  assert.equal(ownedTerminal.type, "FAILURE");
+  const [phaseBefore, progressBefore] = await Promise.allSettled([pendingPhase, pendingProgress]);
+  assert.equal(phaseBefore.status, "rejected");
+  assert.match(phaseBefore.reason.message, /phase gate .*unreachable-phase-before-terminal.*owned attempt terminated/u);
+  assert.equal(phaseBefore.reason.cause, ownedTerminal);
+  assert.equal(progressBefore.status, "rejected");
+  assert.match(progressBefore.reason.message, /progress gate .*unreachable progress before terminal.*owned attempt terminated/u);
+  assert.equal(progressBefore.reason.cause, ownedTerminal);
+
+  await assert.rejects(
+    controlled.reached("unreachable-phase-after-terminal"),
+    (error) => {
+      assert.match(error.message, /phase gate .*unreachable-phase-after-terminal.*owned attempt terminated/u);
+      assert.equal(error.cause, ownedTerminal);
+      return true;
+    },
+  );
+  await assert.rejects(
+    controlled.progressReached("unreachable progress after terminal", (events) => events.length > 0),
+    (error) => {
+      assert.match(error.message, /progress gate .*unreachable progress after terminal.*owned attempt terminated/u);
+      assert.equal(error.cause, ownedTerminal);
+      return true;
+    },
+  );
+});
+
+test("worker constructor failure joins before explicit port cleanup and retains no control event source", async (t) => {
+  let controlled;
+  t.after(async () => controlled?.cleanup());
+  const { analysis } = await compiledWorkerFixture(t);
+  const order = [];
+  controlled = await startControlledWorker(analysis, "constructorFailure", {
+    workerFactory: () => {
+      order.push("worker constructor");
+      throw new Error("deterministic worker constructor failure");
+    },
+    onAttemptRelease: () => order.push("attempt joined"),
+    onTerminal: () => order.push("terminal observed"),
+    onExplicitPortClose: (port) => order.push(`explicitly close ${port}`),
+  });
+
+  const ownedTerminal = await controlled.terminalCleanup;
+  assert.deepEqual(ownedTerminal, {
+    type: "FAILURE",
+    attemptId: controlled.attempt.attemptId,
+    generation: 3,
+    category: "Provider/resolution failure",
+  });
+  assert.deepEqual(order, [
+    "worker constructor",
+    "attempt joined",
+    "terminal observed",
+    "explicitly close port1",
+    "explicitly close port2",
   ]);
-  assert.equal(phase.status, "rejected");
-  assert.match(phase.reason.message, /phase gate .*unreachable-phase.*owned attempt terminated/u);
-  assert.equal(progress.status, "rejected");
-  assert.match(progress.reason.message, /progress gate .*unreachable progress.*owned attempt terminated/u);
-  assert.equal((await controlled.attempt.result).type, "FAILURE");
+  assert.equal(controlled.portsAreClosed(), true);
+  assert.equal(controlled.controlListenerCount(), 0);
 });
 
 test("an assertion failure with a blocked worker exits nonzero after joined cleanup", async (t) => {
