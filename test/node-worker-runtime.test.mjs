@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { registerHooks } from "node:module";
 import os from "node:os";
@@ -111,7 +111,9 @@ const inventory = {
 const bytes = new TextEncoder();
 let sourceReadCount = 0;
 let projectCount = 0;
-runNodeAnalysisWorker(parentPort, {
+if (workerData.scenario === "earlyExit") {
+  parentPort.close();
+} else runNodeAnalysisWorker(parentPort, {
   async revisionGateway(_repository, signal) {
     if (workerData.scenario === "providerWait") {
       entered("providerWait");
@@ -252,7 +254,7 @@ parentPort.on("message", (command) => {
 });
 `);
 
-  return { analysis: pathToFileURL(analysisBootstrap), transfer: pathToFileURL(transferBootstrap) };
+  return { root, analysis: pathToFileURL(analysisBootstrap), transfer: pathToFileURL(transferBootstrap) };
 }
 
 function start(bundle, scenario, release = () => {}, onProgress) {
@@ -262,62 +264,237 @@ function start(bundle, scenario, release = () => {}, onProgress) {
   });
 }
 
-function startProgressBarriers(bundle) {
-  const { port1, port2 } = new MessageChannel();
+function gateTerminated(kind, condition, terminal) {
+  const error = new Error(`${kind} gate ${JSON.stringify(condition)} was not reached before the owned attempt terminated: ${JSON.stringify(terminal)}`);
+  error.cause = terminal;
+  return error;
+}
+
+function startTracked(bundle, scenario, release = () => {}) {
   const progress = [];
-  const phases = [];
   const waiters = [];
-  port1.on("message", (message) => {
-    phases.push(message.phase);
+  let terminal;
+  const attempt = start(bundle, scenario, release, (event) => {
+    progress.push(event);
     for (const waiter of [...waiters]) {
-      if (waiter.phase !== message.phase) continue;
+      if (!waiter.predicate(progress)) continue;
       waiters.splice(waiters.indexOf(waiter), 1);
       waiter.resolve();
     }
   });
-  const attempt = startNodeWorkerAttempt({
-    repository: REPOSITORY,
-    generation: 3,
-    workerUrl: bundle,
-    workerFactory: (url) => new Worker(url, {
-      workerData: { scenario: "progressBarriers", mode: "progressBarriers", control: port2 }, transferList: [port2],
-    }),
-    onProgress: (event) => progress.push(event),
+  void attempt.result.then((result) => {
+    terminal = result;
+    for (const waiter of waiters.splice(0)) waiter.reject(gateTerminated("progress", waiter.label, result));
   });
   return {
     attempt,
     progress,
-    async reached(phase) {
-      if (phases.includes(phase)) return;
-      await new Promise((resolve) => waiters.push({ phase, resolve }));
+    async progressReached(label, predicate) {
+      if (predicate(progress)) return;
+      if (terminal !== undefined) throw gateTerminated("progress", label, terminal);
+      await new Promise((resolve, reject) => waiters.push({ label, predicate, resolve, reject }));
     },
-    release(phase) { port1.postMessage({ release: phase }); },
-    close() { port1.close(); },
   };
 }
 
-function startAtBarrier(bundle, scenario, release = () => {}) {
+async function startControlledWorker(bundle, scenario, { holdProgress, onAttemptRelease = () => {} } = {}) {
   const { port1, port2 } = new MessageChannel();
-  const reached = new Promise((resolve, reject) => {
-    port1.once("message", (message) => {
+  const phases = [];
+  const progress = [];
+  const phaseWaiters = [];
+  const progressWaiters = [];
+  const heldWaiters = [];
+  const heldProgress = [];
+  let holdReleased = holdProgress === undefined;
+  let terminal;
+  let controlFailure;
+  let attempt;
+  let cleanupPromise;
+  let portsClosed = false;
+
+  const closePorts = () => {
+    if (portsClosed) return;
+    portsClosed = true;
+    port1.close();
+    port2.close();
+  };
+  const rejectWaiters = (result) => {
+    for (const waiter of phaseWaiters.splice(0)) waiter.reject(gateTerminated("phase", waiter.phase, result));
+    for (const waiter of progressWaiters.splice(0)) waiter.reject(gateTerminated("progress", waiter.label, result));
+    for (const waiter of heldWaiters.splice(0)) waiter.reject(gateTerminated("withheld progress", waiter.label, result));
+  };
+  const failWaiters = (error) => {
+    for (const waiter of phaseWaiters.splice(0)) waiter.reject(error);
+    for (const waiter of progressWaiters.splice(0)) waiter.reject(error);
+    for (const waiter of heldWaiters.splice(0)) waiter.reject(error);
+  };
+  const recordProgress = (event) => {
+    if (terminal !== undefined) return;
+    progress.push(event);
+    for (const waiter of [...progressWaiters]) {
+      if (!waiter.predicate(progress)) continue;
+      progressWaiters.splice(progressWaiters.indexOf(waiter), 1);
+      waiter.resolve();
+    }
+  };
+  port1.on("message", (message) => {
+    if (terminal !== undefined || controlFailure !== undefined) return;
+    try {
+      assert.deepEqual(message, { phase: message?.phase });
+    } catch (error) {
+      controlFailure = error;
+      failWaiters(error);
+      void cleanup();
+      return;
+    }
+    phases.push(message.phase);
+    for (const waiter of [...phaseWaiters]) {
+      if (waiter.phase !== message.phase) continue;
+      phaseWaiters.splice(phaseWaiters.indexOf(waiter), 1);
+      waiter.resolve();
+    }
+  });
+
+  const cleanup = () => {
+    cleanupPromise ??= (async () => {
       try {
-        assert.deepEqual(message, { phase: scenario });
-        resolve();
-      } catch (error) {
-        reject(error);
+        await attempt?.cancel();
       } finally {
-        port1.close();
+        closePorts();
       }
+    })();
+    return cleanupPromise;
+  };
+
+  try {
+    attempt = startNodeWorkerAttempt({
+      repository: REPOSITORY,
+      generation: 3,
+      workerUrl: bundle,
+      workerFactory: (url) => new Worker(url, {
+        workerData: { scenario, mode: scenario, control: port2 }, transferList: [port2],
+      }),
+      release: onAttemptRelease,
+      onProgress: (event) => {
+        if (!holdReleased && holdProgress(event)) {
+          heldProgress.push(event);
+          for (const waiter of heldWaiters.splice(0)) waiter.resolve();
+          return;
+        }
+        recordProgress(event);
+      },
     });
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+
+  void attempt.result.then((result) => {
+    terminal = result;
+    rejectWaiters(result);
   });
-  const attempt = startNodeWorkerAttempt({
-    repository: REPOSITORY, generation: 3, workerUrl: bundle,
-    workerFactory: (url) => new Worker(url, {
-      workerData: { scenario, mode: scenario, control: port2 }, transferList: [port2],
-    }),
-    release,
+
+  return {
+    attempt,
+    phases,
+    progress,
+    cleanup,
+    async reached(phase) {
+      if (phases.includes(phase)) return;
+      if (controlFailure !== undefined) throw controlFailure;
+      if (terminal !== undefined) throw gateTerminated("phase", phase, terminal);
+      await new Promise((resolve, reject) => phaseWaiters.push({ phase, resolve, reject }));
+    },
+    async progressReached(label, predicate) {
+      if (predicate(progress)) return;
+      if (controlFailure !== undefined) throw controlFailure;
+      if (terminal !== undefined) throw gateTerminated("progress", label, terminal);
+      await new Promise((resolve, reject) => progressWaiters.push({ label, predicate, resolve, reject }));
+    },
+    async heldProgressObserved(label) {
+      if (heldProgress.length > 0) return;
+      if (controlFailure !== undefined) throw controlFailure;
+      if (terminal !== undefined) throw gateTerminated("withheld progress", label, terminal);
+      await new Promise((resolve, reject) => heldWaiters.push({ label, resolve, reject }));
+    },
+    releaseHeldProgress() {
+      if (holdReleased) return;
+      holdReleased = true;
+      for (const event of heldProgress.splice(0)) recordProgress(event);
+    },
+    release(phase) { port1.postMessage({ release: phase }); },
+  };
+}
+
+function startProgressBarriers(bundle, holdProgress) {
+  return startControlledWorker(bundle, "progressBarriers", { holdProgress });
+}
+
+async function startAtBarrier(bundle, scenario, onAttemptRelease = () => {}) {
+  const controlled = await startControlledWorker(bundle, scenario, { onAttemptRelease });
+  return { ...controlled, reached: controlled.reached(scenario) };
+}
+
+async function runAssertionFailureCleanupRegression(root) {
+  const workerFile = path.join(root, "blocked-assertion-worker.mjs");
+  const childFile = path.join(root, "blocked-assertion-child.test.mjs");
+  const markerFile = path.join(root, "blocked-assertion-joined.txt");
+  await writeFile(workerFile, `
+import { parentPort, workerData } from "node:worker_threads";
+workerData.control.on("message", () => {});
+parentPort.once("message", () => workerData.control.postMessage({ phase: "blocked" }));
+`);
+  await writeFile(childFile, `
+import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
+import test from "node:test";
+import { MessageChannel, Worker } from "node:worker_threads";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  return nextResolve(/^\\.\\.?\\//u.test(specifier) && !/(?:\\.[a-z]+|\\?.*)$/iu.test(specifier) ? specifier + ".ts" : specifier, context);
+} });
+const { startNodeWorkerAttempt } = await import(${JSON.stringify(pathToFileURL(path.join(projectRoot, "src/edge/node/worker-attempt.ts")).href)});
+const workerUrl = new URL(${JSON.stringify(pathToFileURL(workerFile).href)});
+const markerFile = new URL(${JSON.stringify(pathToFileURL(markerFile).href)});
+async function createOwnedBlockedAttempt() {
+  const { port1, port2 } = new MessageChannel();
+  let attempt;
+  let cleanupPromise;
+  const closePorts = () => { port1.close(); port2.close(); };
+  const cleanup = () => cleanupPromise ??= (async () => {
+    try { await attempt?.cancel(); } finally { closePorts(); }
+  })();
+  try {
+    attempt = startNodeWorkerAttempt({
+      repository: ${JSON.stringify(REPOSITORY)}, generation: 3, workerUrl,
+      workerFactory: (url) => new Worker(url, { workerData: { control: port2 }, transferList: [port2] }),
+    });
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+  const reached = Promise.race([
+    new Promise((resolve) => port1.once("message", resolve)),
+    attempt.result.then((result) => { throw new Error("blocked phase was not reached before terminal: " + JSON.stringify(result)); }),
+  ]);
+  return { attempt, cleanup, reached };
+}
+test("intentional assertion failure joins its blocked worker", async (t) => {
+  let owned;
+  t.after(async () => {
+    await owned?.cleanup();
+    await owned?.cleanup();
+    await writeFile(markerFile, "joined\\n");
   });
-  return { attempt, reached };
+  owned = await createOwnedBlockedAttempt();
+  await owned.reached;
+  assert.fail("intentional blocked-worker assertion");
+});
+`);
+  const child = spawnSync(process.execPath, [childFile], { encoding: "utf8" });
+  assert.equal(child.status, 1, `${child.stdout}${child.stderr}`);
+  assert.match(`${child.stdout}${child.stderr}`, /intentional blocked-worker assertion/u);
+  assert.equal(await readFile(markerFile, "utf8"), "joined\n");
 }
 
 async function collectWorkerMessages(bundle, mode) {
@@ -356,18 +533,43 @@ test("actual worker returns city/source, mixed failures, and all-files-failed on
 });
 
 test("actual worker exposes zero and nonzero acquisition and analysis progress at real barriers", async (t) => {
+  let controlled;
+  t.after(async () => controlled?.cleanup());
   const { analysis } = await compiledWorkerFixture(t);
-  const controlled = startProgressBarriers(analysis);
-  t.after(() => controlled.close());
+  const acquisitionStarted = (events) => events.some(({ stage, completed, total }) => stage === "acquisition" && completed === 0 && total === 3);
+  controlled = await startProgressBarriers(
+    analysis,
+    ({ stage, completed, total }) => stage === "acquisition" && completed === 0 && total === 3,
+  );
 
+  const releaseFirstAcquisition = (async () => {
+    await controlled.progressReached("acquisition 0/3", acquisitionStarted);
+    controlled.release("first-acquisition");
+  })();
   await controlled.reached("first-acquisition");
   await controlled.reached("acquisition-window-filled");
+  await controlled.heldProgressObserved("acquisition 0/3 callback");
+  assert.equal(controlled.progress.length, 0);
+  assert.equal(controlled.phases.includes("first-acquisition"), true);
+  controlled.releaseHeldProgress();
+  await releaseFirstAcquisition;
   assert.deepEqual(controlled.progress.map(({ stage, completed, total }) => ({ stage, completed, total })), [
     { stage: "acquisition", completed: 0, total: 3 },
   ]);
-  controlled.release("first-acquisition");
 
   await controlled.reached("first-analysis");
+  await controlled.progressReached(
+    "acquisition 3/3",
+    (events) => events.some(({ stage, completed, total }) => stage === "acquisition" && completed === 3 && total === 3),
+  );
+  await controlled.progressReached(
+    "analysis initialization",
+    (events) => events.some(({ stage }) => stage === "analysis-initialization"),
+  );
+  await controlled.progressReached(
+    "analysis 0/3",
+    (events) => events.some(({ stage, completed, total }) => stage === "analysis" && completed === 0 && total === 3),
+  );
   assert.deepEqual(
     controlled.progress.filter(({ stage }) => stage === "acquisition").map(({ completed, total }) => [completed, total]),
     [[0, 3], [1, 3], [2, 3], [3, 3]],
@@ -381,11 +583,40 @@ test("actual worker exposes zero and nonzero acquisition and analysis progress a
 
   const result = await controlled.attempt.result;
   assert.equal(result.type, "SUCCESS");
+  await controlled.progressReached(
+    "analysis 3/3",
+    (events) => events.some(({ stage, completed, total }) => stage === "analysis" && completed === 3 && total === 3),
+  );
+  await controlled.progressReached(
+    "city construction",
+    (events) => events.some(({ stage }) => stage === "city-construction"),
+  );
   assert.deepEqual(
     controlled.progress.filter(({ stage }) => stage === "analysis").map(({ completed, total }) => [completed, total]),
     [[0, 3], [1, 3], [2, 3], [3, 3]],
   );
   assert.equal(controlled.progress.filter(({ stage }) => stage === "city-construction").length, 1);
+});
+
+test("phase and progress gates reject when their owned worker exits before either condition", async (t) => {
+  let controlled;
+  t.after(async () => controlled?.cleanup());
+  const { analysis } = await compiledWorkerFixture(t);
+  controlled = await startControlledWorker(analysis, "earlyExit");
+  const [phase, progress] = await Promise.allSettled([
+    controlled.reached("unreachable-phase"),
+    controlled.progressReached("unreachable progress", (events) => events.length > 0),
+  ]);
+  assert.equal(phase.status, "rejected");
+  assert.match(phase.reason.message, /phase gate .*unreachable-phase.*owned attempt terminated/u);
+  assert.equal(progress.status, "rejected");
+  assert.match(progress.reason.message, /progress gate .*unreachable progress.*owned attempt terminated/u);
+  assert.equal((await controlled.attempt.result).type, "FAILURE");
+});
+
+test("an assertion failure with a blocked worker exits nonzero after joined cleanup", async (t) => {
+  const { root } = await compiledWorkerFixture(t);
+  await runAssertionFailureCleanupRegression(root);
 });
 
 test("actual worker maps resolution, acquisition, parser, metric, and city outcomes exactly", async (t) => {
@@ -418,42 +649,57 @@ test("actual worker maps resolution, acquisition, parser, metric, and city outco
 test("actual worker counts syntax and metric attempts after cleanup without fabricating fatal completions", async (t) => {
   const { analysis } = await compiledWorkerFixture(t);
 
-  const mixedProgress = [];
-  const mixed = start(analysis, "mixed", () => {}, (event) => mixedProgress.push(event));
-  assert.equal((await mixed.result).type, "SUCCESS");
+  const mixed = startTracked(analysis, "mixed");
+  await mixed.progressReached(
+    "mixed analysis 3/3",
+    (events) => events.some(({ stage, completed, total }) => stage === "analysis" && completed === 3 && total === 3),
+  );
+  assert.equal((await mixed.attempt.result).type, "SUCCESS");
   assert.deepEqual(
-    mixedProgress.filter(({ stage }) => stage === "analysis").map(({ completed, total }) => [completed, total]),
+    mixed.progress.filter(({ stage }) => stage === "analysis").map(({ completed, total }) => [completed, total]),
     [[0, 3], [1, 3], [2, 3], [3, 3]],
   );
 
-  const initializationProgress = [];
-  const initialization = start(analysis, "parserInitialize", () => {}, (event) => initializationProgress.push(event));
-  assert.equal((await initialization.result).category, "Metric processing failed");
-  assert.equal(initializationProgress.some(({ stage }) => stage === "analysis"), false);
-  assert.equal(initializationProgress.filter(({ stage }) => stage === "analysis-initialization").length, 1);
+  const initialization = startTracked(analysis, "parserInitialize");
+  await initialization.progressReached(
+    "parser initialization",
+    (events) => events.some(({ stage }) => stage === "analysis-initialization"),
+  );
+  assert.equal((await initialization.attempt.result).category, "Metric processing failed");
+  assert.equal(initialization.progress.some(({ stage }) => stage === "analysis"), false);
+  assert.equal(initialization.progress.filter(({ stage }) => stage === "analysis-initialization").length, 1);
 
-  const releaseProgress = [];
-  const release = start(analysis, "metricFailure", () => {}, (event) => releaseProgress.push(event));
-  assert.equal((await release.result).category, "Metric processing failed");
+  const release = startTracked(analysis, "metricFailure");
+  await release.progressReached(
+    "metric failure analysis 0/1",
+    (events) => events.some(({ stage, completed, total }) => stage === "analysis" && completed === 0 && total === 1),
+  );
+  assert.equal((await release.attempt.result).category, "Metric processing failed");
   assert.deepEqual(
-    releaseProgress.filter(({ stage }) => stage === "analysis").map(({ completed, total }) => [completed, total]),
+    release.progress.filter(({ stage }) => stage === "analysis").map(({ completed, total }) => [completed, total]),
     [[0, 1]],
   );
 
-  const allFailedProgress = [];
-  const allFailed = start(analysis, "allFailed", () => {}, (event) => allFailedProgress.push(event));
-  const allFailedResult = await allFailed.result;
+  const allFailed = startTracked(analysis, "allFailed");
+  await allFailed.progressReached(
+    "all-failed analysis 2/2",
+    (events) => events.some(({ stage, completed, total }) => stage === "analysis" && completed === 2 && total === 2),
+  );
+  const allFailedResult = await allFailed.attempt.result;
   assert.equal(allFailedResult.type, "SUCCESS");
   assert.equal(allFailedResult.result.city, null);
-  assert.equal(allFailedProgress.some(({ stage }) => stage === "city-construction"), false);
+  assert.equal(allFailed.progress.some(({ stage }) => stage === "city-construction"), false);
 
-  const zeroProgress = [];
-  const zero = start(analysis, "zeroText", () => {}, (event) => zeroProgress.push(event));
-  const zeroResult = await zero.result;
+  const zero = startTracked(analysis, "zeroText");
+  await zero.progressReached(
+    "zero-text analysis initialization",
+    (events) => events.some(({ stage }) => stage === "analysis-initialization"),
+  );
+  const zeroResult = await zero.attempt.result;
   assert.equal(zeroResult.type, "SUCCESS");
   assert.equal(zeroResult.sources.length, 0);
-  assert.equal(zeroProgress.filter(({ stage }) => stage === "analysis-initialization").length, 1);
-  assert.equal(zeroProgress.some(({ stage }) => stage === "analysis" || stage === "city-construction"), false);
+  assert.equal(zero.progress.filter(({ stage }) => stage === "analysis-initialization").length, 1);
+  assert.equal(zero.progress.some(({ stage }) => stage === "analysis" || stage === "city-construction"), false);
 });
 
 test("actual production worker rejects a mutation of the first acquired source before transfer", async (t) => {
@@ -528,22 +774,29 @@ test("Node parser assets use actual package-compatible file URLs for runtime, JS
 });
 
 test("provider cancellation and parser-time termination join and release exactly once without a terminal", async (t) => {
+  const owned = [];
+  t.after(async () => {
+    for (const controlled of owned) await controlled.cleanup();
+  });
   const { analysis } = await compiledWorkerFixture(t);
   for (const scenario of ["providerWait", "parserBusy"]) {
     let releases = 0;
-    const { attempt, reached } = startAtBarrier(analysis, scenario, () => { releases += 1; });
-    await reached;
-    await attempt.cancel();
-    assert.deepEqual(await attempt.result, { type: "CANCELLED" });
-    await attempt.cancel();
+    const controlled = await startAtBarrier(analysis, scenario, () => { releases += 1; });
+    owned.push(controlled);
+    await controlled.reached;
+    await controlled.cleanup();
+    assert.deepEqual(await controlled.attempt.result, { type: "CANCELLED" });
+    await controlled.cleanup();
     assert.equal(releases, 1, scenario);
   }
 });
 
 test("a busy analysis worker leaves the parent timer and a small native HTTP response responsive", async (t) => {
+  let controlled;
+  t.after(async () => controlled?.cleanup());
   const { analysis } = await compiledWorkerFixture(t);
-  const { attempt, reached } = startAtBarrier(analysis, "parserBusy");
-  await reached;
+  controlled = await startAtBarrier(analysis, "parserBusy");
+  await controlled.reached;
   const server = http.createServer((_request, response) => response.end("ok"));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
@@ -557,5 +810,5 @@ test("a busy analysis worker leaves the parent timer and a small native HTTP res
     }).on("error", reject);
   });
   assert.deepEqual(await Promise.all([timer, response]), ["timer", "ok"]);
-  await attempt.cancel();
+  await controlled.cleanup();
 });
