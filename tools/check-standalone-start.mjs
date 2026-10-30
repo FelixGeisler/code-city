@@ -1,41 +1,31 @@
-import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { canonicalStandaloneRoot } from "./build-standalone.mjs";
 import { auditStandaloneArtifact } from "./standalone-manifest.mjs";
-import { expectCleanExit, launchStandalone, readyOrigin, request, sendGracefulSignal, terminateForCleanup } from "./standalone-check-support.mjs";
-
-await auditStandaloneArtifact(canonicalStandaloneRoot);
-const processUnderTest = launchStandalone();
+import { expectCleanExit, launchStandalone, readyOrigin, request, sendGracefulSignal, terminateForCleanup, writeSignalPreload } from "./standalone-check-support.mjs";
+const manifest = await auditStandaloneArtifact(canonicalStandaloneRoot);
+const temporary = await mkdtemp(path.join(os.tmpdir(), "code-city-static-start-"));
+let processUnderTest;
 try {
+  processUnderTest = launchStandalone({ preload: await writeSignalPreload(temporary) });
   const origin = await readyOrigin(processUnderTest);
-  for (const [target, file, mediaType] of [
-    ["/", "index.html", "text/html; charset=utf-8"],
-    ["/browser.css", "browser.css", "text/css; charset=utf-8"],
-    ["/browser.js", "browser.js", "text/javascript; charset=utf-8"],
-  ]) {
-    const expected = await readFile(path.join(canonicalStandaloneRoot, "public", file));
+  for (const file of manifest.files.filter(f => f.role === "public")) {
+    const target = file.path === "public/index.html" ? "/" : "/" + file.path.slice(7);
     const response = await request(origin, target);
-    if (response.status !== 200 || response.headers["content-type"] !== mediaType || !response.body.equals(expected)) throw new Error(`Packaged public response mismatch: ${target}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers["content-type"], file.mediaType);
+    assert.ok(response.body.equals(await readFile(path.join(canonicalStandaloneRoot, file.path))));
   }
-  for (const target of [
-    "/package-manifest.json",
-    "/server/standalone.mjs",
-    "/parser/web-tree-sitter.wasm",
-    "/index.html",
-    "/unlisted.js",
-  ]) {
-    const response = await request(origin, target);
-    if (response.status !== 404 || response.body.byteLength !== 0) throw new Error(`Packaged private or unlisted route was exposed: ${target}`);
+  for (const target of ["/package-manifest.json", "/server/standalone.mjs", "/_code-city/session", "/index.html", "/unlisted.js"]) {
+    assert.equal((await request(origin, target)).status, 404);
   }
-  if (process.platform === "win32") {
-    await terminateForCleanup(processUnderTest);
-  } else {
-    sendGracefulSignal(processUnderTest, "SIGTERM");
-    const shutdown = await processUnderTest.waitLine((line) => line.startsWith("SHUTDOWN "));
-    if (shutdown !== 'SHUTDOWN {"liveSessions":0,"activeAttempts":0,"retainedSourceBytes":0}') throw new Error(`Shutdown counters differ: ${shutdown}`);
-    await expectCleanExit(processUnderTest);
-  }
-  process.stdout.write(`Started the packaged server at ${origin} and verified public/private routing.\n`);
+  sendGracefulSignal(processUnderTest, "SIGTERM");
+  assert.equal(await processUnderTest.waitLine(line => line === "SHUTDOWN"), "SHUTDOWN");
+  await expectCleanExit(processUnderTest);
+  process.stdout.write(`Verified packaged static-host startup, public/private routing, and clean shutdown at ${origin}.\n`);
 } finally {
-  await terminateForCleanup(processUnderTest);
+  if (processUnderTest) await terminateForCleanup(processUnderTest);
+  await rm(temporary, { recursive: true, force: true });
 }

@@ -3,10 +3,11 @@
 == Standalone application artifact
 
 The repository produces one canonical manifest-bound application artifact in
-`dist/`. It contains the source-free browser and private Node server, worker,
-and parser assets. The repository does not host or deploy that service. An
-operator may run the artifact on loopback, or deliberately on a trusted LAN for
-public GitHub source, by supplying the required port and capacity values.
+`dist/`. It contains public browser UI, analysis worker and parser assets,
+and a private native Node.js asset host. The repository does not deploy that
+service. The operator supplies `--port`; binding defaults to loopback.
+Browser Web Crypto requires HTTPS or a secure localhost context. A remote TLS
+ingress and its trust configuration are not provided by this milestone.
 
 No device, Internet, authentication, private-source, performance, concurrency,
 or memory deployment claim is made. Raspberry Pi qualification remains
@@ -49,5 +50,6 @@ Pages repository setting was disabled, deleted, or changed.
 
 == Later deployment design
 
-Release hosting, server ingress, device operation, identity, private providers,
-and saved-investigation storage remain unselected.
+Release hosting, TLS ingress, device operation, private providers, and saved
+storage/recovery remain unselected. Login and accounts are not required by the
+initial shared-view product.

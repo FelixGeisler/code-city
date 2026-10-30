@@ -4,5 +4,5 @@
     "lib": ["ES2024", "WebWorker"],
     "types": []
   },
-  "include": ["src/edge/processing-worker.ts"]
+  "include": ["src/edge/processing-worker.ts", "src/edge/browser-analysis-worker.ts"]
 }

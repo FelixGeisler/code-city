@@ -1,9 +1,9 @@
 import {
-  createFetchSessionTransport,
   createStandaloneBrowserController,
   type BrowserFailedFile,
   type StandaloneBrowserView,
 } from "./standalone-browser-controller";
+import { createBrowserWorkerTransport } from "./browser-worker-transport";
 import { createStandalonePresentationCoordinator } from "./standalone-presentation-session";
 
 function requiredElement<T extends Element>(selector: string): T {
@@ -138,7 +138,7 @@ const view: StandaloneBrowserView = Object.freeze({
     feedback.textContent = "Invalid input";
   },
   capacity() {
-    replaceStatus("Code City capacity is unavailable.");
+    replaceStatus("Local analysis could not start.");
   },
   lost() {
     replaceStatus("Provider/resolution failure");
@@ -186,13 +186,19 @@ const view: StandaloneBrowserView = Object.freeze({
   },
 });
 
-const controller = createStandaloneBrowserController(createFetchSessionTransport(), view);
+const controller = createStandaloneBrowserController(createBrowserWorkerTransport(), view);
+const secureAnalysis = window.isSecureContext && globalThis.crypto?.subtle !== undefined;
 form.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (!secureAnalysis) { replaceStatus("Browser analysis requires HTTPS or localhost."); return; }
   controller.submit(repository.value, exclusions.value);
 });
 window.addEventListener("pagehide", () => {
   controller.dispose();
   presentation.dispose();
 }, { once: true });
-controller.start();
+if (secureAnalysis) controller.start();
+else {
+  replaceStatus("Browser analysis requires HTTPS or localhost.");
+  requiredElement<HTMLButtonElement>('form button[type="submit"]').disabled = true;
+}

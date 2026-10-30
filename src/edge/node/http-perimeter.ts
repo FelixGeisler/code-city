@@ -2,12 +2,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { BodyReaderPool, readBoundedBody, validateApplicationContentLength, type BodyMode } from "./body-reader";
-import { canonicalAuthority, type StandaloneConfiguration } from "./config";
+import { canonicalAuthority, type AssetHostConfiguration, type StandaloneConfiguration } from "./config";
 import { loadPublicFixtures, type PublicFixture } from "./fixture-manifest";
 import { canonicalWireValue, exactWireHeaderValues, RequestWireObserver, wireValueEquals, type WireRequestHead } from "./wire-observer";
 
 export const RESPONSE_SECURITY_HEADERS = Object.freeze({
-  "Content-Security-Policy": "default-src 'none'; base-uri 'none'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; frame-src 'none'; object-src 'none'; script-src 'self'; style-src 'self'",
+  "Content-Security-Policy": "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-ancestors 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'",
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",
@@ -36,7 +36,7 @@ type FixedHandler = (value: unknown) => void | FixedHandlerResult | Promise<void
 export type FixedRouteHandlers = Readonly<Partial<Record<ApiTarget, FixedHandler>>>;
 
 export interface InactiveHttpPerimeterInput {
-  readonly configuration: StandaloneConfiguration;
+  readonly configuration: StandaloneConfiguration | AssetHostConfiguration;
   readonly fixtureManifestBytes: Uint8Array;
   readonly artifactRoot: string;
   readonly handlers?: FixedRouteHandlers;
@@ -46,6 +46,7 @@ export interface RunningInactiveHttpPerimeter {
   readonly origin: string;
   readonly close: () => Promise<void>;
   readonly closeIdleConnections: () => void;
+  readonly closeAllConnections: () => void;
 }
 
 type IngressKind = "request" | "continue" | "expectation";
@@ -74,13 +75,14 @@ function applySecurityHeaders(response: ServerResponse): void {
 }
 
 function createPerimeterServer(
-  configuration: StandaloneConfiguration,
+  configuration: StandaloneConfiguration | AssetHostConfiguration,
   routes: ReadonlyMap<string, PublicFixture>,
   handlers: FixedRouteHandlers,
 ) {
   const closingSockets = new WeakSet<Duplex>();
   const wireObservers = new WeakMap<Duplex, RequestWireObserver>();
-  const readers = new BodyReaderPool(configuration.maxCommandBodyReaders);
+  const commandConfiguration = "maxCommandBodyReaders" in configuration ? configuration : undefined;
+  const readers = commandConfiguration ? new BodyReaderPool(commandConfiguration.maxCommandBodyReaders) : undefined;
   let authority: string | undefined;
   let origin: string | undefined;
 
@@ -159,9 +161,10 @@ function createPerimeterServer(
     handler: FixedHandler,
     wireHead: WireRequestHead,
   ): Promise<void> => {
+    if (!commandConfiguration || !readers) { reject(request, response, 404); return; }
     const contentLength = validateApplicationContentLength(
       exactWireHeaderValues(wireHead, "content-length").map(canonicalWireValue),
-      configuration.maxCommandBodyBytes,
+      commandConfiguration.maxCommandBodyBytes,
     );
     if (contentLength === "bad-request") {
       reject(request, response, 400);
@@ -179,7 +182,7 @@ function createPerimeterServer(
     }
     if (kind === "continue") response.writeContinue();
 
-    const result = await readBoundedBody(request, configuration.maxCommandBodyBytes, mode, release);
+    const result = await readBoundedBody(request, commandConfiguration.maxCommandBodyBytes, mode, release);
     if (result.kind === "aborted") {
       request.socket.destroy();
       return;
@@ -228,7 +231,7 @@ function createPerimeterServer(
     }
 
     const staticFixture = routes.get(request.url);
-    const apiMode = API_ROUTES[request.url as ApiTarget];
+    const apiMode = commandConfiguration ? API_ROUTES[request.url as ApiTarget] : undefined;
     if (staticFixture === undefined && apiMode === undefined) {
       reject(request, response, 404);
       return;
@@ -251,6 +254,7 @@ function createPerimeterServer(
       return;
     }
 
+    if (apiMode === undefined) { reject(request, response, 404); return; }
     if (request.method !== "POST") {
       reject(request, response, 405);
       return;
@@ -348,6 +352,9 @@ export async function startInactiveHttpPerimeter(input: InactiveHttpPerimeterInp
     },
     closeIdleConnections(): void {
       server.closeIdleConnections();
+    },
+    closeAllConnections(): void {
+      server.closeAllConnections();
     },
   });
 }

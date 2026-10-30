@@ -1,8 +1,6 @@
 # Code City
 
-Code City builds a deterministic city from supported JavaScript, TypeScript, and C# modules in a public GitHub repository. The standalone Node.js service owns source acquisition and analysis; its browser uses only same-origin session and command routes.
-
-Supported languages: JavaScript, TypeScript, and C#.
+Code City builds a deterministic city from JavaScript, TypeScript, and C# in a public GitHub repository. Acquisition and analysis run in a browser Web Worker; the Node.js service serves the packaged application and parser assets, not analysis sessions.
 
 ## Install
 
@@ -14,39 +12,30 @@ npm ci --ignore-scripts
 
 ## Build and run
 
-Build the canonical standalone artifact in `dist/`:
-
 ```bash
 npm run build
+npm start -- --port 55583
 ```
 
-Start that exact artifact by supplying `--port` and all five capacity flags:
+The canonical artifact is `dist/`. Only `--port` is required; `--host` defaults to `127.0.0.1`. Port `0` chooses an ephemeral port for testing. A non-loopback host also requires `--canonical-host`. Analysis/session/source-memory capacity flags are no longer accepted.
+
+For a one-shot development build outside canonical `dist/`, without HMR or WebSockets:
 
 ```bash
-npm start -- \
-  --port 0 \
-  --max-live-sessions 2 \
-  --max-active-attempts 1 \
-  --max-command-body-readers 2 \
-  --max-command-body-bytes 4096 \
-  --max-retained-source-bytes 41943040
+npm run dev -- --port 55583
 ```
 
-Only `--host` defaults, to `127.0.0.1`. Every value above is an example for local verification, not a deployment recommendation or capacity default. A non-loopback `--host` also requires `--canonical-host`.
+Development output is `build/development/`. Browser analysis requires HTTPS or a secure localhost context for Web Crypto. Plain remote HTTP is not sufficient; this package does not supply a TLS ingress. Internet deployment, private repositories, and Raspberry Pi capacity/performance are not qualified.
 
-For one-shot development, build under `build/development/` and start the same service without HMR or WebSocket support:
+## Current behavior
 
-```bash
-npm run dev -- \
-  --port 0 \
-  --max-live-sessions 2 \
-  --max-active-attempts 1 \
-  --max-command-body-readers 2 \
-  --max-command-body-bytes 4096 \
-  --max-retained-source-bytes 41943040
-```
+- Analyze one anonymously accessible public GitHub repository at an immutable revision.
+- Acquire files with bounded overlap, then compute metrics and construct the city in a dedicated browser worker.
+- Show measured phase-local progress, cancellation, per-file failures, and the searchable/sortable file inventory.
+- Keep unsaved sources/results in browser memory. Discard, replacement, page exit, and worker loss release local ownership.
+- Idle tabs hold no server analysis session or source reservation; completed tabs do not compete for a server analysis worker.
 
-The service is loopback-first. Deliberate trusted-LAN use is limited to public GitHub source. Internet exposure, private repositories, authentication, Save/recovery, and Raspberry Pi qualification are not provided.
+There is no login, Save, shared inventory, reopen, or application-managed persistence yet. Shared saved investigations are the next delivery; they will be client-computed data, not server-certified metrics.
 
 ## Verification
 
@@ -54,13 +43,13 @@ The service is loopback-first. Deliberate trusted-LAN use is limited to public G
 npm run verify
 ```
 
-This gate type-checks, tests, builds the canonical artifact once, reproduces every manifest-recorded byte, audits the actual packaged server/worker/parser/browser, verifies signal shutdown, validates the immutable retirement evidence, and builds the documentation.
+The gate type-checks, tests, builds the canonical artifact once, reproduces its manifest-recorded bytes, audits public/private routing and parser integrity, drives the actual packaged browser worker with a synthetic GitHub provider, verifies signal shutdown, and builds documentation. The browser evidence includes multiple independent tabs and the inclusive 4,000-file / 40 MiB normalized-source envelope; it is not a latency or memory guarantee.
 
-Pull requests run the same gate after locked install, dependency closure, security audit, and the isolated Node type check. A protected push to `main` uploads the exact audited `dist/` artifact and its manifest-bound publication record. Pages deployment and hosted analyzer observation were removed after the cutover notice and all eight former analyzer URLs were verified live. The last notice may remain reachable; the repository does not claim that the Pages setting is disabled. The immutable verification is `publication/retirement-live-verification-v1.json`.
+Pull requests run the gate after locked installation, dependency listing, and a high-severity audit. A protected push to `main` publishes the audited artifact and manifest-bound publication record. GitHub Pages deployment remains removed; `publication/retirement-live-verification-v1.json` preserves the earlier notice and former-asset checks.
 
 ## Documentation
 
-Product requirements and architecture are maintained as an Antora site under `docs/`:
+Requirements and arc42 architecture are under `docs/`:
 
 ```bash
 npm run docs:build

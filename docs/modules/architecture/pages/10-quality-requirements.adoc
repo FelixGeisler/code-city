@@ -1,51 +1,17 @@
 = Quality Requirements
 
-[cols="1,2,2,2",options="header"]
+[cols="1,2,2",options="header"]
 |===
-|Quality |Scenario |Architectural response |Evidence location
-
-|Integrity
-|Provider, command, worker, package, or event evidence is malformed,
-incomplete, stale, or changes identity.
-|Validate exact closed shapes and identities before state mutation or
-publication; fail closed.
-|source, worker, HTTP, session, browser, and manifest tests
-
-|Determinism
-|Equivalent accepted source facts or repository bytes are processed again.
-|Canonical ordering, pinned grammars, deterministic algorithms, a closed
-manifest, and isolated second-build comparison keep meaning and bytes stable.
-|domain tests and `npm run test:reproducibility`
-
-|Safety and privacy
-|Repository-controlled content crosses provider, worker, HTTP, or UI
-boundaries.
-|Treat source as data, retain it only in process memory, transfer source-free
-results, publish paths as inert text, and return `404` for private artifact
-records.
-|operating policy, package audit, browser evidence
-
-|Lifecycle atomicity
-|An attempt is replaced, cancelled, stale, blocked, disconnected, or stopped.
-|Generation gates and parent-owned joined cleanup leave one complete current
-result or none and release capacity exactly once.
-|session runtime, shutdown, signal, and browser tests
-
-|Responsiveness
-|Parser work is busy while the HTTP service owns other sessions and small
-requests.
-|Run each admitted analysis in a dedicated worker thread; keep HTTP handling in
-the parent.
-|packaged browser and worker lifecycle evidence
-
-|Release reproducibility
-|A pull request or main publication is built.
-|Locked install, closure and security audit, type checks, tests, one canonical
-build, byte reproduction, actual package/browser audit, docs build, and exact
-workflow upload bindings are mandatory.
-|`package.json`, `.github/workflows/`, standalone and publication tests
+|Quality |Response |Evidence
+|Integrity |Validate complete provider identities/bytes, closed worker events, city values, and manifest records before use. |Source/gateway, controller, manifest, and browser tests.
+|Determinism |One TypeScript/WASM analyzer, canonical ordering, pinned grammars, fixed visual rules, and identical second-build bytes. |Domain/core tests and reproducibility gate.
+|Safety/privacy |Treat source as data; keep unsaved source browser-local; render paths/failures as inert text; serve only verified public assets. |Operating policy, packaged worker/provider network proof, rendering tests.
+|Lifecycle |Revoke old publication before stop; drain provider reads or terminate parser work; release on discard/page loss and keep stale callbacks inert. |Browser worker transport, shared-core regression, and real cancellation tests.
+|Responsiveness |Execute parsing in a real browser worker, not the UI or HTTP loop. Idle/completed users own no server analysis capacity. |Packaged multi-tab, UI responsiveness, and static-host audits.
+|Release |Locked install/list/audit, types/tests, canonical build, byte reproduction, packaged Chrome/perimeter/signal audit, docs and manifest-bound upload. |`npm run verify` and workflow tests.
 |===
 
 No Raspberry Pi performance, concurrency, memory, or deployment threshold is
-claimed. Authentication, Internet service, private-source confidentiality,
-saved-state retention, and recovery require later approved design.
+claimed. Browser Web Crypto requires a secure context; remote TLS ingress is not
+provided. Future Save must bound operation work and isolate reads/static serving
+from writes. Login and metric certification are not requirements.

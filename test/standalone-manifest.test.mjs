@@ -53,7 +53,10 @@ test("standalone builder emits the exact role layout and canonical closed manife
   assert.equal(Object.getPrototypeOf(built.files), Array.prototype);
   assert.deepEqual(Object.keys(built.files[0]), ["path", "role", "mediaType", "length", "sha256"]);
   assert(built.files.every((item) => item.role === (item.path.startsWith("public/") ? "public" : "private")));
-  assert.deepEqual([...new Set(built.files.map((item) => item.path.split("/")[0]))], ["parser", "public", "server"]);
+  assert.deepEqual([...new Set(built.files.map((item) => item.path.split("/")[0]))], ["public", "server"]);
+  assert(built.files.some((item) => item.path === "public/analysis-worker.js"));
+  assert(built.files.some((item) => item.path === "public/parser/web-tree-sitter.wasm"));
+  assert.equal(built.files.some((item) => /server\/src\/(?:application|domain)\//u.test(item.path) || item.path.includes("analysis-worker-entry")), false);
   assert.equal(built.files.some((item) => item.path === "package-manifest.json"), false);
   assert.equal(Buffer.from(bytes).equals(serializeStandaloneManifest(built)), true);
 });

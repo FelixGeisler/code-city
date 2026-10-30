@@ -1,55 +1,27 @@
 = Context and Scope
 
-== Current system context
-
-A user opens the browser served by a locally operated Code City standalone
-service, supplies one public GitHub repository URL and optional exact path
-exclusions, and explicitly starts analysis. The browser sends only same-origin
-session and command requests. The Node service reads public GitHub evidence,
-selects one immutable revision, owns source and analysis, and returns
-source-free events.
-
-[cols="1,2,2",options="header"]
+[cols="1,3",options="header"]
 |===
-|Party |Sends to Code City |Receives from Code City
-
-|User browser
-|Repository URL, additional exclusions, Analyze, Cancel, Discard, and
-presentation interaction
-|Status, selected commit, source-free city, sanitized failed-file rows, and
-presentation state
-
-|Public GitHub
-|Provider responses to anonymous reads; no credentials or repository writes
-|Fixed-route requests for revision, commit, recursive tree, and encoded raw
-file retrieval
-
-|Operator
-|Required port and capacity values; optional host and canonical host
-|The bound canonical origin and shutdown diagnostics
+|Party |Interaction
+|User browser |Loads application/worker/parser assets, then acquires and analyzes a public GitHub revision locally. Presents the city and owns the unsaved investigation.
+|Public GitHub |Receives anonymous fixed-route requests from the browser worker for revision, commit, recursive tree, and raw files.
+|Native Node.js host |Serves verified public assets; receives no analysis command, source, result, or per-tab session.
+|Operator |Selects port and optional bind/canonical host; operates the static host.
 |===
 
-GitHub Pages is not the application service. The last versioned, script-free
-retirement notice from the cutover may remain reachable, but repository
-workflows no longer deploy to Pages. No claim is made that the Pages repository
-setting is disabled.
+Provider content, paths, bytes, and worker messages cross validation boundaries.
+The UI consumes only validated presentation data from its own worker. Source
+stays worker-local and is never executed. Provider requests omit credentials
+and referrers. A repository cannot choose imports, worker paths, or parser URLs.
 
-== Trust boundaries
+Web Crypto requires a secure browser context. Localhost HTTP works; remote
+hosting needs HTTPS, whose ingress is not provided by this milestone.
+GitHub Pages is not reactivated; the earlier script-free retirement notice and
+live verification remain historical evidence.
 
-Browser input, provider responses, repository paths, source bytes, worker
-messages, and generated package bytes cross validation boundaries. Provider
-projection is not trust. The service validates immutable identities, complete
-raw ancestry, canonical paths, content, internal protocol values, and
-source-free city payloads.
+== Later shared storage
 
-Source text reaches parsers as data inside the analysis worker and does not
-cross into browser events. Canonical paths and failure categories reach the
-browser only as validated inert data. The manifest and all private runtime
-files remain HTTP-inaccessible.
-
-== Later target context
-
-The whole-core target retains the same ownership boundary and adds explicit
-saved investigations and deeper source investigation. User identity,
-authorization, storage, public ingress, private providers, and deployment
-mechanisms remain unresolved.
+Only explicit Save will upload a complete client-created investigation. Shared
+links will reopen stored data without provider access or analysis. No account,
+login, private-source integration, persistence implementation, or Internet
+exposure is implied by the current local-analysis milestone.

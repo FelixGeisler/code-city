@@ -1,0 +1,33 @@
+= Browser Analysis Operating Policy
+
+Status:: Accepted
+Decision:: xref:architecture:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015]
+
+This policy applies to the browser-analysis milestone. The earlier
+xref:standalone-m5-operating-policy.adoc[M5 policy] describes the historical
+server-analysis slice and does not define current temporary custody.
+
+* *Temporary custody:* Unsaved source and results stay in browser memory.
+  The server receives no repository URL, source, analysis command, or result.
+  Do not create application-managed source files, browser-storage snapshots,
+  service-worker caches, or silent saves. This does not promise protection from
+  browser/OS inspection, swap, or process failure.
+* *Lifetime:* Keep the current local investigation until Discard, replacement,
+  page reload/navigation/close, or worker loss. Cancel active work without
+  publishing a partial replacement; Cancel after completion does not discard.
+  Invalidate publication before stopping old work so late messages remain inert.
+* *Resources:* An idle tab holds no server analysis session, source reservation,
+  or analysis worker. Worker and source ownership are local to that browser.
+  Existing processing limits are input bounds, not total browser RAM or latency
+  guarantees. Do not sample, truncate, retry, or silently lower those limits.
+* *Provider:* Read public GitHub anonymously from the browser using only the
+  fixed API/raw origins and validated immutable identities. Omit credentials
+  and referrers. Never execute repository code or use its text as an asset URL.
+* *Hosting:* Serve only manifest-public application/worker/parser assets.
+  Keep the Node host and manifest private. Loopback is the default. Remote
+  browser analysis requires HTTPS for Web Crypto; this milestone supplies no
+  TLS ingress, Internet deployment, private provider, or device qualification.
+* *No accounts or persistence:* There is no login, Save, reopen, shared inventory,
+  or recovery yet. Explicit server persistence follows separately. It validates
+  user-created snapshots for safe bounded storage and reopen, not metric truth.
+  It must not recreate server ownership for unsaved or idle investigations.

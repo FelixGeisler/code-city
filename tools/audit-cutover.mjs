@@ -120,11 +120,19 @@ async function auditRetirementEvidence(inventory, noticeBytes) {
 export async function auditCutover() {
   const manifest = await auditStandaloneArtifact(canonicalStandaloneRoot);
   const publicPaths = manifest.files.filter(({ role }) => role === "public").map(({ path: filePath }) => filePath);
-  assert.deepEqual(publicPaths, ["public/browser.css", "public/browser.js", "public/index.html"]);
+  assert.deepEqual(publicPaths, [
+    "public/analysis-worker.js", "public/browser.css", "public/browser.js", "public/index.html",
+    "public/parser/tree-sitter-c-sharp.wasm", "public/parser/tree-sitter-javascript.wasm",
+    "public/parser/tree-sitter-tsx.wasm", "public/parser/tree-sitter-typescript.wasm",
+    "public/parser/web-tree-sitter.js", "public/parser/web-tree-sitter.wasm",
+  ]);
 
   const publicJavaScript = await readFile(path.join(canonicalStandaloneRoot, "public", "browser.js"), "utf8");
-  assert.doesNotMatch(publicJavaScript, /api\.github\.com|raw\.githubusercontent\.com|new\s+Worker\b|SharedWorker\b|web-tree-sitter|tree-sitter-(?:javascript|typescript|tsx|c-sharp)|\.wasm\b|readRawSource|normalizedSource|providerOverride|fallback/iu);
-  assert.match(publicJavaScript, /\/_code-city\/session/u);
+  assert.match(publicJavaScript, /new Worker\(/u);
+  assert.doesNotMatch(publicJavaScript, /_code-city\/|api\.github\.com|raw\.githubusercontent\.com|\bfetch\s*\(/u);
+  const worker = await readFile(path.join(canonicalStandaloneRoot, "public", "analysis-worker.js"), "utf8");
+  assert.ok(worker.includes("api.github.com") && worker.includes("raw.githubusercontent.com"));
+  assert.doesNotMatch(publicJavaScript + worker, /providerOverride|process\.env|localStorage|sessionStorage|indexedDB|serviceWorker/iu);
 
   const noticeBytes = await readFile(noticePath);
   const noticeText = noticeBytes.toString("utf8");

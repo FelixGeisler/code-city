@@ -2,53 +2,17 @@
 
 [cols="1,3",options="header"]
 |===
-|Term |Meaning in this architecture
-
-|Additional exclusion
-|A user-supplied exact canonical repository-relative path captured with an
-Analyze attempt.
-
-|Canonical artifact
-|The `dist/` directory containing public browser bytes, private server/parser
-bytes, and the version-1 package manifest.
-
-|Canonical path
-|The validated repository-relative identity used for ordering and presentation.
-
-|Complete acquisition
-|Validation of the entire recursive tree, including every raw ancestor, before
-exclusion, suffix filtering, or blob reads.
-
-|Current implementation
-|The standalone M5 service and source-free same-origin browser selected by ADR
-0014.
-
-|Generation
-|A strictly increasing session-scoped attempt identity that prevents replaced,
-cancelled, or stale work from becoming current.
-
-|Immutable revision
-|The full commit identity selected only by explicit analysis.
-
-|Retirement notice
-|The separate versioned script-free document deployed at cutover to state that
-the former in-browser analyzer is retired and the standalone artifact is
-deliverable. It may remain reachable; repository workflows no longer deploy it
-and do not claim that the Pages setting is disabled.
-
-|Saved investigation
-|The later immutable server-owned snapshot created only by explicit Save. It is
-not implemented in standalone M5.
-
-|Source-free
-|Containing geometry, presentation facts, and sanitized failures but no source
-text, parser tree, provider response, or raw diagnostic.
-
-|Worker
-|One Node.js `worker_threads` worker that executes one admitted analysis
-attempt. No browser analysis worker is shipped.
-
-|Unresolved design
-|A later mechanism that has not been selected and must not be inferred from an
-accepted outcome.
+|Term |Meaning
+|Additional exclusion |An exact canonical repository-relative path captured by Analyze.
+|Canonical artifact |`dist/`, with manifest-public UI/worker/parser assets, private native host, and version-1 manifest.
+|Canonical path |Validated repository-relative identity used for ordering and presentation.
+|Complete acquisition |Complete recursive identity and ancestry validation before filtering/reads; all admitted source retrieval finishes before analysis.
+|Current implementation |Browser-owned public GitHub analysis and unsaved state; a native Node.js asset host.
+|Generation |A monotonically increasing browser-local attempt identity that prevents stale publication.
+|Immutable revision |A full commit selected by explicit analysis.
+|Local owner |A browser transport/lifetime identifier, not authentication or a backend session.
+|Worker |A dedicated browser Web Worker running the shared analyzer. Native worker adapters exist only as regression references.
+|Saved investigation |A later immutable client-created snapshot persisted only by explicit Save and reopened without analysis. Not implemented yet.
+|Source-free message |Presentation/progress/failure data without source text, parser trees, or provider diagnostics; source remains inside the browser worker.
+|Retirement notice |The historical script-free hosted notice. Workflows do not reactivate Pages or claim its repository setting was disabled.
 |===

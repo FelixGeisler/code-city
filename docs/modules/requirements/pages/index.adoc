@@ -1,114 +1,94 @@
 = Product
 
-== Current standalone M5 product
+== Current browser-analysis milestone
 
-Code City is a standalone Node.js application for one anonymously accessible
-public GitHub repository. The service owns revision selection, source
-acquisition, parsing, metrics, deterministic city construction, temporary
-source-result association, admission capacity, and cleanup. The browser owns
-same-origin interaction and presentation and receives no source payload.
+Code City analyzes one anonymously accessible public GitHub repository in a
+browser Web Worker. The browser owns immutable revision selection, source
+acquisition, parsing, metrics, city construction, and the unsaved investigation.
+The native Node.js HTTP host serves manifest-verified application assets only;
+it owns no analysis worker, temporary source dataset, or per-tab analysis session.
 
-The stable source and metric behavior is defined in
-xref:source-and-metrics.adoc[Source and Metrics]. City, failure, interaction,
-and deferred Save behavior is defined in
-xref:city-and-failures.adoc[City and Failures]. The exact temporary-custody,
-network, capacity, and no-Save boundary is defined in
-xref:standalone-m5-operating-policy.adoc[Standalone M5 Operating Policy].
+Stable admission, language, and metric behavior is defined in
+xref:source-and-metrics.adoc[Source and Metrics]. Presentation and the later
+shared Save target are defined in xref:city-and-failures.adoc[City and Failures].
+Current custody and network rules are defined in
+xref:browser-analysis-operating-policy.adoc[Browser Analysis Operating Policy].
 
-The canonical built artifact is `dist/`. Its version-1
-`package-manifest.json` records every public and private runtime byte with an
-artifact-relative path, role, media type, length, and SHA-256 digest. The
-artifact contains:
+== Build and operation
 
-* `public/` for the source-free same-origin browser;
-* `server/` for the native HTTP service and worker code;
-* `parser/` for the pinned parser runtime and JavaScript, TypeScript, TSX, and
-  C# grammar assets.
+The canonical built artifact is `dist/`. The version-1 `package-manifest.json`
+records each runtime file's artifact-relative path, public/private role, media
+type, byte length, and SHA-256 digest.
 
-Only declared `public/` bytes are served. The manifest, server files, parser
-files, and unlisted paths return `404`.
+* `public/` contains the browser UI, analysis worker, parser runtime, and grammar
+  WASM. Only verified public records are served.
+* `server/` contains the private static host. It contains no analysis or session
+  runtime. Private files, the manifest, and unlisted paths return `404`.
+* The empty `parser/` root is retained by the existing artifact-layout contract;
+  active parser assets are public records under `public/parser/`.
 
-== Operation
+`npm run build` creates this artifact. `npm start -- --port <port>` starts it.
+`npm run dev -- --port <port>` builds under `build/development/` and starts the
+same host without writing `dist/`; there is no HMR or WebSocket path.
 
-`npm run build` creates the canonical artifact. `npm start -- <flags>` starts
-only that built artifact. `npm run dev -- <flags>` performs a one-shot build in
-`build/development/` and starts the same service; it provides no HMR or
-WebSocket path and does not write `dist/`.
-
-Only `--host` has a default (`127.0.0.1`). Operators must supply `--port` and
-all five capacity flags:
-
-* `--max-live-sessions`
-* `--max-active-attempts`
-* `--max-command-body-readers`
-* `--max-command-body-bytes`
-* `--max-retained-source-bytes`
-
-No capacity value is a product default or deployment recommendation. A
-non-loopback host requires an explicit canonical host. The approved exposure
-boundary is loopback-first or deliberate unauthenticated trusted-LAN use for
-public GitHub source only. Internet exposure, private repositories, FLOW, ADO,
-authentication, and device deployment are not approved.
+Only `--host` has a default, `127.0.0.1`. `--port` is required; `0` requests an
+OS-assigned port. A non-loopback host requires `--canonical-host`. The former
+session, attempt, command-reader, and retained-source capacity flags are not
+accepted. Browser Web Crypto requires HTTPS or a secure localhost context.
+The host supplies no TLS ingress, and an insecure browser context shows
+`Browser analysis requires HTTPS or localhost.` without starting a worker.
 
 == User-visible behavior
 
-The browser captures one public GitHub repository URL and optional additional
-exclusions when Analyze is selected. It uses only the same-origin session,
-analyze, cancel, and discard routes. Session identity, generations, attempts,
-and the current source-free result exist only in browser memory.
+Analyze captures one public GitHub URL and optional exact path exclusions.
+A dedicated worker resolves the revision, validates and acquires the complete
+eligible source set, continues supported per-file failures, and constructs a
+city from successful facts. The UI thread validates the result and presents it.
+Repository content is data, never imported or executed as application code.
 
-From an accepted Analyze submission until its current terminal outcome, the
-status area shows `Analyzing repository`, the existing `Cancel` action, and one
-native progress control. Its phase label is `Starting analysis`, `Resolving
-revision`, `Preparing file inventory`, `Acquiring files X of N`, `Initializing
-analysis`, `Analyzing files X of T`, or `Building city` according to the latest
-validated server event for the current generation. Acquisition uses the
-validated supported-file candidate count `N`; analysis uses the text-valid
-file count `T`, where `0 <= T <= N`. Once a positive phase total is known, the
-control uses that phase's exact completed and total counts, beginning at `0/N`
-or `0/T` while the first file is in progress. Unknown-total phases remain
-indeterminate and clear stale values. The phase-local scales may reset between
-acquisition and analysis and do not represent overall runtime, elapsed time,
-throughput, or an ETA. Optional progress may be omitted under response
-backpressure, so displayed counts may jump but never regress. Completion,
-failure, invalid input, cancellation, session loss, discard, page exit, and
-disposal remove the control. Replacement removes the prior presentation and
-shows one for the newest accepted submission.
+From Analyze until a terminal outcome, show one native progress control and
+Cancel. Phase labels are `Starting analysis`, `Resolving revision`,
+`Preparing file inventory`, `Acquiring files X of N`, `Initializing analysis`,
+`Analyzing files X of T`, and `Building city`. Once a positive total is known,
+report real counts beginning at `0/N` or `0/T`; unknown totals are indeterminate.
+The phase-local scales do not represent overall runtime, elapsed time,
+throughput, or an ETA. Never display `0/0` or fabricate completion for a failure.
 
-The service resolves an explicit branch head or the default-branch head,
-selects one immutable commit, acquires and validates the complete admitted
-source set, continues supported per-file analysis failures, and returns one
-deterministic city plus sanitized failed-file rows. Replacement, cancellation,
-session loss, backpressure loss, and shutdown cannot publish stale work.
-Successful or all-files-failed current results remain until Discard,
-replacement, or session loss.
+Cancel during acquisition aborts and settles the owned source reads before the
+worker is released. After acquisition, cancellation can terminate the worker
+without waiting for a synchronous parser to process a message. Replacement
+invalidates old publication, stops old work, and starts only the newest local
+submission. Late callbacks cannot restore discarded state. Page exit disposes
+its local worker. Successful and all-files-failed results remain local until
+Discard, replacement, page loss, or worker loss. Cancel after completion is a
+no-op rather than a discard.
 
-There is no automatic retry, reconnect, recovery, source view, Save, reopen, or
-application-managed persistence. Raspberry Pi performance, concurrency,
-memory, and deployment qualification remain pending.
+An idle tab creates no analysis worker or backend analysis request. Multiple
+completed tabs do not reserve shared analysis capacity. Filtering, sorting,
+selection, and camera interaction remain local.
+
+There is no automatic retry, recovery, source view, Save, shared inventory,
+reopen, login, or application-managed persistence in this milestone.
 
 == Verification and publication
 
-`npm run verify` type-checks, runs tests, builds once, reproduces the manifest
-and every recorded byte, drives the actual packaged server, worker, parser
-assets, and browser with deterministic nonshipped provider evidence, verifies
-joined signal shutdown, validates the immutable retirement evidence, and builds
-this documentation. Missing or stale artifacts fail closed.
+`npm run verify` checks types and tests, builds once, reproduces every recorded
+byte, audits the actual package, verifies native shutdown, drives installed
+Chrome with a synthetic provider through the production worker, and builds docs.
+The browser gate covers real four-grammar results, CORS failure, blob integrity,
+source limits, measured progress, cancellation, replacement, multiple tabs, and
+a healthy 4,000-file / 40 MiB attempt. This is not a resource or latency promise.
 
-A protected-main publication uploads the exact audited manifest-bound
-standalone artifact and its exact manifest/run publication record. Pages upload
-and deployment capability plus hosted-analyzer observation were removed only
-after the #625 cutover run, notice bytes, and all eight former analyzer `404`
-responses passed the live gate recorded in
-`publication/retirement-live-verification-v1.json`. The last script-free notice
-may remain reachable. No claim is made that the Pages repository setting is
-disabled, deleted, or changed.
+Protected main publication uploads the audited `dist/` and its manifest-bound
+run record. No Pages deployment is reactivated. The earlier live retirement
+notice and former-analyzer URL evidence remain unchanged in
+`publication/retirement-live-verification-v1.json`.
 
-== Approved whole-core target beyond standalone M5
+== Next delivery
 
-Accepted xref:architecture:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
-keeps server ownership of acquisition, analysis, and source-result association.
-The later whole-core target adds explicit immutable Save/reopen and deeper
-investigation outcomes. Storage, authentication, public API, Internet
-operation, private-source integration, deployment topology, and recovery
-technology remain unselected and are not implied by standalone M5.
+xref:architecture:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015]
+keeps computation and unsaved state in the browser and assigns custody only of
+explicitly saved investigations to the server. Shared immutable Save, inventory,
+and reopen remain unimplemented. No login or metric certification is required;
+storage format, operation limits, deletion, and recovery need decisions before
+that delivery. Private-source and Internet deployment are not implied.

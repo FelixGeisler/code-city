@@ -329,7 +329,7 @@ test("exactly four strict no-emit TypeScript configs isolate main, worker, and i
   assert.deepEqual(worker.compilerOptions.lib, ["es2024", "webworker"]);
   assert(!worker.compilerOptions.lib.includes("dom"));
   assert.deepEqual(worker.compilerOptions.types, []);
-  assert.deepEqual(worker.files.map((file) => file.replaceAll("\\", "/")), ["./src/edge/processing-worker.ts"]);
+  assert.deepEqual(worker.files.map((file) => file.replaceAll("\\", "/")), ["./src/edge/processing-worker.ts", "./src/edge/browser-analysis-worker.ts"]);
 
   const node = showTypeScriptConfig("tsconfig.node.json");
   assert.equal(node.compilerOptions.strict, true);
@@ -366,6 +366,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
 
   const productionFiles = await listFiles(path.join(projectRoot, "src"));
   assert.deepEqual(productionFiles, [
+    "application/analyze-repository.ts",
     "application/base-metric-processing.ts",
     "application/city-payload.ts",
     "application/internal/source-byte-ownership.ts",
@@ -382,6 +383,8 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "domain/complexity.ts",
     "domain/repository-reference.ts",
     "domain/source-admission.ts",
+    "edge/browser-analysis-worker.ts",
+    "edge/browser-worker-transport.ts",
     "edge/city-presenter.ts",
     "edge/github-revision-gateway.ts",
     "edge/github-source-gateway.ts",
@@ -884,7 +887,7 @@ test("README and agent guidance describe the current product and supported comma
     "build/development/",
     "npm run build",
     "npm start --",
-    "--max-live-sessions",
+    "--port",
     "npm run verify",
     "`main`",
   ]) {

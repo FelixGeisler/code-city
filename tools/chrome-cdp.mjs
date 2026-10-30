@@ -170,7 +170,7 @@ export function connectCdp(websocketUrl, { WebSocketImpl = WebSocket } = {}) {
       const waiter = pending.get(message.id);
       if (!waiter) return;
       pending.delete(message.id);
-      if (message.error) waiter.reject(new Error("CDP command failed"));
+      if (message.error) waiter.reject(new Error("CDP command failed", { cause: message.error }));
       else waiter.resolve(message.result);
       return;
     }

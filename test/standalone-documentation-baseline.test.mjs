@@ -3,155 +3,69 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-
 const root = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
-const read = (relative) => readFile(path.join(root, ...relative.split("/")), "utf8");
-const compact = (value) => value.replace(/\s+/gu, " ");
+const read = relative => readFile(path.join(root, relative), "utf8");
+const compact = value => value.replace(/\s+/gu, " ");
 
-test("accepted ADR and operating policy remain authoritative", async () => {
-  const [adr, policy] = await Promise.all([
-    read("docs/modules/architecture/pages/adr/0014-standalone-server-owned-analysis-runtime.adoc"),
-    read("docs/modules/requirements/pages/standalone-m5-operating-policy.adoc"),
-  ]);
-  assert.match(adr, /^Status:: Accepted$/m);
-  assert.match(policy, /^Status:: Accepted$/m);
-  assert.match(compact(policy), /process memory[\s\S]*loopback[\s\S]*trusted-LAN[\s\S]*No Save/iu);
+test("accepted browser ownership decision and current custody policy supersede only the historical server-analysis boundary", async () => {
+  const adr = await read("docs/modules/architecture/pages/adr/0015-browser-analysis-and-server-saved-investigations.adoc");
+  const policy = compact(await read("docs/modules/requirements/pages/browser-analysis-operating-policy.adoc"));
+  assert.match(adr, /^Status:: Accepted$/mu);
+  assert.match(adr, /Human acceptance::/u);
+  assert.match(adr, /Do not introduce login or accounts/u);
+  assert.match(policy, /Unsaved source and results stay in browser memory/u);
+  assert.match(policy, /idle tab holds no server analysis session/u);
+  assert.match(policy, /no login, Save, reopen/u);
+  for (const name of ["0013-ownership-of-source-acquisition-analysis-and-saved-investigations", "0014-standalone-server-owned-analysis-runtime"]) {
+    const historical = await read(`docs/modules/architecture/pages/adr/${name}.adoc`);
+    assert.match(historical, /^Status:: Accepted$/mu);
+    const decisions = await read("docs/modules/architecture/pages/09-architecture-decisions.adoc");
+    assert.ok(decisions.includes(name));
+    assert.match(decisions, /ADR 0015 replaces the server-analysis portions/u);
+  }
 });
 
-test("requirements describe the active standalone cutover without deployment defaults", async () => {
+test("requirements describe real browser analysis, static hosting, progress, and the still-unimplemented Save boundary", async () => {
   const product = compact(await read("docs/modules/requirements/pages/index.adoc"));
-  for (const expected of [
-    "canonical built artifact is `dist/`",
-    "`public/`",
-    "`server/`",
-    "`parser/`",
-    "Only `--host` has a default",
-    "`--max-live-sessions`",
-    "`--max-active-attempts`",
-    "`--max-command-body-readers`",
-    "`--max-command-body-bytes`",
-    "`--max-retained-source-bytes`",
-    "Raspberry Pi",
-  ]) assert(product.includes(expected), expected);
-  assert.match(product, /No capacity value is a product default or deployment recommendation/u);
-  assert.match(product, /no automatic retry, reconnect, recovery, source view, Save, reopen/iu);
-  assert.match(product, /`Acquiring files X of N`[\s\S]*`Analyzing files X of T`[\s\S]*beginning at `0\/N` or `0\/T`/u);
-  assert.match(product, /phase-local scales[\s\S]*do not represent overall runtime, elapsed time, throughput, or an ETA/u);
+  for (const expected of ["browser Web Worker", "asset", "version-1", "package-manifest.json", "public/parser/", "Only `--host` has a default", "`--port` is required", "HTTPS", "secure localhost", "real counts beginning at `0/N` or `0/T`", "phase-local scales do not represent overall runtime", "Multiple completed tabs do not reserve shared analysis capacity", "Shared immutable Save, inventory, and reopen remain unimplemented"])
+    assert.ok(product.includes(expected), expected);
+  assert.doesNotMatch(product, /all five capacit(?:y|ies) (?:flags )?are required|service owns revision selection/u);
 });
 
-test("current-state requirements and architecture distinguish implemented M5 from later whole-core outcomes", async () => {
-  const [source, city, risks] = await Promise.all([
-    read("docs/modules/requirements/pages/source-and-metrics.adoc"),
-    read("docs/modules/requirements/pages/city-and-failures.adoc"),
-    read("docs/modules/architecture/pages/11-risks-and-technical-debt.adoc"),
-  ]).then((values) => values.map(compact));
-
-  assert.match(source, /Standalone M5 implements server-owned source acquisition and analysis[\s\S]*supported per-file continuation[\s\S]*temporary source-result association/u);
-  assert.match(city, /current standalone M5 implementation has server-owned acquisition and analysis in a dedicated Node\.js worker/u);
-  assert.match(city, /successful current result retains its exact analyzed-source association in process memory[\s\S]*browser receives only the source-free city and sanitized failed-file rows/u);
-  assert.match(city, /now exposes every successful fact[\s\S]*searchable and three-way sortable inventory[\s\S]*shared canonical-index selection[\s\S]*do not invoke search reveal, move or focus the camera/u);
-  assert.match(risks, /Standalone M5 has completed the move to server-owned acquisition and analysis[\s\S]*per-file continuation/u);
-  assert.match(risks, /now has the complete successful-file inventory and selection without camera movement/u);
-  for (const category of [
-    "Source text is not supported",
-    "Syntax could not be analyzed",
-    "Metrics could not be computed",
-  ]) {
-    assert(source.includes(category), category);
-    assert(city.includes(category), category);
-  }
-
-  const currentStateDocumentation = [source, city, risks].join("\n");
-  for (const staleClaim of [
-    /Current browser acquisition and whole-attempt parser behavior remain transitional/iu,
-    /without implying that server acquisition[\s\S]{0,120}exists/iu,
-    /Browser and anonymous-provider coupling/iu,
-    /Whole-attempt file failure/iu,
-    /move from browser-owned acquisition and analysis to server authority/iu,
-    /without claiming that a server is implemented or deployed/iu,
-    /At `9bcf7c8`[\s\S]{0,200}per-file failure continuation/iu,
-    /sortable successful-file inventory, or target camera policy/iu,
-    /Path-search activation selects and moves the camera/iu,
-  ]) assert.doesNotMatch(currentStateDocumentation, staleClaim);
-});
-
-test("active standalone inventory documentation excludes non-mounted legacy semantics", async () => {
+test("requirements preserve per-file continuation and local inventory semantics without claiming deeper investigation features", async () => {
+  const source = compact(await read("docs/modules/requirements/pages/source-and-metrics.adoc"));
   const city = compact(await read("docs/modules/requirements/pages/city-and-failures.adoc"));
-
-  assert.match(city, /active standalone publishes the successful-file inventory, shared selection, canvas, Reset control, and raw file-metric inspector/iu);
-  assert.match(city, /active composition mounts no contextual district row and no persistent complexity legend/iu);
-  assert.match(city, /Selection, filtering, and sorting do not invoke search reveal, move or focus the camera/iu);
-  assert.match(city, /retained legacy semantic row, legend, and search-reveal capabilities are historical implementation references, not current standalone behavior/iu);
-  assert.match(city, /Camera action[\s\S]*active coordinator's no-op projection callback[\s\S]*no contextual row is published/iu);
-  assert.match(city, /Resize[\s\S]*retain target\/orientation\/magnification[\s\S]*no-op projection callback has no DOM effect/iu);
-  assert.match(city, /Canonical paths already cross the existing provider-acquisition and source-free same-origin session boundaries[\s\S]*inventory query remains browser-local[\s\S]*Filtering, sorting, and selection introduce no additional provider or HTTP request/iu);
-  assert.match(city, /successful paths are published only in analyzed-list rows and the selected inspector[\s\S]*failed paths only in the separate `Not analyzed files` list[\s\S]*inert `<bdi dir="auto">` nodes assigned through `textContent`/iu);
-  assert.match(city, /Canonical paths already pass through the existing provider acquisition and the source-free same-origin session DTO[\s\S]*analyzed list, selected inspector, and separate `Not analyzed files` list/iu);
-  assert.match(city, /Inventory interaction derives no path- or query-based[\s\S]*release evidence and sends no source payload/iu);
-  assert.match(city, /Interaction derives no path- or query-based[\s\S]*evidence payload and sends no source payload/iu);
-
-  for (const staleCurrentClaim of [
-    /Every committed city reserves one `20px` normal-flow contextual row/iu,
-    /Every committed city has one persistent, noninteractive legend/iu,
-    /accepted camera action, wheel, resize, Reset, and search reveal invalidate/iu,
-    /search-triggered camera reveal, and the current absence of source viewing are not the approved whole-core target/iu,
-    /Paths and queries never enter[\s\S]{0,160}provider traffic/iu,
-    /Repository paths may reach only inert inventory-row and selected-inspector/iu,
-    /Paths and queries do not enter[\s\S]{0,160}network traffic/iu,
-  ]) assert.doesNotMatch(city, staleCurrentClaim);
-});
-
-test("building blocks distinguish browser-local inventory from internal progress schemas", async () => {
-  const buildingBlocks = compact(await read("docs/modules/architecture/pages/05-building-block-view.adoc"));
-
-  assert.match(buildingBlocks, /Inventory, filtering, sorting, and selection remain browser-local and introduce no storage, route, DTO, protocol, runtime, dependency, or ownership boundary\./u);
-  assert.match(buildingBlocks, /Measured progress adds exact source-free internal worker and session notification schemas inside the existing worker and session boundaries; it adds no public API, route, transport, runtime, dependency, or ownership boundary\./u);
-  assert.doesNotMatch(buildingBlocks, /Measured progress[^.]*introduces no[^.]*DTO|Measured progress[^.]*adds no[^.]*protocol/iu);
-});
-
-test("obsolete browser-only architecture diagrams remain removed", async () => {
-  const obsoleteDiagrams = [
-    "building-blocks.svg",
-    "context.svg",
-    "deployment.svg",
-    "runtime.svg",
-  ];
-  for (const diagram of obsoleteDiagrams) {
-    const diagramPath = path.join(root, "docs/modules/architecture/assets/images", diagram);
-    await assert.rejects(stat(diagramPath), { code: "ENOENT" }, diagram);
+  assert.match(source, /Browser-owned acquisition and analysis/u);
+  assert.match(source, /dedicated worker[\s\S]*supported per-file continuation/u);
+  for (const category of ["Source text is not supported", "Syntax could not be analyzed", "Metrics could not be computed"]) {
+    assert.ok(source.includes(category)); assert.ok(city.includes(category));
   }
-
-  const architecturePages = await Promise.all([
-    "03-context-and-scope.adoc",
-    "05-building-block-view.adoc",
-    "06-runtime-view.adoc",
-    "07-deployment-view.adoc",
-  ].map((page) => read(`docs/modules/architecture/pages/${page}`)));
-  for (const diagram of obsoleteDiagrams) {
-    assert.doesNotMatch(architecturePages.join("\n"), new RegExp(diagram.replace(".", "\\."), "u"));
-  }
+  assert.match(city, /browser-owned acquisition and analysis in a dedicated Web Worker/u);
+  assert.match(city, /asset host owns no analysis session, source\/result dataset, or analysis capacity/u);
+  assert.match(city, /shared canonical-index selection/u);
+  assert.match(city, /Selection, filtering, and sorting do not invoke search reveal, move or focus the camera/u);
+  assert.match(city, /active composition mounts no contextual district row and no persistent complexity legend/u);
+  assert.match(city, /browser worker message boundary/u);
+  assert.match(city, /inert `<bdi dir="auto">` nodes assigned through `textContent`/u);
+  assert.match(city, /current milestone has no browser source view, unit or contribution detail, server persistence, Save\/reopen/u);
+  assert.doesNotMatch(city, /current standalone M5 implementation has server-owned/u);
 });
 
-test("architecture describes canonical package, standalone publication, completed retirement cleanup, and pending qualification", async () => {
-  const [constraints, runtime, deployment, quality] = await Promise.all([
-    read("docs/modules/architecture/pages/02-architecture-constraints.adoc"),
-    read("docs/modules/architecture/pages/06-runtime-view.adoc"),
-    read("docs/modules/architecture/pages/07-deployment-view.adoc"),
-    read("docs/modules/architecture/pages/10-quality-requirements.adoc"),
-  ]).then((values) => values.map(compact));
-  assert.match(constraints, /canonical `dist\/` artifact[\s\S]*version-1 `package-manifest\.json`/u);
-  assert.match(constraints, /no GitHub provider[\s\S]*browser analysis worker[\s\S]*fallback analysis path/u);
-  assert.match(runtime, /validates the exact version-1 package manifest[\s\S]*verifies the length and SHA-256 digest of every public record before listening/u);
-  assert.match(runtime, /Startup does not read or hash private server or parser records;[\s\S]*offline package audit verifies complete public\/private manifest closure and every recorded byte before publication/u);
-  assert.doesNotMatch(runtime, /runtime validates[\s\S]{0,120}every recorded file/iu);
-  assert.match(runtime, /Successful and all-files-failed results retain their exact normalized source association in process memory[\s\S]*syntax or metric failure[\s\S]*Source text rejected as unsupported is not retained[\s\S]*until Discard, replacement, detected session loss, or graceful shutdown/u);
-  assert.doesNotMatch(runtime, /all-files-failed result retains only the accepted current failure association/iu);
-  assert.match(runtime, /Optional progress is omitted before serialization and write[\s\S]*`writableNeedDrain`[\s\S]*`writableLength`[\s\S]*never queued[\s\S]*first blocked frame and waits for `drain`[\s\S]*blocked write alone does not cause session loss[\s\S]*mandatory event or mutating command while the frame is blocked initiates joined session loss without another write/u);
-  assert.match(runtime, /real `0\/N` and `0\/T`[\s\S]*later nonzero acquisition and analysis counts[\s\S]*healthy-reading 4,000-file attempt/u);
-  assert.match(runtime, /`npm run dev -- <flags>`[\s\S]*`build\/development\/`[\s\S]*no HMR or WebSocket/u);
-  assert.match(deployment, /uploads the exact audited `dist\/`[\s\S]*manifest plus publication record as internal identity evidence/u);
-  assert.match(deployment, /No Pages upload or deployment action[\s\S]*hosted analyzer observation job remains/u);
-  assert.match(deployment, /retirement-live-verification-v1\.json[\s\S]*all eight URLs/u);
-  assert.match(deployment, /last script-free notice may remain reachable[\s\S]*no claim that the GitHub Pages repository setting was disabled/u);
-  assert.match(quality, /No Raspberry Pi performance, concurrency, memory, or deployment threshold is claimed/u);
+test("architecture documents the current worker/package/stop boundaries and does not revive removed diagrams", async () => {
+  const names = ["02-architecture-constraints", "03-context-and-scope", "04-solution-strategy", "05-building-block-view", "06-runtime-view", "07-deployment-view", "08-crosscutting-concepts", "10-quality-requirements", "11-risks-and-technical-debt"];
+  const pages = await Promise.all(names.map(n => read(`docs/modules/architecture/pages/${n}.adoc`).then(compact)));
+  assert.match(pages[0], /version-1 `package-manifest.json`/u);
+  assert.match(pages[0], /Legacy analysis routes are not mounted/u);
+  assert.match(pages[4], /verifies the length and SHA-256 digest of every public record before listening/u);
+  assert.match(pages[4], /offline package audit verifies complete public\/private manifest closure/u);
+  assert.match(pages[4], /No browser worker-exit event is assumed/u);
+  assert.match(pages[4], /4,000-file \/ 40 MiB/u);
+  assert.match(pages[5], /uploads the exact audited `dist\/`/u);
+  assert.match(pages[5], /No Pages upload or deployment action/u);
+  assert.match(pages[5], /all eight URLs/u);
+  assert.match(pages[7], /No Raspberry Pi performance, concurrency, memory, or deployment threshold/u);
+  for (const diagram of ["building-blocks.svg", "context.svg", "deployment.svg", "runtime.svg"]) {
+    await assert.rejects(stat(path.join(root, "docs/modules/architecture/assets/images", diagram)), { code: "ENOENT" });
+    assert.equal(pages.join("\n").includes(diagram), false);
+  }
 });

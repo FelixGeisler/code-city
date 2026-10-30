@@ -1,52 +1,22 @@
 = Introduction and Goals
 
-Code City turns source facts from one immutable public GitHub revision into an
-interactive city. The current implementation is the standalone M5 system
-selected by xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR
-0014]: one native Node.js HTTP service owns acquisition and analysis, one
-worker thread executes each admitted attempt, and a same-origin source-free
-browser owns presentation.
-
-The later whole-core target in
-xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
-adds saved investigations and deeper investigation behavior. It does not imply
-a public API, authentication, Internet service, private-source support, storage
-technology, or deployment topology.
-
-== Architecture goals
+Code City turns one immutable public GitHub revision into an interactive city.
+The browser owns acquisition and analysis in a dedicated Web Worker; the native
+Node.js service serves verified assets only. This boundary is selected by
+xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015].
 
 [cols="1,3",options="header"]
 |===
-|Goal |Architectural response
-
-|Reliable source identity
-|Select one immutable revision, validate complete source inventory evidence,
-and keep stale attempts from publishing.
-
-|Deterministic analysis
-|Keep product algorithms in domain/application code, isolate provider and
-parser integration at the Node edge, and apply requirement-owned admission and
-metric rules.
-
-|Bounded temporary ownership
-|Reserve explicit operator-set capacity before work, keep source-result
-association in process memory, join workers before release, and discard state
-on replacement, control, session loss, or shutdown.
-
-|Safe presentation
-|Expose only manifest-public browser bytes and source-free validated results;
-keep server, worker, parser, manifest, and source bytes private.
-
-|Verifiable delivery
-|Build one manifest-bound standalone artifact, reproduce every recorded byte,
-drive its actual server and browser, upload it with exact run identity, and
-retain immutable evidence that the separate retirement notice replaced the
-former analyzer before Pages deployment capability was removed.
+|Goal |Response
+|Use client computation |Run the shared TypeScript/WASM analyzer outside the UI thread.
+|Avoid idle-user contention |Keep unsaved source/results in the browser; create no backend analysis session or reservation.
+|Deterministic evidence |Preserve immutable identity, full acquisition, accepted algorithms, and stale-publication guards.
+|Safe presentation |Validate worker results and render paths and metrics as inert data.
+|Verifiable delivery |Close the package manifest, reproduce bytes, and exercise the actual packaged browser worker.
+|Shared investigations |Later persist explicit client-created snapshots and reopen them without analysis; not implemented yet.
 |===
 
-== Reading guide
-
-Chapters 3 through 7 explain context, components, runtime, and publication.
-Chapter 8 indexes crosscutting controls. Chapter 9 links the decision records.
-Product algorithms, limits, controls, failures, and saved-investigation behavior
-remain in the requirements module.
+Product behavior is authoritative in the requirements module. Persistence
+technology, operation limits, and deletion/recovery are later decisions, not
+claims about this milestone. No login, server metric certification, private
+provider, Internet deployment, or device-performance guarantee is added.

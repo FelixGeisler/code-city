@@ -116,7 +116,8 @@ test("development builds the standalone layout outside canonical dist", async ()
   try {
     await buildStandaloneArtifact(temporary);
     assert.equal(JSON.parse(await readFile(path.join(temporary, "package-manifest.json"), "utf8")).version, 1);
-    assert.equal((await readFile(path.join(temporary, "public", "browser.js"), "utf8")).includes("/_code-city/session"), true);
+    assert.equal((await readFile(path.join(temporary, "public", "browser.js"), "utf8")).includes("/_code-city/session"), false);
+    assert.equal((await readFile(path.join(temporary, "public", "analysis-worker.js"), "utf8")).includes("api.github.com"), true);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

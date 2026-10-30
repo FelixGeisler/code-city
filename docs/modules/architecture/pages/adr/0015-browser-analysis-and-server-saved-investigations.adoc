@@ -1,16 +1,18 @@
 = ADR 0015: Browser analysis and server-saved investigations
 
-Status:: Proposed
+Status:: Accepted
+Human acceptance:: User confirmed browser analysis, server-stored saved investigations,
+no login, and implementation of the first milestone in the project conversation.
 
 == Context
 
-Public GitHub input already works, but the current application downloads and
-analyzes source in Node.js workers. The server retains temporary investigations
-for open browser sessions. This couples idle tabs to shared admission capacity.
+Before this decision, the application downloaded and analyzed public GitHub
+source in Node.js workers and retained temporary investigations for open browser
+sessions. This coupled idle tabs to shared admission capacity.
 
 The agreed product direction is to use the user's CPU for analysis and retain
 shared Save/reopen without requiring accounts or server-certified metrics.
-The current ownership decisions in ADR 0013 and ADR 0014 need to change.
+This changes the earlier ownership decisions in ADR 0013 and ADR 0014.
 
 == Alternatives
 
@@ -72,9 +74,11 @@ path; do not merely revive the older browser implementation.
 Save, shared inventory, and reopen follow as a separate delivery. This first
 milestone does not claim persistence, source drill-down, recursive presentation,
 or shared-view completion. Browser memory and performance still need evidence;
-existing Node qualification is not a browser performance guarantee.
+existing Node qualification is not a browser performance guarantee. Browser blob
+integrity uses Web Crypto and therefore requires HTTPS or a secure localhost
+context; remote TLS deployment is not supplied by this milestone.
 
-When accepted, this ADR supersedes ADR 0013 for acquisition, computation, and
+This ADR supersedes ADR 0013 for acquisition, computation, and
 unsaved-result custody, while preserving server custody of explicit saved
 investigations. It supersedes ADR 0014's application analysis-worker/session
 boundary, not its native Node.js HTTP hosting choice. The earlier ADRs remain
