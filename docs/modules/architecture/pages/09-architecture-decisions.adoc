@@ -8,3 +8,7 @@ choice.
 
 * xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013: Ownership of source acquisition, analysis, and saved investigations]
 * xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR 0014: Standalone server runtime and analysis execution boundary]
+
+== Proposed decisions
+
+* xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015: Browser analysis and server-saved investigations]
