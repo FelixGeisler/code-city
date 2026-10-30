@@ -11,7 +11,7 @@ import { createBrowserProviderHarness, FIXTURE_REVISION } from "./standalone-bro
 
 const WATCHDOG_MS = 600_000;
 const REPOSITORY = "https://github.com/fixture/standalone";
-const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,discard:[...document.querySelectorAll('[data-actions] button')].map(b=>b.textContent),progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
+const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,discard:[...document.querySelectorAll('[data-actions] button')].map(b=>b.textContent),setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,findOpen:document.querySelector('[data-analyzed]')?.open??null,failuresOpen:document.querySelector('[data-failed]').open,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
 const renderObservation = `(() => {
  window.__render={matrices:[],uploads:0};
  const getContext=HTMLCanvasElement.prototype.getContext;
@@ -74,6 +74,7 @@ export async function checkStandaloneBrowser() {
       const { sessionId } = await checked(cdp.send("Target.attachToTarget", { targetId, flatten: true }));
       await checked(cdp.send("Page.enable", {}, sessionId));
       await checked(cdp.send("Runtime.enable", {}, sessionId));
+      await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 1365, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId));
       await checked(cdp.send("Runtime.addBinding", { name: "__codeCityDeliveryEvidence" }, sessionId));
       await checked(harness.attachPage(sessionId));
       await checked(cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: renderObservation }, sessionId));
@@ -84,7 +85,7 @@ export async function checkStandaloneBrowser() {
         return result.result.value;
       };
       const wait = async predicate => evaluate(`new Promise(resolve=>{const read=()=>(${snapshotExpression});const ok=${predicate.toString()};let observer;const check=()=>{const value=read();if(ok(value)){observer?.disconnect();resolve(value);}};observer=new MutationObserver(check);observer.observe(document,{subtree:true,childList:true,attributes:true,characterData:true});check();})`);
-      const submit = (url = REPOSITORY, exclusions = "") => evaluate(`(()=>{document.querySelector('input[name=repository]').value=${JSON.stringify(url)};document.querySelector('textarea[name=additional-exclusions]').value=${JSON.stringify(exclusions)};document.querySelector('form').requestSubmit();return true;})()`);
+      const submit = (url = REPOSITORY, exclusions = "") => evaluate(`(()=>{const change=document.querySelector('[data-change-repository]');if(document.querySelector('form').hidden&&!change.disabled)change.click();document.querySelector('input[name=repository]').value=${JSON.stringify(url)};document.querySelector('textarea[name=additional-exclusions]').value=${JSON.stringify(exclusions)};document.querySelector('form').requestSubmit();return true;})()`);
       const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click();true`);
       const loaded = Promise.withResolvers();
       const onLoad = message => { if (message.sessionId === sessionId && message.method === "Page.loadEventFired") loaded.resolve(); };
@@ -108,9 +109,18 @@ export async function checkStandaloneBrowser() {
     assert.equal(harness.workers.size, 0, "idle tabs started analysis workers");
     assert.equal(harness.requests.some(r => r.method !== "GET" || new URL(r.url).pathname.startsWith("/_code-city/")), false);
     assert.equal((await idle.snapshot()).status, "");
+    assert.equal((await p.snapshot()).setup, true);
+    assert.equal((await p.snapshot()).summary, false);
+    assert.equal(await p.evaluate(`document.querySelector('[data-exclusions]').open`), false);
+    assert.equal(await p.evaluate(`document.querySelector('textarea').checkVisibility()`), false);
+    await p.click("[data-exclusions] > summary");
+    assert.equal(await p.evaluate(`document.querySelector('textarea').checkVisibility()`), true);
+    await p.click("[data-exclusions] > summary");
     assert.equal((await idleThird.snapshot()).status, "");
     await p.submit("invalid input");
     await p.wait(s => s.feedback === "Invalid input");
+    assert.equal((await p.snapshot()).setup, true);
+    assert.equal((await p.snapshot()).summary, false);
     assert.equal(harness.workers.size, 0);
 
     async function run(mode, predicate) {
@@ -130,23 +140,84 @@ export async function checkStandaloneBrowser() {
       {canonicalPath:"a.js",S:1,U:2,M:2}, {canonicalPath:"b.ts",S:1,U:1,M:1},
       {canonicalPath:"c.tsx",S:1,U:1,M:1}, {canonicalPath:"d.cs",S:1,U:1,M:1}, {canonicalPath:"empty.js",S:0,U:0,M:0},
     ]);
+    process.stdout.write("Browser evidence: city-first workspace\n");
+    assert.equal(ordinary.result.setup, false);
+    assert.equal(ordinary.result.summary, true);
+    assert.equal(ordinary.result.repository, REPOSITORY);
+    assert.equal(ordinary.result.controls, true);
+    assert.equal(ordinary.result.findOpen, false);
+    assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-rows] button').checkVisibility()`), false);
+    assert.equal(await p.evaluate(`document.querySelector('[data-city-navigation]').open`), false);
+    const layout = await p.evaluate(`({top:document.querySelector('[data-city]').getBoundingClientRect().top,height:document.querySelector('[data-city]').getBoundingClientRect().height,viewport:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth})`);
+    assert.ok(layout.top < 200 && layout.height > layout.viewport * 0.6, JSON.stringify(layout));
+    assert.equal(layout.overflow, false);
     const initial = await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`);
+    async function key(key, code, virtualKeyCode) {
+      await checked(cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: virtualKeyCode, ...(key === "Enter" ? { text: "\r" } : {}) }, p.sessionId));
+      await checked(cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: virtualKeyCode }, p.sessionId));
+    }
+    await p.evaluate(`document.querySelector('[data-analyzed] > summary').focus();true`);
+    await key("Enter", "Enter", 13);
+    assert.equal((await p.snapshot()).findOpen, true, "Enter did not open file navigation");
+    assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-rows] button').checkVisibility()`), true);
     await p.click("[data-analyzed-rows] button");
     assert.equal(await p.evaluate(`document.querySelector('[data-canonical-path]').textContent`), "a.js");
     await p.evaluate(`(()=>{const q=document.querySelector('[data-analyzed-query]');q.value='b.ts';q.dispatchEvent(new Event('input'));return true;})()`);
     assert.equal(await p.evaluate(`document.querySelectorAll('[data-analyzed-rows] li').length`), 1);
     await p.evaluate(`(()=>{const q=document.querySelector('[data-analyzed-query]');q.value='';q.dispatchEvent(new Event('input'));const s=document.querySelector('[data-analyzed-sort]');s.value='M';s.dispatchEvent(new Event('change'));return true;})()`);
     assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`), initial, "inventory changed camera or geometry uploads");
+    await p.evaluate(`document.querySelector('[data-analyzed] > summary').focus();true`);
+    await key("Enter", "Enter", 13);
+    assert.equal((await p.snapshot()).findOpen, false, "Enter did not close file navigation");
+    assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-query]').value`), "");
+    assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-sort]').value`), "M");
+    await p.evaluate(`document.querySelector('[data-city] canvas').focus();true`);
+    await key("End", "End", 35);
+    assert.equal(await p.evaluate(`document.querySelector('[data-canonical-path]').textContent`), "empty.js");
+    assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`), initial, "closed file navigation changed camera or geometry");
+    process.stdout.write("Browser evidence: editing and reanalysis\n");
+    const requestsBeforeEditing = harness.requests.length;
+    await p.click("[data-change-repository]");
+    assert.equal((await p.snapshot()).setup, true);
+    assert.equal((await p.snapshot()).canvases, 1);
+    assert.equal(await p.evaluate(`document.activeElement === document.querySelector('input[name=repository]')`), true);
+    await p.evaluate(`document.querySelector('input[name=repository]').value='invalid unsent URL';document.querySelector('textarea').value='a.js';true`);
+    await p.click("[data-change-repository]");
+    assert.equal((await p.snapshot()).setup, false);
+    assert.equal((await p.snapshot()).repository, REPOSITORY);
+    assert.equal(harness.requests.length, requestsBeforeEditing, "opening/closing setup made network requests");
+    await p.click("[data-reanalyze]");
+    const reanalyzed = await p.wait(s => s.canvases === 1 || s.feedback !== "");
+    assert.equal(reanalyzed.feedback, "");
+    assert.equal(reanalyzed.analyzed, 5, "Reanalyze used unsent exclusions");
+    assert.equal(reanalyzed.repository, REPOSITORY);
+    assert.equal(reanalyzed.setup, false);
+    assert.equal(reanalyzed.findOpen, false);
+    assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-sort]').value`), "S");
+    process.stdout.write("Browser evidence: narrow workspace\n");
+    await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, p.sessionId));
+    assert.equal(await p.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(document.documentElement.scrollWidth<=innerWidth&&document.querySelector('[data-city]').getBoundingClientRect().width>0))))`), true, "mobile workspace overflowed");
+    await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 1365, height: 900, deviceScaleFactor: 1, mobile: false }, p.sessionId));
     harness.setMode("success");
     await idle.submit();
     await idle.wait(s => s.canvases === 1 && s.analyzed === 5);
     assert.equal((await p.snapshot()).canvases, 1, "one tab blocked or evicted another investigation");
     await p.click("[data-actions] button");
     await p.wait(s => s.canvases === 0 && s.discard.length === 0);
+    assert.equal((await p.snapshot()).setup, true);
+    assert.equal((await p.snapshot()).summary, false);
     assert.equal((await idle.snapshot()).canvases, 1);
 
     await run("mixed", s => s.canvases === 1 && s.analyzed === 5 && s.failed === 2);
+    assert.equal((await p.snapshot()).failuresOpen, false);
+    assert.equal(await p.evaluate(`document.querySelector('[data-failed-summary]').textContent`), "2 files not analyzed");
+    assert.equal(await p.evaluate(`document.querySelector('[data-failed-rows] li').checkVisibility()`), false);
+    await p.click("[data-failed] > summary");
+    assert.equal(await p.evaluate(`document.querySelector('[data-failed-rows] li').checkVisibility()`), true);
     await run("all-failed", s => s.canvases === 0 && s.failed === 2 && s.discard.length === 1);
+    assert.equal((await p.snapshot()).failuresOpen, false);
+    assert.equal((await p.snapshot()).findOpen, null);
+    assert.equal((await p.snapshot()).status, "No files could be analyzed.");
     for (const mode of ["integrity", "cors-failure"]) {
       await run(mode, s => s.status === "Provider/resolution failure" && s.canvases === 0 && s.discard.length === 0);
     }
@@ -162,6 +233,10 @@ export async function checkStandaloneBrowser() {
     await checked(harness.waitFor(e => e.kind === "raw" && e.sessionId === held.sessionId && harness.events.filter(r => r.kind === "raw" && r.sessionId === held.sessionId).length === 8));
     const zero = await p.wait(s => s.progress?.determinate && s.progress.value === 0 && s.progress.max === 12);
     assert.ok(zero.status.includes("Acquiring files 0 of 12"));
+    assert.equal(zero.setup, false);
+    assert.equal(zero.summary, true);
+    assert.equal(zero.controls, false);
+    assert.equal(zero.repository, REPOSITORY);
     assert.equal(harness.events.filter(e => e.kind === "raw" && e.sessionId === held.sessionId).length, 8);
     assert.equal((await checked(request(origin, "/"))).status, 200);
     await checked(harness.release(held.sessionId));
@@ -246,7 +321,7 @@ export async function checkStandaloneBrowser() {
     assert.equal((await idle.snapshot()).canvases, 1, "static-host shutdown discarded a browser-owned completed view");
     process.stdout.write(JSON.stringify({
       chrome: { category: discovery.category, version },
-      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
+      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "reanalysis-captured-inputs", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
       requests: harness.requests.length, workerEvents: harness.events.filter(e=>e.kind==='event').length,
       publicFiles: manifest.files.filter(f=>f.role==='public').map(f=>f.path),
     }) + "\n");

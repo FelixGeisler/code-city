@@ -9,22 +9,34 @@
 <body>
   <main>
     <h1>Code City</h1>
-    <form novalidate>
+    <form id="repository-setup" novalidate>
       <label for="repository">GitHub repository URL</label>
-      <input id="repository" name="repository" type="text" inputmode="url" autocomplete="off" spellcheck="false">
-      <label for="additional-exclusions">Additional exclusions</label>
-      <textarea id="additional-exclusions" name="additional-exclusions" rows="4" autocomplete="off" spellcheck="false"></textarea>
+      <input id="repository" name="repository" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repository">
       <button type="submit">Analyze</button>
-      <p data-feedback role="alert" aria-live="polite"></p>
+      <details data-exclusions>
+        <summary>Additional exclusions (optional)</summary>
+        <label for="additional-exclusions">One canonical path per line</label>
+        <textarea id="additional-exclusions" name="additional-exclusions" rows="3" autocomplete="off" spellcheck="false"></textarea>
+      </details>
     </form>
+    <header data-investigation hidden>
+      <div data-investigation-identity>
+        <bdi data-repository dir="auto"></bdi>
+        <output data-commit aria-live="polite"></output>
+      </div>
+      <div data-investigation-controls>
+        <button type="button" data-change-repository aria-controls="repository-setup" aria-expanded="false">Change repository</button>
+        <button type="button" data-reanalyze>Reanalyze</button>
+        <span data-actions></span>
+      </div>
+    </header>
+    <p data-feedback role="alert" aria-live="polite"></p>
     <section data-status aria-live="polite"></section>
-    <output data-commit aria-live="polite"></output>
-    <section data-failed hidden>
-      <h2>Not analyzed files</h2>
-      <ul data-failed-rows></ul>
-    </section>
-    <section data-actions></section>
     <section data-presentation hidden></section>
+    <details data-failed hidden>
+      <summary data-failed-summary></summary>
+      <ul data-failed-rows></ul>
+    </details>
   </main>
   <script type="module" src="/src/edge/standalone-browser-main.ts"></script>
 </body>

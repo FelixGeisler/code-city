@@ -18,12 +18,35 @@ const exclusions = requiredElement<HTMLTextAreaElement>("textarea[name=additiona
 const feedback = requiredElement<HTMLElement>("[data-feedback]");
 const status = requiredElement<HTMLElement>("[data-status]");
 const commit = requiredElement<HTMLOutputElement>("[data-commit]");
-const failed = requiredElement<HTMLElement>("[data-failed]");
+const failed = requiredElement<HTMLDetailsElement>("[data-failed]");
+const failedSummary = requiredElement<HTMLElement>("[data-failed-summary]");
 const failedRows = requiredElement<HTMLUListElement>("[data-failed-rows]");
 const actions = requiredElement<HTMLElement>("[data-actions]");
 const presentationRoot = requiredElement<HTMLElement>("[data-presentation]");
+const investigation = requiredElement<HTMLElement>("[data-investigation]");
+const repositoryName = requiredElement<HTMLElement>("[data-repository]");
+const investigationControls = requiredElement<HTMLElement>("[data-investigation-controls]");
+const changeRepository = requiredElement<HTMLButtonElement>("[data-change-repository]");
+const reanalyze = requiredElement<HTMLButtonElement>("[data-reanalyze]");
+let capturedInputs: Readonly<{ repositoryUrl: string; additionalExclusions: string }> | undefined;
+let hasAttempt = false;
+let isWorking = false;
 let workingProgressLabel: HTMLLabelElement | undefined;
 let workingProgress: HTMLProgressElement | undefined;
+
+function showAttempt(working: boolean): void {
+  if (!capturedInputs) return;
+  hasAttempt = true;
+  isWorking = working;
+  form.hidden = true;
+  investigation.hidden = false;
+  investigationControls.hidden = working;
+  changeRepository.disabled = working;
+  reanalyze.disabled = working;
+  changeRepository.textContent = "Change repository";
+  changeRepository.setAttribute("aria-expanded", "false");
+  repositoryName.textContent = capturedInputs.repositoryUrl;
+}
 
 function replaceStatus(message: string, action?: Readonly<{ label: string; run: () => void }>): void {
   workingProgressLabel = undefined;
@@ -43,9 +66,6 @@ function replaceStatus(message: string, action?: Readonly<{ label: string; run: 
 }
 
 function replaceWorkingStatus(cancel: () => void): void {
-  const text = document.createElement("p");
-  text.setAttribute("role", "status");
-  text.textContent = "Analyzing repository";
   const progressLabel = document.createElement("label");
   progressLabel.setAttribute("data-analysis-progress", "");
   const progress = document.createElement("progress");
@@ -56,7 +76,7 @@ function replaceWorkingStatus(cancel: () => void): void {
   button.type = "button";
   button.textContent = "Cancel";
   button.addEventListener("click", cancel, { once: true });
-  status.replaceChildren(text, progressLabel, button);
+  status.replaceChildren(progressLabel, button);
 }
 
 function updateWorkingProgress(label: string, completed?: number, total?: number): void {
@@ -76,6 +96,8 @@ function updateWorkingProgress(label: string, completed?: number, total?: number
 }
 
 function renderFailures(rows: readonly BrowserFailedFile[]): void {
+  failed.open = false;
+  failedSummary.textContent = rows.length === 0 ? "" : `${rows.length} ${rows.length === 1 ? "file" : "files"} not analyzed`;
   if (rows.length === 0) {
     failedRows.replaceChildren();
     failed.hidden = true;
@@ -98,7 +120,8 @@ function renderFailures(rows: readonly BrowserFailedFile[]): void {
 function renderDiscard(discard: () => void): void {
   const button = document.createElement("button");
   button.type = "button";
-  button.textContent = "Discard current analysis";
+  button.textContent = "Discard";
+  button.setAttribute("aria-label", "Discard current analysis");
   button.addEventListener("click", () => {
     button.disabled = true;
     discard();
@@ -113,12 +136,20 @@ const presentation = createStandalonePresentationCoordinator({
     feedback.textContent = "";
     renderFailures([]);
     actions.replaceChildren();
+    showAttempt(false);
     replaceStatus("Presentation failed (M1-PRES-1)");
   },
 });
 
 const view: StandaloneBrowserView = Object.freeze({
   clear() {
+    hasAttempt = false;
+    isWorking = false;
+    form.hidden = false;
+    investigation.hidden = true;
+    repositoryName.textContent = "";
+    changeRepository.textContent = "Change repository";
+    changeRepository.setAttribute("aria-expanded", "false");
     feedback.textContent = "";
     workingProgressLabel = undefined;
     workingProgress = undefined;
@@ -129,6 +160,7 @@ const view: StandaloneBrowserView = Object.freeze({
     presentation.clear();
   },
   working(cancel) {
+    showAttempt(true);
     replaceWorkingStatus(cancel);
   },
   progress(label, completed, total) {
@@ -138,15 +170,18 @@ const view: StandaloneBrowserView = Object.freeze({
     feedback.textContent = "Invalid input";
   },
   capacity() {
+    showAttempt(false);
     replaceStatus("Local analysis could not start.");
   },
   lost() {
+    showAttempt(false);
     replaceStatus("Provider/resolution failure");
   },
   revision(value) {
     commit.textContent = value;
   },
   failed(category, code, revision) {
+    showAttempt(false);
     presentation.clear();
     renderFailures([]);
     actions.replaceChildren();
@@ -154,6 +189,7 @@ const view: StandaloneBrowserView = Object.freeze({
     replaceStatus(code ? `${category} (${code})` : category);
   },
   cancelled() {
+    showAttempt(false);
     presentation.clear();
     renderFailures([]);
     actions.replaceChildren();
@@ -161,6 +197,7 @@ const view: StandaloneBrowserView = Object.freeze({
     replaceStatus("Cancelled");
   },
   succeeded(generation, model, failures, revision, discard) {
+    showAttempt(false);
     workingProgressLabel = undefined;
     workingProgress = undefined;
     status.replaceChildren();
@@ -175,9 +212,8 @@ const view: StandaloneBrowserView = Object.freeze({
     }
   },
   allFilesFailed(_generation, failures, revision, discard) {
-    workingProgressLabel = undefined;
-    workingProgress = undefined;
-    status.replaceChildren();
+    showAttempt(false);
+    replaceStatus("No files could be analyzed.");
     feedback.textContent = "";
     commit.textContent = revision;
     presentation.clear();
@@ -188,10 +224,25 @@ const view: StandaloneBrowserView = Object.freeze({
 
 const controller = createStandaloneBrowserController(createBrowserWorkerTransport(), view);
 const secureAnalysis = window.isSecureContext && globalThis.crypto?.subtle !== undefined;
+function submitAnalysis(repositoryUrl: string, additionalExclusions: string): void {
+  if (!secureAnalysis) { replaceStatus("Browser analysis requires HTTPS or localhost."); return; }
+  capturedInputs = Object.freeze({ repositoryUrl, additionalExclusions });
+  controller.submit(repositoryUrl, additionalExclusions);
+}
 form.addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!secureAnalysis) { replaceStatus("Browser analysis requires HTTPS or localhost."); return; }
-  controller.submit(repository.value, exclusions.value);
+  submitAnalysis(repository.value, exclusions.value);
+});
+changeRepository.addEventListener("click", () => {
+  if (!hasAttempt || isWorking) return;
+  form.hidden = !form.hidden;
+  changeRepository.textContent = form.hidden ? "Change repository" : "Close setup";
+  changeRepository.setAttribute("aria-expanded", String(!form.hidden));
+  if (!form.hidden) repository.focus();
+});
+reanalyze.addEventListener("click", () => {
+  if (!hasAttempt || isWorking || !capturedInputs) return;
+  submitAnalysis(capturedInputs.repositoryUrl, capturedInputs.additionalExclusions);
 });
 window.addEventListener("pagehide", () => {
   controller.dispose();

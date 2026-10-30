@@ -48,6 +48,12 @@ eligible source set, continues supported per-file failures, and constructs a
 city from successful facts. The UI thread validates the result and presents it.
 Repository content is data, never imported or executed as application code.
 
+The xref:city-and-failures.adoc#browser-investigation-workspace[investigation
+workspace] collapses setup after Analyze and makes the city primary. Find file,
+failed-file details, and navigation help are closed by default. Change repository
+reopens setup without discarding the result; Reanalyze uses the captured inputs,
+not unsent edits.
+
 From Analyze until a terminal outcome, show one native progress control and
 Cancel. Phase labels are `Starting analysis`, `Resolving revision`,
 `Preparing file inventory`, `Acquiring files X of N`, `Initializing analysis`,
