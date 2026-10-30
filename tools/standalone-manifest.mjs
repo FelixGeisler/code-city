@@ -5,7 +5,7 @@ import { types as utilTypes } from "node:util";
 
 const TOP_LEVEL_KEYS = Object.freeze(["version", "files"]);
 const RECORD_KEYS = Object.freeze(["path", "role", "mediaType", "length", "sha256"]);
-const ROOT_ENTRIES = Object.freeze(["package-manifest.json", "parser", "public", "server"]);
+const ROOT_ENTRIES = Object.freeze(["package-manifest.json", "public", "server"]);
 const RUNTIME_DIRECTORIES = Object.freeze(["parser", "public", "server"]);
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -110,9 +110,12 @@ export async function createStandaloneManifest(artifactRoot) {
   const rootMetadata = await lstat(root);
   invariant(rootMetadata.isDirectory() && !rootMetadata.isSymbolicLink(), "Standalone artifact root must be a real directory");
   const rootEntries = (await readdir(root)).sort(compareUtf8);
-  invariant(JSON.stringify(rootEntries) === JSON.stringify(ROOT_ENTRIES), "Standalone artifact root layout differs");
+  // Version 1 records files, not empty directories. Older artifacts may also
+  // have a private parser root; file-only archive transport need not retain it.
+  invariant(JSON.stringify(rootEntries.filter(entry => entry !== "parser")) === JSON.stringify(ROOT_ENTRIES), "Standalone artifact root layout differs");
   const files = [];
   for (const directory of RUNTIME_DIRECTORIES) {
+    if (directory === "parser" && !rootEntries.includes(directory)) continue;
     const metadata = await lstat(path.join(root, directory));
     invariant(metadata.isDirectory() && !metadata.isSymbolicLink(), `Standalone ${directory} must be a real directory`);
     files.push(...await collectFiles(path.join(root, directory), directory));

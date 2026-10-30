@@ -139,7 +139,7 @@ async function compileSources(artifactRoot) {
 export async function buildStandaloneArtifact(outputRoot = canonicalStandaloneRoot) {
   const artifactRoot = path.resolve(outputRoot);
   await rm(artifactRoot, { recursive: true, force: true });
-  await Promise.all(["public", "server", "parser"].map((name) => mkdir(path.join(artifactRoot, name), { recursive: true })));
+  await Promise.all(["public", "server"].map((name) => mkdir(path.join(artifactRoot, name), { recursive: true })));
   await buildBrowser(artifactRoot);
   await mkdir(path.join(artifactRoot, "public", "parser"), { recursive: true });
   for (const [source, name] of PARSER_FILES) await cp(path.join(projectRoot, ...source.split("/")), path.join(artifactRoot, "public", "parser", name));
