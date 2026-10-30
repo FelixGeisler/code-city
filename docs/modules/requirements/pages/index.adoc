@@ -24,8 +24,10 @@ type, byte length, and SHA-256 digest.
   WASM. Only verified public records are served.
 * `server/` contains the private static host. It contains no analysis or session
   runtime. Private files, the manifest, and unlisted paths return `404`.
-* The empty `parser/` root is retained by the existing artifact-layout contract;
-  active parser assets are public records under `public/parser/`.
+* Active parser assets are public records under `public/parser/`. The package
+  requires no empty directories, so file-only archive transport preserves its
+  complete manifest closure. Older version-1 packages may retain a private
+  `parser/` root; every file there remains subject to the same audit.
 
 `npm run build` creates this artifact. `npm start -- --port <port>` starts it.
 `npm run dev -- --port <port>` builds under `build/development/` and starts the

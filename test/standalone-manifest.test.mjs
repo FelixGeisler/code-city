@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
@@ -59,6 +59,42 @@ test("standalone builder emits the exact role layout and canonical closed manife
   assert.equal(built.files.some((item) => /server\/src\/(?:application|domain)\//u.test(item.path) || item.path.includes("analysis-worker-entry")), false);
   assert.equal(built.files.some((item) => item.path === "package-manifest.json"), false);
   assert.equal(Buffer.from(bytes).equals(serializeStandaloneManifest(built)), true);
+});
+
+test("file-only archive transport preserves every required runtime byte and full manifest closure", async (t) => {
+  const target = await mkdtemp(path.join(os.tmpdir(), "code-city-file-only-archive-"));
+  t.after(() => rm(target, { recursive: true, force: true }));
+  const built = await auditStandaloneArtifact(builtArtifactRoot);
+  for (const file of ["package-manifest.json", ...built.files.map(record => record.path)]) {
+    await mkdir(path.dirname(path.join(target, file)), { recursive: true });
+    await cp(path.join(builtArtifactRoot, file), path.join(target, file));
+  }
+  assert.deepEqual((await readdir(builtArtifactRoot)).sort(), ["package-manifest.json", "public", "server"]);
+  assert.deepEqual((await readdir(target)).sort(), ["package-manifest.json", "public", "server"]);
+  assert.deepEqual(await auditStandaloneArtifact(target), built);
+});
+
+test("an optional legacy private-parser root is audited rather than ignored, while unknown roots still fail", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "code-city-private-parser-root-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const target = path.join(root, "artifact");
+  await cp(builtArtifactRoot, target, { recursive: true });
+  await mkdir(path.join(target, "parser"));
+  await auditStandaloneArtifact(target);
+  await writeFile(path.join(target, "parser", "legacy.js"), "export {};\n");
+  await assert.rejects(() => auditStandaloneArtifact(target), /does not close/u);
+  await rm(path.join(target, "package-manifest.json"));
+  await writeStandaloneManifest(target);
+  const legacy = await auditStandaloneArtifact(target);
+  assert.equal(legacy.files.find(record => record.path === "parser/legacy.js").role, "private");
+  await writeFile(path.join(target, "parser", "legacy.js"), "changed\n");
+  await assert.rejects(() => auditStandaloneArtifact(target), /does not close/u);
+  await rm(path.join(target, "parser"), { recursive: true });
+  await writeFile(path.join(target, "parser"), "not a directory\n");
+  await assert.rejects(() => auditStandaloneArtifact(target), /real directory/u);
+  await rm(path.join(target, "parser"));
+  await mkdir(path.join(target, "unknown"));
+  await assert.rejects(() => auditStandaloneArtifact(target), /root layout differs/u);
 });
 
 test("standalone manifest rejects reordered/extra/accessor records, sparse arrays, unsafe paths, roles, suffixes, media, lengths, digests, and order", () => {

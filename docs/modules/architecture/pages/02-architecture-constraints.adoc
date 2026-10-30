@@ -18,8 +18,10 @@
 The canonical `dist/` artifact has a version-1 `package-manifest.json` describing
 all public/private runtime bytes. `public/` contains the UI, worker, parser
 runtime and WASM grammars. `server/` contains only the private asset host and
-its perimeter/configuration dependencies. The former `parser/` directory is
-empty; actual assets are under `public/parser/`.
+its perimeter/configuration dependencies. Parser assets are under
+`public/parser/`; the package requires no empty root directories. The version-1
+file-manifest audit also accepts an older private `parser/` root, auditing every
+file if present.
 
 The host verifies every public record before serving only fixed manifest
 routes. The manifest, server code, and unlisted paths return `404`. Legacy
