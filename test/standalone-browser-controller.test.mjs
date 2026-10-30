@@ -477,10 +477,13 @@ test("generation advancement fails closed at the positive safe-integer boundary"
   assert.equal(nextBrowserGeneration(Number.MAX_SAFE_INTEGER), undefined);
 });
 
-test("browser implementation contains measured native progress without storage, timing, retry, provider, parser, or browser analysis process", async () => {
+test("the UI thread displays measured progress and delegates analysis without storage, timing, provider, or parser work", async () => {
   const source = await readFile(new URL("../src/edge/standalone-browser-controller.ts", import.meta.url), "utf8");
   const main = await readFile(new URL("../src/edge/standalone-browser-main.ts", import.meta.url), "utf8");
   const css = await readFile(new URL("../src/edge/standalone-browser-shell.css", import.meta.url), "utf8");
+  assert.match(main, /createBrowserWorkerTransport\(\)/u);
+  assert.doesNotMatch(main, /createFetchSessionTransport/u);
+  assert.match(main, /Browser analysis requires HTTPS or localhost/u);
   assert.match(main, /document\.createElement\("progress"\)/u);
   assert.match(main, /progressLabel\.append\("Starting analysis", progress\)/u);
   assert.match(main, /progress\.max = total/u);

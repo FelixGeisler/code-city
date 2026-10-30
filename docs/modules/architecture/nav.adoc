@@ -11,6 +11,7 @@
 ** Decision records
 *** xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013: Server-owned analysis and saved investigations]
 *** xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR 0014: Standalone server runtime and analysis execution boundary]
+*** xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015: Browser analysis and server-saved investigations]
 * xref:10-quality-requirements.adoc[10. Quality Requirements]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]

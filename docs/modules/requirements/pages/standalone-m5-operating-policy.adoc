@@ -4,7 +4,11 @@ Status:: Accepted
 Human acceptance:: `SGTM`, receipt SHA-256 `bdf36f348863d90df01bf6795381e1e3a02daf217dd19a827f8f60292ef065bc`
 Accepted policy:: SHA-256 `a40e6c97c4dab3ef65e79a97ae4d2acef6863b1dcdfafd7e60e0ced980ac2565`
 
-This policy applies to the implemented standalone M5 slice.
+This page records the historical server-analysis M5 slice. Current temporary
+custody and hosting follow
+xref:browser-analysis-operating-policy.adoc[Browser Analysis Operating Policy]
+and xref:architecture:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015].
+The original M5 policy and its acceptance receipt below are retained as history.
 
 == Operating policy
 

@@ -69,6 +69,7 @@ async function buildBrowser(artifactRoot) {
     publicDir: false,
     logLevel: "silent",
     base: "/",
+    worker: { format: "es", rollupOptions: { output: { entryFileNames: "analysis-worker.js", chunkFileNames: "assets/[name]-[hash].js" } } },
     build: {
       outDir: publicRoot,
       emptyOutDir: true,
@@ -115,7 +116,6 @@ async function compileSources(artifactRoot) {
       },
       files: [
         path.join(projectRoot, "src", "edge", "node", "standalone-cli.ts"),
-        path.join(projectRoot, "src", "edge", "node", "standalone-worker-entry.ts"),
       ],
     })}\n`, "utf8");
     const compiler = path.join(projectRoot, "node_modules", "typescript", "bin", "tsc");
@@ -141,7 +141,8 @@ export async function buildStandaloneArtifact(outputRoot = canonicalStandaloneRo
   await rm(artifactRoot, { recursive: true, force: true });
   await Promise.all(["public", "server", "parser"].map((name) => mkdir(path.join(artifactRoot, name), { recursive: true })));
   await buildBrowser(artifactRoot);
-  for (const [source, name] of PARSER_FILES) await cp(path.join(projectRoot, ...source.split("/")), path.join(artifactRoot, "parser", name));
+  await mkdir(path.join(artifactRoot, "public", "parser"), { recursive: true });
+  for (const [source, name] of PARSER_FILES) await cp(path.join(projectRoot, ...source.split("/")), path.join(artifactRoot, "public", "parser", name));
   await compileSources(artifactRoot);
   const manifest = await writeStandaloneManifest(artifactRoot);
   return { artifactRoot, manifest };

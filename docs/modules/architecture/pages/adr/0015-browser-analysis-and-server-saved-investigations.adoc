@@ -1,0 +1,85 @@
+= ADR 0015: Browser analysis and server-saved investigations
+
+Status:: Accepted
+Human acceptance:: User confirmed browser analysis, server-stored saved investigations,
+no login, and implementation of the first milestone in the project conversation.
+
+== Context
+
+Before this decision, the application downloaded and analyzed public GitHub
+source in Node.js workers and retained temporary investigations for open browser
+sessions. This coupled idle tabs to shared admission capacity.
+
+The agreed product direction is to use the user's CPU for analysis and retain
+shared Save/reopen without requiring accounts or server-certified metrics.
+This changes the earlier ownership decisions in ADR 0013 and ADR 0014.
+
+== Alternatives
+
+* Retain server analysis and adjust capacity. This retains shared computation
+  and temporary-result ownership rather than removing the cause of contention.
+* Analyze and save only in the browser. This does not provide shared saved
+  investigations.
+* Analyze in the browser and persist only explicitly saved investigations on
+  the server. This separates local computation from shared storage.
+
+== Decision
+
+Use a dedicated browser Web Worker for public GitHub revision resolution,
+source acquisition, parsing, metrics, and city construction. Reuse the existing
+TypeScript/WASM algorithms; the main thread remains responsible for interaction
+and presentation. Repository source is data, never application code.
+
+Keep unsaved sources and results in the browser. Analyze, Cancel, Discard,
+replacement, and idle tabs require no server analysis worker, analysis session,
+source/result dataset, or analysis-capacity reservation.
+
+Retain the native Node.js HTTP host for packaged assets and later shared
+storage. Browser worker and parser assets become deliberate public manifest
+records, qualified under the revised CSP and fixed GitHub network policy.
+There is no server-analysis fallback or GitHub Pages deployment change.
+
+Only explicit Save transfers an investigation into persistent server storage.
+A shared link loads its saved data without GitHub acquisition or reanalysis.
+The server validates bounded structure, byte integrity, references, and safe
+rendering; it does not recompute metrics or certify client claims. Follow
+xref:requirements:city-and-failures.adoc#CC-CORE-SAVE-01[the Save requirements]
+when defining the complete snapshot contract.
+
+Do not introduce login or accounts. Bound individual storage operations,
+upload size, validation work, and concurrent requests; separate write admission
+from reads and static serving. Anonymous browser/IP controls can supplement
+these bounds but cannot establish reliable per-person quotas. This is resource
+containment, not a guarantee against arbitrary network denial of service.
+Storage format, persistence technology, deletion/recovery behavior, and concrete
+resource values require decisions before implementing Save.
+
+== Rationale
+
+Local analysis removes competing users from the expensive computation path.
+Explicit server persistence preserves sharing without retaining resources for
+idle local investigations. Accounts and metric certification add no value to
+the agreed initial product.
+
+== Consequences and delivery
+
+First migrate public GitHub analysis to the browser while preserving the
+current UI, accepted algorithms, processing envelope, eight-read acquisition
+window, measured progress, cancellation, and per-file failure behavior defined
+in xref:requirements:source-and-metrics.adoc[Source and Metrics]. Qualify actual
+packaged-browser worker/WASM loading, provider access, resource cleanup, and
+result equivalence. Remove the delivered server-analysis and temporary-session
+path; do not merely revive the older browser implementation.
+
+Save, shared inventory, and reopen follow as a separate delivery. This first
+milestone does not claim persistence, source drill-down, recursive presentation,
+or shared-view completion. Browser memory and performance still need evidence;
+existing Node qualification is not a browser performance guarantee. Browser blob
+integrity uses Web Crypto and therefore requires HTTPS or a secure localhost
+context; remote TLS deployment is not supplied by this milestone.
+
+This ADR supersedes ADR 0013 for acquisition, computation, and
+unsaved-result custody, while preserving server custody of explicit saved
+investigations. It supersedes ADR 0014's application analysis-worker/session
+boundary, not its native Node.js HTTP hosting choice. The earlier ADRs remain
+historical records.

@@ -1,41 +1,33 @@
 = Solution Strategy
 
-== Current standalone strategy
+. Validate the public GitHub URL and captured exclusions before creating work.
+. Start one dedicated browser Web Worker for the current local attempt.
+. Resolve an immutable revision and run the shared complete-acquisition pipeline.
+. Initialize the pinned parser once, continue supported per-file failures, and
+  construct the deterministic city from successful facts.
+. Send measured progress and presentation results over the worker's message
+  channel. Validate them and gate publication by local identity and generation.
+. Keep normalized source and the temporary result in the worker until local
+  discard, replacement, page loss, or worker loss.
 
-. The browser opens one same-origin NDJSON session and keeps its session ID,
-  generations, attempts, and current source-free result in memory.
-. Analyze sends the captured repository URL and exclusions to the service.
-. The service validates the complete command before lifecycle or capacity
-  mutation, replaces prior work through joined cleanup, and atomically reserves
-  worker and source capacity.
-. One worker resolves the selected branch or default head to an immutable
-  commit, validates commit and tree evidence, acquires admitted blobs through a
-  bounded eight-slot raw-read window with canonical outcome consumption and
-  joined cleanup, and retains normalized source only for the current temporary
-  result.
-. One initialized parser capability continues supported per-file text, syntax,
-  and metric failures, constructs a deterministic city from successful facts,
-  and returns sanitized failed-file rows.
-. The parent validates the worker result and joins normal worker exit before a
-  terminal event can become current.
-. The browser validates exact events, generation-gates late values, and renders
-  the source-free city through the existing presenter.
+Acquisition cancellation aborts and settles owned provider reads before worker
+release. During parser work the browser can terminate the worker without
+waiting for its synchronous event loop. No portable browser worker-exit event
+is assumed. Old publication is revoked before stop or replacement.
 
-Cancel, Discard, replacement, session loss, backpressure loss, and graceful
-shutdown invalidate work before joining workers and releasing ownership. No
-retry, reconnect, recovery, Save, or browser-side analysis fallback exists.
+The host serves application assets only: there is no analysis route, source
+reservation, backend worker, or session on page load. Increasing server capacity
+is not the remedy for idle tabs; those resources no longer exist in this path.
 
 == Dependency direction
 
-Domain code owns deterministic policies. Application code owns acquisition and
-analysis sequencing. The Node edge owns GitHub, parser, worker, HTTP, and
-shutdown integration. The browser edge owns same-origin session control and
-presentation. Package and workflow tools own deterministic closure,
-reproducibility, runtime audits, and publication binding.
+Domain code owns deterministic rules. Application code owns execution-neutral
+acquisition/analysis sequencing. Browser edges integrate GitHub, Tree-sitter,
+worker lifetime, and presentation. The Node edge hosts manifest-public bytes.
+Native worker/session adapters are retained only for regression qualification;
+the delivered host does not import or package them. Tools own manifest closure,
+reproducibility, real-browser evidence, and publication binding.
 
-== Later target strategy
-
-The later whole-core target adds explicit immutable Save/reopen and deeper
-investigation behavior while preserving server authority. Storage, identity,
-authorization, public API, private providers, and deployment technology remain
-unselected.
+Explicit shared Save/reopen follows separately. It will store client-created
+snapshots without rerunning metrics and must bound storage operations without
+coupling them to local analysis.

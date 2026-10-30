@@ -69,13 +69,13 @@ import { registerHooks } from "node:module";
 registerHooks({ resolve(specifier, context, nextResolve) {
   if (workerData.scenario === "cityFailure"
     && (specifier === "../domain/city-model" || specifier === "../../domain/city-model")
-    && (context.parentURL?.endsWith("/src/application/project-analysis.js") || context.parentURL?.endsWith("/src/edge/node/analysis-worker.js"))) {
+    && (context.parentURL?.endsWith("/src/application/project-analysis.js") || context.parentURL?.endsWith("/src/application/analyze-repository.js"))) {
     return { url: ${JSON.stringify(pathToFileURL(cityFault).href)}, shortCircuit: true };
   }
-  if (workerData.scenario === "admissionContent" && specifier === "../../application/source-retrieval" && context.parentURL?.endsWith("/src/edge/node/analysis-worker.js")) {
+  if (workerData.scenario === "admissionContent" && specifier === "./source-retrieval" && context.parentURL?.endsWith("/src/application/analyze-repository.js")) {
     return { url: ${JSON.stringify(pathToFileURL(acquisitionFault).href)}, shortCircuit: true };
   }
-  if (workerData.scenario === "firstSourceMutation" && specifier === "../../application/project-analysis" && context.parentURL?.endsWith("/src/edge/node/analysis-worker.js")) {
+  if (workerData.scenario === "firstSourceMutation" && specifier === "./project-analysis" && context.parentURL?.endsWith("/src/application/analyze-repository.js")) {
     return { url: ${JSON.stringify(pathToFileURL(firstSourceMutationFault).href)}, shortCircuit: true };
   }
   return nextResolve(/^\\.\\.?\\//u.test(specifier) && !/\\.[a-z]+$/iu.test(specifier) ? specifier + ".js" : specifier, context);

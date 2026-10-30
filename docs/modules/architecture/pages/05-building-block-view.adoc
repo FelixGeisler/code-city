@@ -2,87 +2,28 @@
 
 [cols="1,2,3",options="header"]
 |===
-|Stratum |Building block |Responsibility
-
-|Domain
-|Repository reference, source admission, metrics, complexity, city model,
-camera and picking policy
-|Pure validation and deterministic product decisions.
-
-|Application
-|Raw-source acquisition and project analysis
-|Validate complete inventory and source ownership, schedule at most eight
-per-attempt raw reads while consuming outcomes canonically, settle acquisition
-before analysis, continue supported per-file failures, construct the city, and
-retain the exact successful source association for the current temporary
-result.
-
-|Node edge
-|GitHub gateways, parser adapter/assets, analysis worker
-|Perform anonymous public-GitHub reads, load pinned file-URL parser assets, run
-one isolated attempt, emit source-free measured acquisition and analysis
-notifications at existing observer/parser/release/city seams, validate worker
-protocol values and progress order, and transfer owned buffers.
-
-|Node edge
-|Session runtime and native HTTP perimeter
-|Validate operator configuration and manifest bytes, serve only public package
-records, own sessions/generations/capacity/control/loss/shutdown, forward
-eligible optional progress only when the response queue is empty, and join
-workers before release.
-
-|Browser edge
-|Standalone controller, presentation-session coordinator, inventory, safe file
-inspector, and city presenter
-|Open one same-origin session, send Analyze/Cancel/Discard, validate source-free
-events and monotonic phase-local counters, render one native progress control,
-suppress stale state, and atomically compose the successful-file
-inventory, shared canonical-index selection, inspector, and unchanged city
-presenter. Filter, sort, and selection do not alter camera or geometry.
-
-|Delivery
-|Builder, manifest, audits, retirement evidence, workflows
-|Create deterministic canonical bytes, reproduce and drive the actual package,
-bind standalone artifact upload, and validate the immutable cutover run,
-notice, and former-asset observations. Repository workflows do not deploy to
-Pages.
+|Layer |Block |Responsibility
+|Domain |Repository/admission/metric/city policies |Deterministic validation, calculations, geometry, and camera/picking rules.
+|Application |`analyzeRepository`, raw acquisition, project analysis |One execution-neutral sequence for revision selection, complete bounded acquisition, per-file continuation, measured progress, and city construction.
+|Browser worker edge |GitHub gateways, Tree-sitter adapter, production worker |Perform anonymous provider reads and parsing; retain temporary normalized sources locally; send presentation results, not source, to the UI.
+|Browser main edge |Local worker transport and standalone controller |Own workers and generations, abort/drain provider work, terminate parser work, validate events, suppress stale publication, and dispose on page exit.
+|Presentation |Inventory, inspector, presenter |Filter/sort/select canonical file identities without moving the camera or reuploading geometry. Render paths and failures as inert text.
+|Node edge |Native HTTP asset host |Validate configuration/public manifest records and serve only fixed public routes. No production analysis/session runtime is mounted or packaged.
+|Delivery |Builder, manifest, audits, browser evidence, workflows |Reproduce exact bytes, verify parser/public-private closure, drive actual Chrome with controlled provider traffic, and bind artifact publication to its run.
 |===
 
-[[data-boundaries]]
-== Data boundaries
+== Boundaries and ownership
 
-The browser sends raw repository URL and exclusion text only to same-origin
-command routes. It receives session identifiers, generations, revision IDs,
-source-free cities with aligned geometry and inspection facts, sanitized
-failed-file rows, and lifecycle events. The browser-local coordinator derives
-only filtered/sorted canonical-index projections and current selection from
-those facts. It never receives source, unit detail, parser trees, provider
-payloads, or raw diagnostics.
+A browser-local owner identity is not a server session or authentication. Opening
+an idle page allocates no analysis worker and sends no command to the host.
+The current worker owns normalized source and facts; the UI receives validated
+city and failure/progress data. No source is uploaded to the asset host.
+Inventory interaction creates no provider or HTTP request.
 
-The parent sends validated attempt commands into one worker, validates exact
-correlation, stage order, consecutive worker-side counts, fixed totals, and
-successful terminal reconciliation, and accepts a terminal result only after
-normal joined exit. Progress records contain only attempt/session correlation,
-revision, stage, and bounded counts; they contain no source, path, provider,
-diagnostic, timing, or telemetry value.
-Parser runtime and grammar bytes are private artifact records loaded from file
-URLs by the worker. The HTTP perimeter exposes only `public/index.html`,
-`public/browser.css`, and `public/browser.js`. The browser bundle imports no
-legacy main controller or browser processing worker. Inventory, filtering,
-sorting, and selection remain browser-local and introduce no storage, route,
-DTO, protocol, runtime, dependency, or ownership boundary. Measured progress
-adds exact source-free internal worker and session notification schemas inside
-the existing worker and session boundaries; it adds no public API, route,
-transport, runtime, dependency, or ownership boundary.
+Parser/runtime/worker URLs are fixed same-origin public assets. GitHub origins
+are explicit CSP connections. Repository content cannot select executable URLs.
+Server implementation and package manifest remain private.
 
-== Ownership and cleanup
-
-The session runtime atomically owns live-session, active-attempt, body-reader,
-command-byte, and retained-source capacity. Replacement and control operations
-make work ineligible before termination and join. Session loss and shutdown use
-the same idempotent cleanup boundary. Successful current source/result state is
-released by Discard, replacement, loss, or shutdown.
-
-Tests alone substitute deterministic providers and join barriers through
-nonshipped module hooks. Generated runtime bytes contain no fixture, provider,
-or fault selector.
+Native worker/session adapters and the older browser entry are repository
+regression references, not alternate production paths. No server fallback,
+provider override, test selector, or environment fault flag is shipped.

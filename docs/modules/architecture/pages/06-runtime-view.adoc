@@ -1,107 +1,66 @@
 = Runtime View
 
-== Startup
+== Asset-host startup
 
-The generated CLI parses all operator arguments before listening. `--host`
-defaults to loopback. `--port` and all five capacities are required. A
-non-loopback host requires a canonical host. The runtime validates the exact
-version-1 package manifest, then verifies the length and SHA-256 digest of every
-public record before listening. It preloads only those verified public bytes,
-binds the native HTTP server, derives its canonical origin, and prints one
-`READY` line. Startup does not read or hash private server or parser records;
+The CLI accepts port and optional bind/canonical host, validates the exact
+version-1 package manifest, and verifies the length and SHA-256 digest of every
+public record before listening. It preloads only those verified asset bytes
+and prints `READY`. Startup does not validate private implementation bytes;
 the offline package audit verifies complete public/private manifest closure and
 every recorded byte before publication.
 
-== Analyze lifecycle
+There is no application analysis session, worker reservation, retained source
+budget, or analysis route. Native SIGINT/SIGTERM close the listener and static
+connections, then print `SHUTDOWN`. Host shutdown does not discard an already
+loaded browser-owned completed view.
 
-. The browser opens one persistent same-origin session response.
-. Analyze consumes one strictly increasing generation. The server fully reads,
-  decodes, and validates the command before changing lifecycle state.
-. Replacement joins and releases prior work. Capacity is reserved atomically
-  before worker creation.
-. The worker selects an immutable revision, validates the complete source
-  inventory and every eligible blob identity, then owns a fixed window of at
-  most eight raw reads started in canonical order. Pending and completed but
-  unconsumed reads occupy the window; outcomes are consumed canonically, and a
-  known raw-failure horizon stops admission while preserving only the prefix
-  needed for serial-equivalent precedence. The worker reports acquisition
-  `0/N` before the first launch and completion after each considered candidate,
-  settles all raw reads before leaving acquisition, initializes the parser
-  once, reports analysis `0/T` immediately before the first text-valid project
-  call and completion only after each parser attempt's required cleanup,
-  continues supported per-file failures, and reports city construction only
-  when the existing construction seam is invoked.
-. The parent validates correlation, bounded consecutive counts, fixed totals,
-  stage order, and successful terminal reconciliation, then keeps the complete
-  result provisional until the worker exits normally.
-. The session writes mandatory lifecycle events through the existing path and
-  may write source-free progress only for the eligible current attempt while
-  no frame or response bytes are pending. The browser validates session,
-  generation, revision, stage order, and monotonic phase-local counts before
-  changing displayed state.
-. For success, one browser-local presentation-session coordinator stages the
-  native successful-file inventory and safe inspector, stages and commits the
-  existing presenter, and publishes one current generation. Query and sort
-  callbacks are gated by publication identity and exact snapshots; row and city
-  activation share canonical geometry indices. Any current semantic or
-  presenter failure removes the complete successful presentation as
-  `M1-PRES-1`.
+== Analyze
 
-Successful and all-files-failed results retain their exact normalized source
-association in process memory for every successfully analyzed file and every
-file that reached a syntax or metric failure. Source text rejected as
-unsupported is not retained. The current source-result association remains
-until Discard, replacement, detected session loss, or graceful shutdown. Both
-results expose Discard. The browser receives no source.
+. The main context validates input and captured exclusions and assigns a local
+  generation. It creates a dedicated browser worker only for valid Analyze.
+. `analyzeRepository` resolves an immutable revision, validates the complete
+  inventory, and calls the shared raw acquisition pipeline. Its bounded window
+  retains completed but unconsumed reads and commits outcomes canonically;
+  failure precedence and settlement remain requirement-owned.
+. The same application sequence initializes the pinned parser once, processes
+  supported files with per-file continuation, reports completion after cleanup,
+  and constructs the deterministic city.
+. The worker retains normalized source for text-valid files, including files
+  with syntax/metric failures. Unsupported text is not retained. It publishes
+  presentation data and failure rows over the ordinary worker channel.
+. The main context validates event shape, local identity, generation, revision,
+  monotonic phase counts, and city payload before presentation. Inventory,
+  inspector, and existing presenter commit as one local publication.
 
-== Cancellation, replacement, loss, and shutdown
+The worker emits real `0/N` and `0/T`, subsequent considered/cleaned-up counts,
+and indeterminate initialization/construction stages. No HTTP progress stream,
+server write queue, simulated percentage, or ETA exists.
 
-Cancel and Discard invalidate work, terminate and join an active worker, release
-ownership, and then emit their control event. Replacement emits no synthetic
-terminal event. Stale completion cannot restore discarded state.
+== Stop, replacement, discard, and loss
 
-Optional progress is omitted before serialization and write when a blocked
-frame exists, `writableNeedDrain` is true, or `writableLength` is nonzero. It is
-never queued, replaced by a latest-value slot, replayed, retried, timed, or
-throttled. Later progress may resume after `drain` and an empty response queue.
-When an attempted progress or mandatory frame makes `res.write` return false,
-the runtime retains that exact first blocked frame and waits for `drain`; the
-blocked write alone does not cause session loss. The session, any retained
-source, and their admission capacity remain owned while it waits. A mandatory
-event or mutating command while the frame is blocked initiates joined session
-loss without another write.
-Request abort, response close/error, owning-socket close, unrepresentable
-browser input, or an advanced command/protocol failure also loses the
-browser-owned temporary session. There is no reconnect or recovery.
+Before cancellation or replacement can publish another result, the old attempt
+is ineligible. During provider activity, STOP aborts its signal and the source
+window settles all owned reads; the cancellation/terminal acknowledgement
+permits worker release. After acquisition, termination does not wait for a busy
+synchronous parser to receive a message. No browser worker-exit event is assumed.
 
-SIGINT and SIGTERM stop admission, invalidate work, join workers, discard
-retained state, close responses, and complete only with zero live sessions,
-active attempts, and retained source bytes.
+Only the newest queued local replacement creates another worker. Old messages
+cannot publish. Cancel after a terminal result is a no-op; Discard releases the
+local worker and view. Page exit terminates owned work, and worker errors revoke
+the corresponding local investigation. Another tab is unaffected.
 
-== Package and browser execution
+== Qualification
 
-The canonical artifact is `dist/`. `npm start -- <flags>` executes
-`dist/server/standalone.mjs`. `npm run dev -- <flags>` builds an independent
-artifact under `build/development/` and executes the same generated entry; it
-has no HMR or WebSocket behavior and does not write `dist/`.
+`npm run dev -- --port <port>` builds under `build/development/` and starts the
+same asset host, with no HMR or WebSocket and no write to canonical `dist/`.
 
-Installed-Chrome/CDP evidence drives the actual packaged browser, server,
-worker, parser assets, and same-origin protocol with deterministic nonshipped
-provider and parser barriers. It covers real `0/N` and `0/T` while the first
-file is held, later nonzero acquisition and analysis counts, exact native
-`value`/`max` and indeterminate resets, event-before-acknowledgement ordering,
-terminal clearing, stale suppression, a healthy-reading 4,000-file attempt,
-and the visible five-file successful inventory,
-literal filter behavior, all three raw-metric sorts, row/city/inspector
-canonical-index identity, unchanged camera matrices and instance-buffer upload
-count across selection/filter/sort, mixed and all-failed publication, cleanup,
-continuation, replacement, cancellation, discard, loss, capacity, page loss,
-private-file `404`, and exact browser network closure without live GitHub. The
-harness returns only booleans, counts, and numeric rendering proof; it does not
-emit repository paths, queries, source, or inspection payloads.
+Installed-Chrome/CDP evidence uses the actual packaged UI, worker, parser and
+GitHub gateway. A nonshipped provider intercepts fixed GitHub requests with real
+CORS and integrity checks. Explicit message-delivery gates exercise real phase
+counts in the UI; they do not fabricate progress. Evidence covers independent
+idle/completed tabs, four grammars, source limits, slow-first acquisition,
+provider/parser cancellation, replacement, page loss, no server commands, and
+a healthy 4,000-file / 40 MiB normalized-source attempt. Tests are not device,
+latency, or total-memory guarantees.
 
-== Deferred outcomes
-
-Save/reopen, source view, authentication, private repositories, Internet
-service, calibrated deployment values, and Raspberry Pi qualification are not
-part of this runtime.
+Save/reopen, source drill-down, and recursive presentation remain later outcomes.

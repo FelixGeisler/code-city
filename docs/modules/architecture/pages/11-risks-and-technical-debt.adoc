@@ -1,56 +1,23 @@
 = Risks and Technical Debt
 
-== Current implementation risks
-
-[cols="2,3,2",options="header"]
+[cols="1,2,2",options="header"]
 |===
-|Risk or debt |Current consequence |Existing containment
-
-|Service dependency on anonymous public GitHub
-|Provider availability, rate limits, or incomplete evidence can prevent
-complete acquisition.
-|The Node service uses fixed anonymous routes, bounded requests, exact evidence
-validation, explicit failures, the fixed processing envelope, and no automatic
-retry.
-
-|Whole-analysis acquisition and shared-parser failures
-|Revision, complete-tree, blob-integrity or retrieval, processing-envelope, or
-shared-parser-initialization failure prevents a city.
-|These boundaries fail closed before publication. After complete acquisition,
-supported source-text, syntax, and metric failures continue per file with the
-three sanitized categories defined by the requirements.
-
-|Source-free browser result
-|The server retains the exact analyzed source-result association in process
-memory, but current browser inspection cannot show source or unit/contribution
-evidence.
-|The browser receives only aligned paths, raw file metrics, and sanitized
-failed-file rows. Browser source view and drill-down remain future whole-core
-outcomes.
-
-|Shallow city grouping
-|Current city construction groups by at most the first two directory segments,
-not the accepted recursive repository hierarchy.
-|The behavior is deterministic and documented as current only. Recursive
-presentation details remain unresolved.
-
-
-|No persistence
-|Reload, navigation, replacement, or close loses the browser-session analysis.
-|The UI makes no save claim. Explicit immutable Save/reopen is accepted but
-unimplemented.
+|Risk/gap |Consequence |Current containment
+|Browser/provider constraints |CORS, rate limits, unavailable evidence, or missing Web Crypto can prevent acquisition. |Fixed anonymous routes, strict integrity/limits, explicit failures; HTTPS or secure localhost required.
+|Browser resource variation |Large repositories consume the user's CPU/memory; not every device is qualified. |Dedicated worker, accepted input envelope, cancellation; actual Chrome evidence is not a universal capacity promise.
+|Whole-attempt failures |Revision, inventory, integrity, envelope, or shared parser failure prevents publication. |Fail closed; continue only the supported per-file failures.
+|No source/unit UI |Current inspection shows file metrics, not source or per-unit contribution evidence. |Retain qualified normalized source locally; deeper inspection remains incomplete.
+|No shared persistence |A reload or worker loss loses the unsaved investigation. |No Save/recovery claim. Explicit immutable Save/share/reopen is the next delivery.
+|Shallow grouping |Current layout uses the existing grouping, not the full recursive target. |Deterministic current layout; no claim of recursive completion.
 |===
 
-== Later whole-core delivery gaps
+Browser acquisition/analysis, successful-file inventory, actual phase progress,
+and independent local tabs are implemented. Server analysis admission and idle
+source retention are removed from the delivered host. Legacy native adapters
+remain regression references only.
 
-Standalone M5 has completed the move to server-owned acquisition and analysis,
-temporary retained source-result association, and per-file continuation. The
-remaining accepted whole-core outcomes are recursive hierarchy, source and
-unit/contribution drill-down, and explicit Save/reopen. The standalone browser
-now has the complete successful-file inventory and selection without camera
-movement, but this does not complete the unit-inspection or whole-core target.
-
-API, storage, access/security, retention operations, deletion, backup, ingress,
-deployment, recursive layout, and portable interchange remain unresolved.
-These are future outcomes or design gaps, not claims about current standalone
-behavior, and must be decided before implementation depends on them.
+Remaining work includes the complete saved snapshot contract, bounded persistent
+storage, explicit Save, shared inventory/link reopen, deletion/recovery policy,
+source/unit inspection, and recursive presentation. No login or server metric
+certification is required. Anonymous operation controls are not a guarantee
+against arbitrary network denial of service.

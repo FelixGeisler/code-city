@@ -1,81 +1,198 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { canonicalStandaloneRoot } from "./build-standalone.mjs";
+import { createHash } from "node:crypto";
 
-export async function writeStandaloneBrowserProviderHarness(directory) {
-  await mkdir(directory, { recursive: true });
-  const control = path.join(directory, "control.json");
-  const log = path.join(directory, "provider.jsonl");
-  const revisionModule = path.join(directory, "revision-gateway.mjs");
-  const sourceModule = path.join(directory, "source-gateway.mjs");
-  const parserModule = path.join(directory, "parser-adapter.mjs");
-  const preload = path.join(directory, "provider-preload.mjs");
-  const acquisitionRelease = path.join(directory, "release-acquisition");
-  const analysisRelease = path.join(directory, "release-analysis");
-  await Promise.all([rm(acquisitionRelease, { force: true }), rm(analysisRelease, { force: true })]);
-  const workerEntry = pathToFileURL(path.join(canonicalStandaloneRoot, "server", "src", "edge", "node", "analysis-worker-entry.js")).href;
-  const parserAdapter = pathToFileURL(path.join(canonicalStandaloneRoot, "server", "src", "edge", "tree-sitter-adapter.js")).href;
-  const revision = "a".repeat(40);
-  const shared = `import { createHash } from "node:crypto";\nimport { appendFileSync, existsSync, readFileSync, watch } from "node:fs";\nimport path from "node:path";\nconst controlPath=${JSON.stringify(control)};const logPath=${JSON.stringify(log)};\nconst scenario=JSON.parse(readFileSync(controlPath,"utf8"));\nconst record=(event,detail={})=>appendFileSync(logPath,JSON.stringify({pid:process.pid,event,...detail})+"\\n");\nconst waitForRelease=(releasePath,signal)=>new Promise((resolve)=>{if(existsSync(releasePath)){resolve();return;}const watcher=watch(path.dirname(releasePath),(_event,name)=>{if(name===path.basename(releasePath)&&existsSync(releasePath))finish();});const finish=()=>{watcher.close();signal?.removeEventListener("abort",finish);resolve();};signal?.addEventListener("abort",finish,{once:true});if(existsSync(releasePath))finish();});\n`;
-  await writeFile(revisionModule, `${shared}
-export function createGithubRevisionGateway() { return async (_repository, signal) => {
-  record("revision-start", { mode: scenario.mode });
-  if (scenario.mode === "block-provider") {
-    await new Promise((resolve) => {
-      if (signal.aborted) resolve();
-      else signal.addEventListener("abort", resolve, { once: true });
-    });
-    record("revision-aborted", { aborted: signal.aborted });
-    return { kind: "provider-failure" };
+export const FIXTURE_REVISION = "a".repeat(40);
+const ROOT = "b".repeat(40);
+const blob = bytes => createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+
+function fixture(mode) {
+  let rows = [
+    ["a.js", "export function choose(v) { return v ? 1 : 0; }\n"],
+    ["b.ts", "export const typed: number = 1;\n"],
+    ["c.tsx", "export const view = <A/>;\n"],
+    ["d.cs", "class C { int M() { return 1; } }\n"],
+    ["empty.js", ""],
+  ];
+  if (mode === "mixed") rows.push(["bad.js", "export const = ;"], ["nul.js", Buffer.from([0])]);
+  if (mode === "all-failed") rows = [["invalid.js", Buffer.from([0xc3, 0x28])], ["nul.js", Buffer.from([0])]];
+  if (mode === "progress") rows = [["a.js", rows[0][1]], ["b.js", "const b = 1;"], ["nul.js", Buffer.from([0])]];
+  if (mode === "busy") rows = Array.from({ length: 8 }, (_, i) => [`busy${i}.js`, ";".repeat(1_000_000)]);
+  if (mode === "window") rows = Array.from({ length: 12 }, (_, i) => [`${String(i).padStart(4, "0")}.js`, "export const value = 1;\n"]);
+  if (mode === "maximum") {
+    const maximum = "//" + "x".repeat(2_097_150);
+    rows = Array.from({ length: 4000 }, (_, i) => [`matrix/${String(i).padStart(4, "0")}.js`, i < 20 ? maximum : ""]);
   }
-  record("revision-complete");
-  return { kind: "revision", revision: ${JSON.stringify(revision)} };
-}; }
-`, "utf8");
-  await writeFile(sourceModule, `${shared}
-const encoder=new TextEncoder();
-function successfulRows() { return [
-  ["src/Zeta.js","export const z = 1;\\n"],
-  ["src/a space.js","export const a = 1;\\nexport const b = 2;\\n"],
-  ["src/literal[1].js","export function choose(value) {\\n  if (value > 0) return value;\\n  return value ? 1 : 0;\\n}\\n"],
-  ["src/é.js","export function composed(value) { return value && 1; }\\n"],
-  ["src/Ω.js","export function first() { return 1; }\\nexport function second() { return 2; }\\n"],
-]; }
-function rows() {
-  if (scenario.mode === "mixed") return [["bad.js","export const = ;"],...successfulRows()];
-  if (scenario.mode === "all-failed") return [["bad.js","export const = ;"]];
-  if (scenario.mode === "busy-parser") return Array.from({length:8},(_,index)=>["busy-"+String(index).padStart(2,"0")+".js",";".repeat(2000000)]);
-  if (scenario.mode === "progress-barriers") return [successfulRows()[0], ["text-failure.js",null], successfulRows()[1]];
-  if (scenario.mode === "fast-4000") return Array.from({length:4000},(_,index)=>["fast-"+String(index).padStart(4,"0")+".js",null]);
-  if (scenario.mode === "large-failures") return Array.from({length:4000},(_,index)=>["failed/"+String(index).padStart(4,"0")+"-"+"x".repeat(120)+".js",null]);
-  return successfulRows();
+  if (mode === "too-many") rows = Array.from({ length: 4001 }, (_, i) => [`${i}.js`, ""]);
+  if (mode === "file-limit") rows = [["large.js", "//" + "x".repeat(2_097_151)]];
+  if (mode === "raw-limit") rows = [["large.js", Buffer.alloc(4_194_308, 32)]];
+  if (mode === "total-limit") rows = Array.from({ length: 21 }, (_, i) => [`${String(i).padStart(2, "0")}.js`, "//" + "x".repeat(2_097_150)]);
+  const sources = new Map(rows.map(([name, text]) => { const bytes = Buffer.isBuffer(text) ? text : Buffer.from(text); return [name, { bytes, sha: blob(bytes) }]; }));
+  const directories = new Set();
+  for (const name of sources.keys()) {
+    const parts = name.split("/");
+    for (let n = 1; n < parts.length; n += 1) directories.add(parts.slice(0, n).join("/"));
+  }
+  const tree = [
+    ...[...directories].map(name => ({ path: name, mode: "040000", type: "tree", sha: ROOT })),
+    ...[...sources].map(([name, source]) => ({ path: name, mode: "100644", type: "blob", sha: source.sha })),
+  ];
+  return { mode, sources, tree };
 }
-const sources=new Map(rows().map(([sourcePath,source])=>{const rawBytes=source===null?Uint8Array.from([0xc3,0x28]):encoder.encode(source);const sha=createHash("sha1").update("blob "+rawBytes.byteLength+"\\0").update(rawBytes).digest("hex");return [sourcePath,{rawBytes,sha}];}));
-let sourceReads=0;
-export function createGithubRawSourceGateway() { return {
-  async loadInventory(_repository,_selected,signal) {
-    record("inventory", { mode: scenario.mode, count: sources.size });
-    if (scenario.mode === "block-inventory") {
-      record("inventory-held");
-      await new Promise((resolve) => {
-        if (signal.aborted) resolve();
-        else signal.addEventListener("abort", resolve, { once: true });
-      });
-      record("inventory-aborted", { aborted: signal.aborted });
-      return { kind:"provider-failure" };
+
+/** CDP-only synthetic provider. No production hook, source override, or server worker. */
+export function createBrowserProviderHarness(cdp, origin, onFailure) {
+  let selectedMode = "success";
+  const workers = new Map();
+  const pageWorkers = new Map();
+  const events = [];
+  const waits = [];
+  const held = new Map();
+  const requests = [];
+  const detached = new Set();
+  const interceptions = new Map();
+  const record = event => {
+    events.push(event);
+    for (const wait of [...waits]) if (wait.predicate(event)) {
+      waits.splice(waits.indexOf(wait), 1); wait.resolve(event);
     }
-    return { kind:"inventory", entries:[...(sources.has("src/Zeta.js")?[{path:"src",mode:"040000",type:"tree"}]:[]),...[...sources].map(([sourcePath,value])=>({path:sourcePath,mode:"100644",type:"blob",sha:value.sha}))] };
-  },
-  async readRawSource(_repository,_selected,candidate,signal) { const source=sources.get(candidate.rawPath); if(source===undefined)return {kind:"provider-failure"}; if(scenario.mode==="progress-barriers"){const sourceIndex=sourceReads++;if(sourceReads===3)record("acquisition-window-filled");if(sourceIndex===0){record("first-acquisition-held");await waitForRelease(${JSON.stringify(acquisitionRelease)},signal);record("first-acquisition-released");}}record("source"); return {kind:"source",rawBytes:source.rawBytes}; },
-}; }
-`, "utf8");
-  await writeFile(parserModule, `${shared}
-import { createTreeSitterAdapter as createPackagedTreeSitterAdapter } from ${JSON.stringify(parserAdapter)};
-export function createTreeSitterAdapter(assets,options){const parser=createPackagedTreeSitterAdapter(assets,options);if(scenario.mode!=="progress-barriers")return parser;let first=true;return {initialize:()=>parser.initialize(),async project(family,source){if(first){first=false;record("first-analysis-held");await waitForRelease(${JSON.stringify(analysisRelease)});record("first-analysis-released");}return parser.project(family,source);}};}
-`, "utf8");
-  await writeFile(preload, `import { registerHooks } from "node:module";\nconst workerEntry=${JSON.stringify(workerEntry)};const revisionReplacement=${JSON.stringify(pathToFileURL(revisionModule).href)};const sourceReplacement=${JSON.stringify(pathToFileURL(sourceModule).href)};const parserReplacement=${JSON.stringify(pathToFileURL(parserModule).href)};\nregisterHooks({resolve(specifier,context,nextResolve){if(context.parentURL===workerEntry&&specifier==="../github-revision-gateway.js")return {url:revisionReplacement,shortCircuit:true};if(context.parentURL===workerEntry&&specifier==="../github-source-gateway.js")return {url:sourceReplacement,shortCircuit:true};if(context.parentURL===workerEntry&&specifier==="../tree-sitter-adapter.js")return {url:parserReplacement,shortCircuit:true};return nextResolve(specifier,context);}});\n`, "utf8");
-  await writeFile(control, `${JSON.stringify({ mode: "success" })}\n`, "utf8");
-  await writeFile(log, "", "utf8");
-  return Object.freeze({ control, log, preload, acquisitionRelease, analysisRelease });
+  };
+  const waitFor = predicate => {
+    const found = events.find(predicate);
+    if (found) return Promise.resolve(found);
+    return new Promise(resolve => waits.push({ predicate, resolve }));
+  };
+  const send = async (method, params, sessionId) => {
+    const owner = interceptions.get(params?.requestId);
+    try { return await cdp.send(method, params, sessionId); }
+    catch (error) {
+      let detail = error;
+      while (detail?.cause) detail = detail.cause;
+      if ((method === "Fetch.fulfillRequest" || method === "Fetch.continueRequest") && owner
+        && detail?.code === -32602 && detail.message === "Invalid InterceptionId.") {
+        // Aborted provider/asset requests can disappear before CDP replies.
+        // Require this actual worker to reach a terminal or detach; do not hide an unrelated RPC failure.
+        await owner.ended.promise;
+        record({ kind: "interception-cancelled", sessionId: owner.sessionId });
+        return {};
+      }
+      throw error;
+    } finally {
+      if (method === "Fetch.fulfillRequest" || method === "Fetch.continueRequest") interceptions.delete(params?.requestId);
+    }
+  };
+  async function fulfill(sessionId, requestId, bytes, mediaType, method = "GET", cors = true) {
+    await send("Fetch.fulfillRequest", {
+      requestId, responseCode: 200,
+      responseHeaders: [
+        { name: "Content-Type", value: mediaType },
+        ...(cors ? [{ name: "Access-Control-Allow-Origin", value: "*" }, { name: "Access-Control-Allow-Headers", value: "x-github-api-version" }, { name: "Access-Control-Allow-Methods", value: "GET, OPTIONS" }] : []),
+      ],
+      body: method === "OPTIONS" ? "" : bytes.toString("base64"),
+    }, sessionId);
+  }
+  async function handle(message) {
+    const { method, params, sessionId } = message;
+    if (method === "Target.attachedToTarget" && params.targetInfo.type === "worker") {
+      const workerSession = params.sessionId;
+      const state = { ...fixture(selectedMode), sessionId: workerSession, parentSessionId: sessionId, targetId: params.targetInfo.targetId, networkUrls: new Set(), ended: Promise.withResolvers() };
+      workers.set(workerSession, state);
+      pageWorkers.set(sessionId, state);
+      await send("Runtime.enable", {}, workerSession);
+      await send("Network.enable", {}, workerSession);
+      await send("Runtime.addBinding", { name: "__codeCityEvidence" }, workerSession);
+      await send("Runtime.evaluate", { expression: `(() => { const send = self.postMessage.bind(self); self.postMessage = (value, ...rest) => { self.__codeCityEvidence(JSON.stringify(value)); send(value, ...rest); }; })()` }, workerSession);
+      await send("Runtime.runIfWaitingForDebugger", {}, workerSession);
+      record({ kind: "worker", sessionId: workerSession, mode: state.mode });
+      return;
+    }
+    if (method === "Target.detachedFromTarget") {
+      detached.add(params.sessionId);
+      workers.get(params.sessionId)?.ended.resolve();
+      for (const [id, owner] of interceptions) if (owner.sessionId === params.sessionId) interceptions.delete(id);
+      for (const [id, item] of held) if (item.ownerSessionId === params.sessionId) held.delete(id);
+      for (const [page, worker] of pageWorkers) if (worker.sessionId === params.sessionId) pageWorkers.delete(page);
+      record({ kind: "detached", sessionId: params.sessionId });
+      return;
+    }
+    if (method === "Runtime.bindingCalled" && params.name === "__codeCityEvidence") {
+      const value = JSON.parse(params.payload);
+      if (["ANALYSIS_FAILED", "ANALYSIS_CANCELLED", "ANALYSIS_SUCCEEDED", "ANALYSIS_ALL_FILES_FAILED"].includes(value.type)) workers.get(sessionId)?.ended.resolve();
+      record({ kind: "event", sessionId, value }); return;
+    }
+    if (method === "Runtime.bindingCalled" && params.name === "__codeCityDeliveryEvidence") {
+      record({ kind: "delivery-held", sessionId, value: JSON.parse(params.payload) }); return;
+    }
+    if (method === "Network.requestWillBeSent" && workers.has(sessionId)) workers.get(sessionId).networkUrls.add(params.request.url);
+    if (method !== "Fetch.requestPaused") return;
+    const url = new URL(params.request.url);
+    const state = workers.get(sessionId) ?? pageWorkers.get(sessionId);
+    const ownerSessionId = state?.sessionId;
+    if (state) interceptions.set(params.requestId, state);
+    requests.push({ url: url.href, method: params.request.method, worker: !!state, sessionId: ownerSessionId ?? sessionId, headers: params.request.headers });
+    if (url.origin === origin) {
+      if (state?.mode === "parser-held" && url.pathname.startsWith("/parser/") && url.pathname.endsWith(".wasm")) {
+        held.set(params.requestId, { sessionId, ownerSessionId, params, local: true }); record({ kind: "parser-held", sessionId: ownerSessionId }); return;
+      }
+      await send("Fetch.continueRequest", { requestId: params.requestId }, sessionId); return;
+    }
+    if (!state || !["https://api.github.com", "https://raw.githubusercontent.com"].includes(url.origin)) {
+      await send("Fetch.failRequest", { requestId: params.requestId, errorReason: "BlockedByClient" }, sessionId);
+      throw new Error(`Unexpected network origin or non-worker provider request: ${url.origin}`);
+    }
+    if (!["GET", "OPTIONS"].includes(params.request.method)) throw new Error("Unexpected provider request method");
+    if (url.origin === "https://api.github.com" && !url.pathname.startsWith("/repos/fixture/standalone/")) throw new Error("Unexpected provider repository");
+    if (params.request.method === "OPTIONS") {
+      await fulfill(sessionId, params.requestId, Buffer.alloc(0), "application/json", "OPTIONS"); return;
+    }
+    let bytes;
+    let mediaType = "application/json; charset=utf-8";
+    if (url.origin === "https://api.github.com") {
+      if (url.pathname.endsWith("/commits") && url.search === "?per_page=1&page=1") {
+        if (state.mode === "revision-held") {
+          held.set(params.requestId, { sessionId, ownerSessionId, params, bytes: Buffer.from(JSON.stringify([{ sha: FIXTURE_REVISION }])), mediaType });
+          record({ kind: "revision-held", sessionId: ownerSessionId }); return;
+        }
+        bytes = Buffer.from(JSON.stringify([{ sha: FIXTURE_REVISION }]));
+      } else if (url.pathname.endsWith(`/git/commits/${FIXTURE_REVISION}`)) bytes = Buffer.from(JSON.stringify({ sha: FIXTURE_REVISION, tree: { sha: ROOT } }));
+      else if (url.pathname.endsWith(`/git/trees/${ROOT}`) && url.search === "?recursive=1") bytes = Buffer.from(JSON.stringify({ sha: ROOT, truncated: false, tree: state.tree }));
+      else throw new Error(`Unexpected fixed provider route: ${url.pathname}`);
+    } else {
+      const prefix = `/fixture/standalone/${FIXTURE_REVISION}/`;
+      if (!url.pathname.startsWith(prefix)) throw new Error("Unexpected raw revision/path");
+      const name = url.pathname.slice(prefix.length).split("/").map(decodeURIComponent).join("/");
+      const source = state.sources.get(name);
+      if (!source) throw new Error("Unexpected raw source");
+      bytes = state.mode === "integrity" ? Buffer.from("corrupted") : source.bytes;
+      mediaType = "text/plain; charset=utf-8";
+      record({ kind: "raw", sessionId: ownerSessionId, name, mode: state.mode });
+      if (state.mode === "window" && name === "0000.js") {
+        held.set(params.requestId, { sessionId, ownerSessionId, params, bytes, mediaType }); record({ kind: "raw-held", sessionId: ownerSessionId }); return;
+      }
+    }
+    await fulfill(sessionId, params.requestId, bytes, mediaType, "GET", state.mode !== "cors-failure");
+    record({ kind: "fulfilled", sessionId: ownerSessionId, url: url.href });
+  }
+  const listener = message => {
+    void handle(message).catch(error => {
+      if (!detached.has(message.sessionId) && !detached.has(message.params?.sessionId)) onFailure(error);
+    });
+  };
+  cdp.listeners.add(listener);
+  return {
+    events, requests, workers, held,
+    setMode(mode) { selectedMode = mode; },
+    waitFor,
+    async attachPage(sessionId) {
+      await send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, sessionId);
+      await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
+    },
+    async release(sessionId) {
+      for (const [id, item] of [...held]) {
+        if (item.ownerSessionId !== sessionId) continue;
+        held.delete(id);
+        if (item.local) await send("Fetch.continueRequest", { requestId: id }, item.sessionId);
+        else await fulfill(item.sessionId, id, item.bytes, item.mediaType);
+      }
+    },
+    close() { cdp.listeners.delete(listener); },
+  };
 }

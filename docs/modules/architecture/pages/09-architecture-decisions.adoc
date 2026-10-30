@@ -1,10 +1,16 @@
 = Architecture Decisions
 
-An architecture decision record documents the context, considered options,
-selected decision, rationale, and consequences of a consequential architectural
-choice.
+Record consequential boundary and technology choices, not routine implementation
+details. Historical numbering does not count active decisions.
 
-== Accepted decisions
+== Current ownership decision
+
+* xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015: Browser analysis and server-saved investigations]
+
+== Earlier decisions
+
+ADR 0015 replaces the server-analysis portions of these records. The native
+Node.js HTTP hosting choice remains in use; their original context is retained.
 
 * xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013: Ownership of source acquisition, analysis, and saved investigations]
 * xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR 0014: Standalone server runtime and analysis execution boundary]

@@ -1,42 +1,36 @@
 = Architecture Constraints
 
-== Current standalone constraints
-
-* The package-supported Node.js runtime hosts one native same-origin
-  `node:http` service. Each admitted analysis runs in one dedicated
-  `worker_threads` worker. This is not an operating-system sandbox.
-* The service is loopback-first. Deliberate trusted-LAN operation is limited to
-  public GitHub source. Internet exposure, private repositories, company
-  authentication, FLOW, and ADO are not approved.
-* Only `--host` defaults. `--port` and all five capacity flags are required.
-  No numerical capacity is a product default or deployment recommendation.
-* Repository content is untrusted data. It is validated, decoded, and parsed,
-  but never imported, executed, built, or tested.
-* Supported languages, source admission, processing limits, metric semantics,
-  and visual mapping are product constraints owned by the requirements module.
-* Syntax analysis uses pinned WebAssembly grammars. Dependency and tool versions
-  are authoritative only in `package.json` and `package-lock.json`.
-* Temporary source-result association exists only in application process
-  memory. There is no Save, reopen, persistence, or recovery.
-* Raspberry Pi performance, concurrency, memory, and deployment qualification
-  remain pending.
+* Public GitHub acquisition and TypeScript/WASM analysis run in a browser Web
+  Worker, never on the UI thread or in the application server.
+* Source is untrusted data. Code City never executes repository scripts,
+  builds, tests, hooks, or dynamically selected code.
+* Requirements own admission, algorithms, processing limits, and visual mapping.
+  Dependency versions remain authoritative in `package.json` and its lockfile.
+* Browser blob integrity requires Web Crypto: HTTPS or a secure localhost
+  context. Direct insecure remote HTTP cannot perform analysis.
+* Only `--port` is required. The host defaults to loopback; a non-loopback bind
+  also requires a canonical host. No analysis-capacity setting remains.
+* Private repositories, Internet deployment, TLS ingress, and Raspberry Pi
+  performance/concurrency/memory qualification are not supplied.
 
 == Package boundary
 
-The canonical `dist/` artifact contains `public/`, private `server/`, private
-`parser/`, and one version-1 `package-manifest.json`. Manifest paths are
-artifact-relative. The HTTP perimeter serves only verified public records and
-returns `404` for the manifest, private files, and unlisted paths.
+The canonical `dist/` artifact has a version-1 `package-manifest.json` describing
+all public/private runtime bytes. `public/` contains the UI, worker, parser
+runtime and WASM grammars. `server/` contains only the private asset host and
+its perimeter/configuration dependencies. The former `parser/` directory is
+empty; actual assets are under `public/parser/`.
 
-The browser contains no GitHub provider, raw-source payload, parser runtime,
-grammar WASM, browser analysis worker, or fallback analysis path. It uses only
-the same-origin session and command routes and keeps temporary interaction
-state in memory.
+The host verifies every public record before serving only fixed manifest
+routes. The manifest, server code, and unlisted paths return `404`. Legacy
+analysis routes are not mounted. Native analysis/session adapters remain
+repository regression fixtures, not shipped server capabilities.
 
-== Accepted later target
+== State and later storage
 
-xref:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013]
-keeps server ownership and adds optional immutable saved investigations. A
-public API, authentication, Internet exposure, private-source integration,
-Save storage, deletion, backup, recovery, and a deployment topology remain
-unselected.
+Unsaved investigations exist only in browser memory. There is no server source
+cache, idle-tab dataset, account, persistence, or Save/reopen yet.
+xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015]
+assigns only explicitly saved snapshots to future server custody, without
+recomputing client metrics. Anonymous operation bounds must protect reads and
+static serving from write work; storage and recovery choices remain open.

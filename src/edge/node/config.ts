@@ -9,10 +9,13 @@ export const CLI_FLAGS = Object.freeze([
   "--max-retained-source-bytes",
 ] as const);
 
-export interface StandaloneConfiguration {
+export interface AssetHostConfiguration {
   readonly host: string;
   readonly canonicalHost: string;
   readonly port: number;
+}
+
+export interface StandaloneConfiguration extends AssetHostConfiguration {
   readonly maxLiveSessions: number;
   readonly maxActiveAttempts: number;
   readonly maxCommandBodyReaders: number;
@@ -136,6 +139,22 @@ export function parseStandaloneArguments(argv: readonly string[]): StandaloneCon
     maxCommandBodyBytes,
     maxRetainedSourceBytes,
   });
+}
+
+export function parseAssetHostArguments(argv: readonly string[]): AssetHostConfiguration {
+  const supplied = new Map<string, string>();
+  for (let index = 0; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!flag || !["--host", "--canonical-host", "--port"].includes(flag) || !value || value.startsWith("--") || supplied.has(flag)) invalid();
+    supplied.set(flag, value);
+  }
+  const host = supplied.get("--host") ?? "127.0.0.1";
+  if (!host || /[\u0000-\u001f\u007f]/u.test(host)) invalid();
+  const requested = supplied.get("--canonical-host");
+  if (host === "127.0.0.1" && requested !== undefined) invalid();
+  const canonicalHost = host === "127.0.0.1" ? host : validateCanonicalHost(requested ?? invalid());
+  return Object.freeze({ host, canonicalHost, port: parsePort(supplied.get("--port") ?? invalid()) });
 }
 
 export function canonicalAuthority(canonicalHost: string, actualPort: number): string {

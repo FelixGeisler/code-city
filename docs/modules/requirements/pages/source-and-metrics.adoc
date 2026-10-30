@@ -4,10 +4,10 @@
 
 The requirements in this section are the approved whole-core target. The
 detailed language and metric rules later on this page are the single
-authoritative algorithms for both the implemented standalone M5 slice and the
-later whole-core target. Standalone M5 implements server-owned source
-acquisition and analysis, complete acquisition before file processing,
-supported per-file continuation, and temporary source-result association.
+authoritative algorithms for the current browser-analysis milestone and the
+later whole-core target. The browser implements source acquisition and
+analysis in a dedicated worker, complete acquisition before file processing,
+supported per-file continuation, and browser-temporary source-result association.
 Browser source viewing and saved investigations remain later whole-core
 outcomes.
 
@@ -29,12 +29,13 @@ records its full immutable commit ID. No selection event, watch, or schedule
 starts analysis. Later runs do not alter earlier results.
 
 [[CC-CORE-SRC-03]]
-=== Server-owned acquisition and analysis
+=== Browser-owned acquisition and analysis
 
-The Code City server acquires and analyzes the complete selected-commit dataset
-and owns its authoritative association with results and optional saved
-investigations. The browser owns presentation and investigation, as fixed by
-xref:architecture:adr/0013-ownership-of-source-acquisition-analysis-and-saved-investigations.adoc[ADR 0013].
+A dedicated browser worker acquires and analyzes the complete selected-commit
+dataset. The browser owns unsaved sources, results, presentation, and
+investigation. The server receives data only on later explicit Save, not on
+Analyze or while a tab remains idle. Ownership is fixed by
+xref:architecture:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015].
 
 [[CC-CORE-SRC-04]]
 === Untrusted source
@@ -128,15 +129,16 @@ classification.
 
 The suffixes, pinned grammar selection, strict UTF-8, BOM, newline, and NUL
 handling, unit ownership, syntax coverage, and metric algorithms below are the
-initial target contract and grammar authority. Standalone M5 applies these
-rules in its server-owned worker and continues supported per-file failures as
+initial target contract and grammar authority. The current milestone applies
+these rules in its browser worker and continues supported per-file failures as
 `Source text is not supported`, `Syntax could not be analyzed`, or `Metrics
 could not be computed`. This does not imply the later recursive presentation,
 browser source view, or persistence outcomes. Algorithm evidence is in
 `test/base-metrics.test.mjs`, `test/complexity.test.mjs`,
 `test/csharp-qualification.test.mjs`, and `test/source-admission.test.mjs`;
-server-owned continuation evidence is in `test/project-analysis.test.mjs` and
-`test/node-worker-runtime.test.mjs`.
+shared-core continuation evidence is in `test/project-analysis.test.mjs` and
+`test/node-worker-runtime.test.mjs`; actual browser execution is qualified by
+`tools/check-standalone-browser.mjs`.
 
 [[authoritative-admission]]
 == Admission
@@ -192,7 +194,7 @@ records have no product count limit.
 A repository outside this envelope fails as `Repository exceeds Code City
 limits`. It is never sampled, truncated, or partially processed.
 
-After complete inventory and eligible-blob preflight, one admitted standalone
+After complete inventory and eligible-blob preflight, one browser analysis
 attempt may own at most eight raw-source read slots. Pending reads and completed
 raw outcomes awaiting canonical consideration both occupy a slot. Reads start
 in canonical order, while strict text handling, byte ownership, envelope
@@ -200,7 +202,7 @@ checks, failed-file rows, retained modules, and progress remain canonically
 ordered. A known raw failure stops further admission; only the unresolved
 canonical prefix is retained to determine the same failure precedence as
 serial acquisition. Cancellation or terminal failure aborts and settles every
-owned read before the attempt returns. With `A` active admitted attempts, this
+owned read before the attempt returns. With `A` active browser attempts, this
 phase can own at most `8 × A` slots; this is neither a memory, provider-capacity,
 latency, nor throughput promise.
 
