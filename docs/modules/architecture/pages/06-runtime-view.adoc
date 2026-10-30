@@ -33,10 +33,12 @@ loaded browser-owned completed view.
   inspector, and existing presenter commit as one local publication.
 
 The worker emits real `0/N` and `0/T`, subsequent considered/cleaned-up counts,
-and indeterminate initialization/construction stages. No HTTP progress stream,
-server write queue, simulated percentage, or ETA exists.
+and initialization/construction stage events. The controller maps these onto
+xref:requirements:city-and-failures.adoc#browser-investigation-workspace[one monotonic work budget];
+only successful presentation completes the bar. No HTTP progress stream,
+server write queue, clock-driven percentage, or ETA exists.
 
-== Stop, replacement, discard, and loss
+== Stop, replacement, and loss
 
 Before cancellation or replacement can publish another result, the old attempt
 is ineligible. During provider activity, STOP aborts its signal and the source
@@ -45,8 +47,9 @@ permits worker release. After acquisition, termination does not wait for a busy
 synchronous parser to receive a message. No browser worker-exit event is assumed.
 
 Only the newest queued local replacement creates another worker. Old messages
-cannot publish. Cancel after a terminal result is a no-op; Discard releases the
-local worker and view. Page exit terminates owned work, and worker errors revoke
+cannot publish. Cancel after a terminal result is a no-op. There is no separate
+Discard UI action or server investigation to release. Page exit terminates owned
+work, and worker errors revoke
 the corresponding local investigation. Another tab is unaffected.
 
 == Qualification

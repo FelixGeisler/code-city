@@ -68,7 +68,7 @@ const CLOSED_GL_METHODS = new Set([
   "compileShader", "createBuffer", "createProgram", "createShader", "createVertexArray", "cullFace", "deleteBuffer",
   "deleteProgram", "deleteShader", "deleteVertexArray", "depthFunc", "depthMask", "disable", "drawElementsInstanced",
   "enable", "enableVertexAttribArray", "frontFace", "getContextAttributes", "getError", "getProgramParameter",
-  "getShaderParameter", "getUniformLocation", "isContextLost", "linkProgram", "shaderSource", "uniform1i", "uniformMatrix4fv",
+  "getShaderParameter", "getUniformLocation", "isContextLost", "linkProgram", "shaderSource", "uniform1i", "uniform4f", "uniformMatrix4fv",
   "useProgram", "vertexAttribDivisor", "vertexAttribPointer", "viewport",
 ]);
 
@@ -117,6 +117,7 @@ class FakeGl {
   useProgram(program) { this.call("useProgram", [program]); this.currentProgram = program; }
   uniformMatrix4fv(...args) { this.call("uniformMatrix4fv", [args[0], args[1], new Float32Array(args[2])]); }
   uniform1i(...args) { this.call("uniform1i", args); }
+  uniform4f(...args) { this.call("uniform4f", args); }
   deleteProgram(...args) { this.call("deleteProgram", args); }
   createVertexArray() { return this.resource("VertexArray"); }
   bindVertexArray(vao) { this.call("bindVertexArray", [vao]); this.currentVao = vao; }
@@ -537,6 +538,78 @@ test("one building and one plate use exact shared-centre staging and fixed plate
   assert.equal(environment.observers[0].observed, true);
 });
 
+test("district platforms select by nearest visible hit, preserve camera/uploads, and fail closed on uniform errors", () => {
+  const city = validateCityPayload(buildCity([
+    { canonicalPath: "a/one.ts", S: 10, U: 2, M: 3 },
+    { canonicalPath: "b/two.ts", S: 20, U: 4, M: 6 },
+  ]));
+  const environment = fakeEnvironment({ width: 300, height: 200 });
+  const { presenter, failures } = failuresCollector(environment);
+  const events = [];
+  const sink = { ...EMPTY_EVENT_SINK, districtActivation(generation, index) { events.push(["district", generation, index]); }, activationIndex(generation, index) { events.push(["file", generation, index]); } };
+  const staged = presenter.stage(1, city.geometry, city.presentation, sink);
+  assert.equal(staged.kind, "staged");
+  assert.equal(presenter.commit(staged.token).kind, "committed");
+  environment.host.replaceChildren(staged.canvas);
+  const canvas = staged.canvas, gl = canvas.gl, rectangle = canvas.getBoundingClientRect();
+  const initial = matrices(gl).at(-1), uploads = gl.uploads.length;
+  const camera = resetCamera(city.presentation.sceneBounds, { width: 300, height: 200 });
+  const plates = { count: city.presentation.plates.length,
+    origins: Float32Array.from(city.presentation.plates.flatMap(plate => [...plate.minimum])),
+    sizes: Float32Array.from(city.presentation.plates.flatMap(plate => [...plate.dimensions])) };
+  let platformPoint, buildingPoint, emptyPoint;
+  for (let y = 0; y < 200 && (!platformPoint || !buildingPoint || !emptyPoint); y++) for (let x = 0; x < 300; x++) {
+    const clientX = rectangle.left + x, clientY = rectangle.top + y;
+    const building = pickAtCanvasPoint(camera.view, clientX, clientY, rectangle, { width: 300, height: 200 }, city.geometry);
+    const district = pickAtCanvasPoint(camera.view, clientX, clientY, rectangle, { width: 300, height: 200 }, plates);
+    if (building.index === null && district.index !== null) platformPoint ??= { clientX, clientY, index: district.index };
+    if (building.index !== null && (district.tEnter === null || building.tEnter <= district.tEnter)) buildingPoint ??= { clientX, clientY, index: building.index };
+    if (building.index === null && district.index === null) emptyPoint ??= { clientX, clientY };
+  }
+  assert.ok(platformPoint && buildingPoint && emptyPoint);
+  const activate = point => { canvas.dispatch("pointerdown", inputEvent(point)); canvas.dispatch("pointerup", inputEvent(point)); };
+  activate(platformPoint);
+  assert.deepEqual(events.at(-1), ["district", 1, platformPoint.index]);
+  assert.deepEqual(presenter.setVisualState(1, null, null, platformPoint.index), APPLIED);
+  assert.equal(gl.calls.some(call => call[0] === "uniform4f"), true);
+  assert.deepEqual(gl.calls.filter(call => call[0] === "uniform1i").slice(-4).map(call => call[2]), [-1, -platformPoint.index - 2, 0, 1]);
+  assert.deepEqual(matrices(gl).at(-1), initial);
+  assert.equal(gl.uploads.length, uploads);
+  activate(buildingPoint);
+  assert.deepEqual(events.at(-1), ["file", 1, buildingPoint.index]);
+  assert.deepEqual(presenter.setVisualState(1, null, buildingPoint.index), APPLIED);
+  activate(emptyPoint);
+  assert.deepEqual(events.at(-1), ["file", 1, null]);
+  gl.options.throwMethod = "uniform4f";
+  assert.deepEqual(presenter.setVisualState(1, null, null, platformPoint.index), PRESENTATION_FAILURE);
+  assert.equal(failures.length, 1);
+  const count = events.length;
+  activate(platformPoint);
+  assert.equal(events.length, count);
+  presenter.dispose();
+});
+
+test("district capability rejects missing uniforms, invalid indices, and mixed file/district selection", () => {
+  const geometry = oneBuilding();
+  const enabled = { ...EMPTY_EVENT_SINK, districtActivation() {} };
+  const missing = fakeEnvironment({ gl: { callFault: { method: "getUniformLocation", occurrence: 5, result: null } } });
+  const first = failuresCollector(missing);
+  assert.equal(first.presenter.stage(1, geometry, presentationForGeometry(geometry), enabled).kind, "failure");
+  assert.equal(first.failures.length, 0, "uncommitted stage failure is returned to its caller");
+  assert.equal(missing.canvases[0].gl.calls.filter(call => call[0] === "deleteShader").length, 2);
+  assert.equal(missing.canvases[0].gl.calls.filter(call => call[0] === "deleteProgram").length, 1);
+  first.presenter.dispose();
+  for (const [selection, district] of [[null, -1], [null, 1], [null, 0.5], [null, NaN], [null, Infinity], [0, 0]]) {
+    const environment = fakeEnvironment();
+    const { presenter, failures } = failuresCollector(environment);
+    assert.deepEqual(present(environment, presenter, 1, geometry, enabled), COMMITTED);
+    assert.deepEqual(presenter.setVisualState(1, null, selection, district), PRESENTATION_FAILURE);
+    assert.equal(failures.length, 1);
+    assert.deepEqual(presenter.setVisualState(1, null, null), STALE);
+    presenter.dispose();
+  }
+});
+
 test("surface focus remains building-only across each immutable two-pass redraw", () => {
   const model = buildCity([
     { canonicalPath: "a.js", S: 0, U: 0, M: 0 },
@@ -561,7 +634,8 @@ test("surface focus remains building-only across each immutable two-pass redraw"
   assert(literals.vertexShader.includes("displayed = 0.70 * ordinary;"));
   assert(literals.vertexShader.includes("mix(displayed, ordinary, 0.15)"));
   assert(literals.vertexShader.includes("mix(ordinary, vec3(1.0), 0.15)"));
-  assert(literals.vertexShader.includes("gl_InstanceID != u_selectionIndex"));
+  assert(literals.vertexShader.includes("gl_InstanceID == u_selectionIndex"));
+  assert(literals.vertexShader.includes("all(lessThan(withinDistrict, u_selectionBounds.zw))"));
   assert(literals.vertexShader.includes("v_color = vec4(displayed, 1.0);"));
 
   const states = [
@@ -770,7 +844,8 @@ test("canvas accessibility and exact camera and selection key mappings suppress 
   assert.equal(expected.kind, "success");
   assert.equal(canvas.tabIndex, 0);
   assert.equal(canvas.attributes.get("aria-label"), "Interactive code city");
-  assert.equal(canvas.attributes.get("aria-describedby"), "city-navigation-instructions");
+  assert.equal(canvas.attributes.has("aria-describedby"), false);
+  assert.equal(canvas.attributes.get("aria-keyshortcuts"), "ArrowUp ArrowDown ArrowLeft ArrowRight Home End Escape W A S D + - 0");
   assert.deepEqual(canvas.eventOptions.get("wheel"), { passive: false });
   assert.equal(canvas.eventListeners.get("keydown").size, 1);
   assert.equal(canvas.eventListeners.get("wheel").size, 1);

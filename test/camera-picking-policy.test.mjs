@@ -644,7 +644,8 @@ test("surface focus stays display-only and preserves real-AABB picking", async (
     "mix(displayed, ordinary, 0.15)",
     "mix(ordinary, vec3(1.0), 0.15)",
     "gl.uniform1i(hoverUniform, session.hover ?? -1)",
-    "gl.uniform1i(selectionUniform, session.selection ?? -1)",
+    "gl.uniform1i(selectionUniform, session.districtSelection === null ? session.selection ?? -1 : -session.districtSelection - 2)",
+    "uniform vec4 u_selectionBounds;",
   ]) assert(presenter.includes(statement), statement);
   for (const removed of ["SELECTION_BOX_POSITIONS", "HOVER_BOX_POSITIONS", "BOX_EDGE_INDICES", "bufferSubData", "DYNAMIC_DRAW", "gl.LINES"]) {
     assert.equal(presenter.includes(removed), false, removed);
@@ -807,9 +808,9 @@ test("ADR 0013 and current perspective requirements stay synchronized", async ()
     "#22C55EFF", "#84CC16FF", "#FACC15FF", "#F59E0BFF", "#F97316FF", "#EF4444FF",
     "D = 0.70", "H = 0.15", "u_passKind", "u_hoverIndex", "u_selectionIndex", "208420",
     "Complexity: low → high", "M = 16+", "one program, two VAOs, and four immutable buffers", "#182A43FF",
-    "sqrt(min(S, 1000) / 1000)", "S=25,50,100,200,600,1000", "Bounded displayed dimensions",
-    "Height: square-root scale; S cap 1000; displayed height range 4..40.",
-    "Footprint: log-compressed scale; U cap 100; displayed side range 3..18.",
+    "sqrt(min(S, 1000) / 1000)", "S=25,50,100,200,600,1000",
+    "The file path is the inspector heading", "Maximum unit complexity",
+    "RGBA/hex code", "district selection",
   ]) assert(normalized.includes(statement), statement);
   for (const superseded of ["#F8FAFCFF", "#94A3B8FF", "-1/64", "65/64", "Selection draws first and hover second", "visible group plate"]) {
     assert.equal(normalized.includes(superseded), false, superseded);

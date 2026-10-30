@@ -50,16 +50,19 @@ Repository content is data, never imported or executed as application code.
 
 The xref:city-and-failures.adoc#browser-investigation-workspace[investigation
 workspace] collapses setup after Analyze and makes the city primary. Find file,
-failed-file details, and navigation help are closed by default. Change repository
-reopens setup without discarding the result; Reanalyze uses the captured inputs,
-not unsent edits.
+and failed-file details are closed by default. Change repository reopens setup
+without losing the result; Analyze submits the edited inputs. There is no
+Discard or Reanalyze control or expandable navigation-instructions panel.
+Buildings and districts are selectable without moving the camera.
 
 From Analyze until a terminal outcome, show one native progress control and
 Cancel. Phase labels are `Starting analysis`, `Resolving revision`,
 `Preparing file inventory`, `Acquiring files X of N`, `Initializing analysis`,
 `Analyzing files X of T`, and `Building city`. Once a positive total is known,
-report real counts beginning at `0/N` or `0/T`; unknown totals are indeterminate.
-The phase-local scales do not represent overall runtime, elapsed time,
+report real counts beginning at `0/N` or `0/T` in the phase label. The single
+bar remains indeterminate until the candidate total is known, then advances on
+a fixed work budget without resetting between acquisition and analysis. It
+reaches completion only after result publication. It is not elapsed time,
 throughput, or an ETA. Never display `0/0` or fabricate completion for a failure.
 
 Cancel during acquisition aborts and settles the owned source reads before the
@@ -68,7 +71,7 @@ without waiting for a synchronous parser to process a message. Replacement
 invalidates old publication, stops old work, and starts only the newest local
 submission. Late callbacks cannot restore discarded state. Page exit disposes
 its local worker. Successful and all-files-failed results remain local until
-Discard, replacement, page loss, or worker loss. Cancel after completion is a
+replacement, page loss, or worker loss. Cancel after completion is a
 no-op rather than a discard.
 
 An idle tab creates no analysis worker or backend analysis request. Multiple

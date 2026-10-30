@@ -46,73 +46,33 @@ function selectedContent(
   value: MetricExplanation,
   district: string,
 ): HTMLElement[] {
-  const title = heading(documentTarget, "h2", "Selected building");
-
-  const identity = documentTarget.createElement("div");
-  identity.dataset.inspectorIdentity = "";
-  const identityLabel = documentTarget.createElement("span");
-  identityLabel.textContent = "Canonical path";
+  const title = heading(documentTarget, "h2", "");
   const path = documentTarget.createElement("bdi");
   path.dataset.canonicalPath = "";
   path.setAttribute("dir", "auto");
   path.textContent = value.canonicalPath;
-  identity.append(identityLabel, path);
-
-  const selectedDistrict = documentTarget.createElement("bdi");
+  title.append(path);
+  const selectedDistrict = documentTarget.createElement("p");
   selectedDistrict.dataset.selectedDistrict = "";
-  selectedDistrict.setAttribute("dir", "auto");
-  selectedDistrict.textContent = `District: ${district}`;
-
-  const metricTitle = heading(documentTarget, "h3", "Exact metrics");
+  const label = documentTarget.createElement("span");
+  label.textContent = "District: ";
+  const districtPath = documentTarget.createElement("bdi");
+  districtPath.setAttribute("dir", "auto");
+  districtPath.textContent = district;
+  selectedDistrict.append(label, districtPath);
   const metrics = documentTarget.createElement("dl");
   metrics.dataset.metricFacts = "";
-  definition(documentTarget, metrics, "Source lines (S)", String(value.sourceLines), "data-source-lines");
-  definition(documentTarget, metrics, "Executable units (U)", String(value.executableUnits), "data-executable-units");
+  definition(documentTarget, metrics, "Source lines", String(value.sourceLines), "data-source-lines");
+  definition(documentTarget, metrics, "Executable units", String(value.executableUnits), "data-executable-units");
   definition(
     documentTarget,
     metrics,
-    "Maximum executable-unit complexity (M)",
+    "Maximum unit complexity",
     String(value.maximumComplexity),
     "data-maximum-complexity",
   );
 
-  const dimensionTitle = heading(documentTarget, "h3", "Bounded displayed dimensions");
-  const dimensionPolicy = documentTarget.createElement("p");
-  dimensionPolicy.dataset.dimensionPolicy = "";
-  dimensionPolicy.textContent = "Height: square-root scale; S cap 1000; displayed height range 4..40. Footprint: log-compressed scale; U cap 100; displayed side range 3..18.";
-  const dimensions = documentTarget.createElement("dl");
-  dimensions.dataset.metricDimensions = "";
-  definition(documentTarget, dimensions, "Displayed height", String(value.height), "data-height");
-  definition(documentTarget, dimensions, "Displayed width", String(value.width), "data-width");
-  definition(documentTarget, dimensions, "Displayed depth", String(value.depth), "data-depth");
-
-  const colourTitle = heading(documentTarget, "h3", "Selected colour");
-  const selectedColour = documentTarget.createElement("p");
-  selectedColour.dataset.selectedColour = "";
-  const selectedSwatch = documentTarget.createElement("span");
-  const selectedBand = METRIC_PALETTE_LEGEND.findIndex((band) => band.range === value.paletteRange);
-  selectedSwatch.dataset.paletteSwatch = String(selectedBand);
-  selectedSwatch.setAttribute("aria-hidden", "true");
-  const selectedRange = documentTarget.createElement("span");
-  selectedRange.dataset.selectedRange = "";
-  selectedRange.textContent = `M = ${value.paletteRange}`;
-  const selectedRgba = documentTarget.createElement("code");
-  selectedRgba.dataset.selectedRgba = "";
-  selectedRgba.textContent = value.rgba;
-  selectedColour.append(selectedSwatch, selectedRange, selectedRgba);
-
-  return [
-    title,
-    identity,
-    selectedDistrict,
-    metricTitle,
-    metrics,
-    dimensionTitle,
-    dimensionPolicy,
-    dimensions,
-    colourTitle,
-    selectedColour,
-  ];
+  return [title, selectedDistrict, metrics];
 }
 
 export function replaceMetricInspectorContent(
@@ -120,8 +80,56 @@ export function replaceMetricInspectorContent(
   inspector: Pick<HTMLElement, "replaceChildren">,
   fact: InspectionFact,
   district: string,
+  selectDistrict?: () => void,
+): () => void {
+  const content = selectedContent(documentTarget, explainMetricFact(fact), district);
+  const button = documentTarget.createElement("button");
+  button.type = "button";
+  const path = documentTarget.createElement("bdi");
+  path.setAttribute("dir", "auto");
+  path.textContent = district;
+  button.append(path);
+  if (selectDistrict) {
+    button.dataset.selectDistrict = "";
+    button.addEventListener("click", selectDistrict);
+    const label = documentTarget.createElement("span");
+    label.textContent = "District: ";
+    content[1]!.replaceChildren(label, button);
+  }
+  const release = (): void => { if (selectDistrict) button.removeEventListener("click", selectDistrict); };
+  try { inspector.replaceChildren(...content); }
+  catch (error) { release(); throw error; }
+  return release;
+}
+
+export function replaceDistrictInspectorContent(
+  documentTarget: SemanticDocument,
+  inspector: Pick<HTMLElement, "replaceChildren">,
+  district: string,
+  members: readonly InspectionFact[],
 ): void {
-  inspector.replaceChildren(...selectedContent(documentTarget, explainMetricFact(fact), district));
+  if (members.length === 0) throw new Error("District has no analyzed files");
+  const title = heading(documentTarget, "h2", "");
+  const path = documentTarget.createElement("bdi");
+  path.dataset.districtPath = "";
+  path.setAttribute("dir", "auto");
+  path.textContent = district;
+  title.append(path);
+  const kind = documentTarget.createElement("p");
+  kind.textContent = "District";
+  const metrics = documentTarget.createElement("dl");
+  metrics.dataset.metricFacts = "";
+  let sourceLines = 0n, units = 0n, maximum = 0;
+  for (const fact of members) {
+    sourceLines += BigInt(fact.S);
+    units += BigInt(fact.U);
+    maximum = Math.max(maximum, fact.M);
+  }
+  definition(documentTarget, metrics, "Analyzed files", String(members.length), "data-file-count");
+  definition(documentTarget, metrics, "Source lines", String(sourceLines), "data-source-lines");
+  definition(documentTarget, metrics, "Executable units", String(units), "data-executable-units");
+  definition(documentTarget, metrics, "Maximum unit complexity", String(maximum), "data-maximum-complexity");
+  inspector.replaceChildren(title, kind, metrics);
 }
 
 function complexityLegend(documentTarget: SemanticDocument): HTMLElement {

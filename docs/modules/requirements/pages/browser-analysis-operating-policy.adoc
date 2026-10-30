@@ -12,7 +12,7 @@ server-analysis slice and does not define current temporary custody.
   Do not create application-managed source files, browser-storage snapshots,
   service-worker caches, or silent saves. This does not promise protection from
   browser/OS inspection, swap, or process failure.
-* *Lifetime:* Keep the current local investigation until Discard, replacement,
+* *Lifetime:* Keep the current local investigation until replacement,
   page reload/navigation/close, or worker loss. Cancel active work without
   publishing a partial replacement; Cancel after completion does not discard.
   Invalidate publication before stopping old work so late messages remain inert.

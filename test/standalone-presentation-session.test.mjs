@@ -66,6 +66,7 @@ test("interaction state preserves canonical selection across filter/sort and mak
   let failures = 0;
   const state = createInventoryState({
     inspection: facts,
+    districtCount: 1,
     generation: 7,
     identity,
     publishProjection(value) { projections.push(value); },
@@ -108,6 +109,7 @@ test("a malformed otherwise-current callback or publication fault fails once and
   let failures = 0;
   const malformed = createInventoryState({
     inspection: facts,
+    districtCount: 1,
     generation: 1,
     identity,
     publishProjection() {},
@@ -124,6 +126,7 @@ test("a malformed otherwise-current callback or publication fault fails once and
   let faultFailures = 0;
   const fault = createInventoryState({
     inspection: facts,
+    districtCount: 1,
     generation: 2,
     identity,
     publishProjection() { throw new Error("deferred DOM fault"); },
@@ -192,11 +195,12 @@ test("browser-edge publication uses native bounded semantics, safe bdi text, pre
   };
   const events = [];
   const sink = {
+    districtActivated(...args) { events.push(["district", ...args]); },
     queryChanged(...args) { events.push(["query", ...args]); },
     sortChanged(...args) { events.push(["sort", ...args]); },
     rowActivated(...args) { events.push(["row", ...args]); },
   };
-  const publication = stageStandaloneInventoryPublication(documentTarget, facts, 11, sink);
+  const publication = stageStandaloneInventoryPublication(documentTarget, facts, 11, sink, [{ root: false, identity: "src" }]);
   const query = byDataset(publication.nodes, "analyzedQuery");
   const sort = byDataset(publication.nodes, "analyzedSort");
   const rows = byDataset(publication.nodes, "analyzedRows");
@@ -210,8 +214,7 @@ test("browser-edge publication uses native bounded semantics, safe bdi text, pre
   assert.equal(disclosure.children[0].textContent, "Find file (5 files)");
   assert.equal(publication.nodes[0].dataset.cityTools, "");
   assert.equal(publication.nodes[1], publication.cityHost);
-  assert.equal(publication.nodes[2].tagName, "DETAILS");
-  assert.equal(publication.nodes[2].children[0].textContent, "Navigation controls");
+  assert.equal(publication.nodes.length, 2);
   assert.equal(query.tagName, "INPUT");
   assert.equal(query.type, "search");
   assert.equal(sort.tagName, "SELECT");
@@ -248,6 +251,17 @@ test("browser-edge publication uses native bounded semantics, safe bdi text, pre
   assert.equal(inspector.hidden, false);
   assert.equal(byDataset([inspector], "canonicalPath").textContent, facts[selectedIndex].canonicalPath);
   assert.equal(byDataset([inspector], "canonicalPath").children.length, 0);
+  assert.equal(byDataset([inspector], "canonicalPath").parent.tagName, "H2");
+  const districtButton = byDataset([inspector], "selectDistrict");
+  districtButton.dispatch("click");
+  assert.equal(events.at(-1)[0], "district");
+  assert.equal(events.at(-1)[3], 0);
+  publication.setDistrict(0);
+  assert.equal(byDataset([inspector], "districtPath").textContent, "src");
+  assert.equal(inspector.hidden, false);
+  const afterDistrict = events.length;
+  districtButton.dispatch("click");
+  assert.equal(events.length, afterDistrict, "removed inspector callback remained active");
 
   const eventCount = events.length;
   publication.rollback();
@@ -256,6 +270,63 @@ test("browser-edge publication uses native bounded semantics, safe bdi text, pre
   query.dispatch("input");
   firstButton.dispatch("click");
   assert.equal(events.length, eventCount);
+});
+
+test("district selection survives hover/filter/sort, is exclusive with files, and rejects stale or invalid callbacks", () => {
+  const identity = Object.freeze({}), visuals = [], publications = [];
+  let failures = 0;
+  const state = createInventoryState({ inspection: facts, districtCount: 1, generation: 4, identity,
+    publishProjection() {}, applyVisual(...args) { visuals.push(args); return { kind: "applied" }; },
+    publishSelection(...args) { publications.push(args); }, failed() { failures++; } });
+  state.districtActivated(3, identity, 0);
+  state.districtActivated(4, {}, 0);
+  assert.equal(visuals.length, 0);
+  state.districtActivated(4, identity, 0);
+  assert.deepEqual(publications.at(-1), [null, 0]);
+  state.cityHover(4, identity, 1);
+  assert.deepEqual(visuals.at(-1), [1, null, 0]);
+  assert.equal(publications.length, 1, "hover rebuilt unchanged district metrics");
+  state.queryChanged(4, identity, "", "S", "literal");
+  state.sortChanged(4, identity, "literal", "S", "M");
+  assert.equal(state.snapshot().district, 0);
+  state.rowActivated(4, identity, "literal", "M", 4);
+  assert.deepEqual(publications.at(-1), [4, null]);
+  state.districtActivated(4, identity, 0);
+  state.selectionAction(4, identity, "clear");
+  assert.deepEqual(publications.at(-1), [null, null]);
+  state.districtActivated(4, identity, 1);
+  state.districtActivated(4, identity, 0);
+  assert.equal(failures, 1);
+  state.dispose();
+});
+
+test("district summaries keep exact integer totals and distinguish repository root from a real _root folder", () => {
+  const created = [];
+  const documentTarget = { createElement(tag) { const node = new FakeElement(tag); created.push(node); return node; } };
+  const values = [
+    { canonicalPath: "src/a.ts", S: Number.MAX_SAFE_INTEGER, U: Number.MAX_SAFE_INTEGER, M: 2 },
+    { canonicalPath: "src/b.ts", S: 1, U: 2, M: 7 },
+    { canonicalPath: "root.ts", S: 3, U: 4, M: 1 },
+    { canonicalPath: "_root/a.ts", S: 8, U: 9, M: 5 },
+  ];
+  const publication = stageStandaloneInventoryPublication(documentTarget, values, 1,
+    { queryChanged() {}, sortChanged() {}, rowActivated() {}, districtActivated() {} },
+    [{ root: false, identity: "src" }, { root: true, identity: "" }, { root: false, identity: "_root" }]);
+  const inspector = created.find(node => Object.hasOwn(node.dataset, "inspector"));
+  const metric = name => descendants(inspector).find(node => node.attributes.has(name)).textContent;
+  publication.setDistrict(0);
+  assert.equal(metric("data-file-count"), "2");
+  assert.equal(metric("data-source-lines"), "9007199254740992");
+  assert.equal(metric("data-executable-units"), "9007199254740993");
+  assert.equal(metric("data-maximum-complexity"), "7");
+  publication.setDistrict(1);
+  assert.equal(byDataset([inspector], "districtPath").textContent, "/");
+  assert.equal(metric("data-source-lines"), "3");
+  publication.setDistrict(2);
+  assert.equal(byDataset([inspector], "districtPath").textContent, "_root");
+  assert.equal(metric("data-source-lines"), "8");
+  publication.rollback();
+  assert.equal(inspector.hidden, true);
 });
 
 test("standalone composition never calls camera reveal or programmatic canvas focus for selection", async () => {

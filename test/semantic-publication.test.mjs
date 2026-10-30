@@ -176,15 +176,16 @@ test("context publication is safe, selected context wins by supplied controller 
   assert.equal(byDataset(inspector, "canonicalPath").textContent, selected.canonicalPath);
   assert.equal(byDataset(inspector, "canonicalPath").attributes.get("dir"), "auto");
   const selectedDistrict = byDataset(inspector, "selectedDistrict");
-  assert.equal(selectedDistrict.tagName, "BDI");
-  assert.equal(selectedDistrict.attributes.get("dir"), "auto");
+  assert.equal(selectedDistrict.tagName, "P");
+  assert.equal(selectedDistrict.children[1].tagName, "BDI");
+  assert.equal(selectedDistrict.children[1].attributes.get("dir"), "auto");
   assert.equal(selectedDistrict.textContent, "District: one/two");
-  assert.equal(selectedDistrict.children.length, 0);
-  assert.equal(byAttribute(inspector, "data-height").textContent, String(displayedHeight(selected.S)));
-  assert.equal(byAttribute(inspector, "data-width").textContent, String(displayedSide(selected.U)));
-  assert.equal(byAttribute(inspector, "data-depth").textContent, String(displayedSide(selected.U)));
-  assert.equal(descendants(inspector).find((element) => element.tagName === "H3" && element.textContent === "Bounded displayed dimensions")?.textContent, "Bounded displayed dimensions");
-  assert.equal(byDataset(inspector, "dimensionPolicy").textContent, "Height: square-root scale; S cap 1000; displayed height range 4..40. Footprint: log-compressed scale; U cap 100; displayed side range 3..18.");
+  assert.equal(byDataset(inspector, "canonicalPath").parent.tagName, "H2");
+  assert.equal(byAttribute(inspector, "data-source-lines").textContent, String(selected.S));
+  assert.equal(byAttribute(inspector, "data-executable-units").textContent, String(selected.U));
+  assert.equal(byAttribute(inspector, "data-maximum-complexity").textContent, String(selected.M));
+  for (const key of ["dimensionPolicy", "metricDimensions", "selectedRgba", "inspectorIdentity"]) assert.equal(byDataset(inspector, key), undefined);
+  assert.equal(inspector.textContent.includes("Exact metrics"), false);
 
   f.publication.setContext(3, "one/two");
   assert.equal(inspector.hidden, false);

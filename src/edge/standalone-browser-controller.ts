@@ -496,13 +496,15 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
           state.acquisitionCompleted = event.completed;
         }
         state.stage = 1;
-        view.progress(`Acquiring files ${event.completed} of ${event.total}`, event.completed, event.total);
+        // One fixed work budget: acquisition + outcome for each candidate,
+        // then parser initialization, city construction, and view publication.
+        view.progress(`Acquiring files ${event.completed} of ${event.total}`, event.completed, 2 * event.total + 3);
         return;
       }
       if (event.stage === "analysis-initialization") {
         if (state.stage >= 2) { lose(epoch); return; }
         state.stage = 2;
-        view.progress("Initializing analysis");
+        view.progress("Initializing analysis", state.acquisitionTotal, state.acquisitionTotal === undefined ? undefined : 2 * state.acquisitionTotal + 3);
         return;
       }
       if (event.stage === "analysis") {
@@ -520,12 +522,14 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
           state.analysisCompleted = event.completed;
         }
         state.stage = 3;
-        view.progress(`Analyzing files ${event.completed} of ${event.total}`, event.completed, event.total);
+        const candidates = state.acquisitionTotal ?? event.total;
+        view.progress(`Analyzing files ${event.completed} of ${event.total}`, 2 * candidates + 1 - event.total + event.completed, 2 * candidates + 3);
         return;
       }
       if (state.stage >= 4) { lose(epoch); return; }
       state.stage = 4;
-      view.progress("Building city");
+      const candidates = state.acquisitionTotal ?? state.analysisTotal;
+      view.progress("Building city", candidates === undefined ? undefined : 2 * candidates + 1, candidates === undefined ? undefined : 2 * candidates + 3);
       return;
     }
 

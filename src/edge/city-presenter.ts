@@ -15,6 +15,7 @@ import {
   type CameraTransitionResult,
   type CameraView,
   type DistrictProjectionSnapshot,
+  type PickingGeometry,
 } from "../domain/camera-picking-policy";
 
 // Face-local vertices keep both fixed display branches in the trusted shader
@@ -47,6 +48,7 @@ uniform mat4 u_clipFromTarget;
 uniform int u_passKind;
 uniform int u_hoverIndex;
 uniform int u_selectionIndex;
+uniform vec4 u_selectionBounds;
 
 flat out vec4 v_color;
 
@@ -59,6 +61,7 @@ void main() {
       : a_faceClass > 0.5
         ? vec3(20.0, 34.0, 55.0) / 255.0
         : vec3(15.0, 26.0, 42.0) / 255.0;
+    if (u_selectionIndex < -1 && gl_InstanceID == -u_selectionIndex - 2) plate = mix(plate, vec3(1.0), 0.15);
     v_color = vec4(plate, 1.0);
   } else {
     vec3 base = a_color.rgb;
@@ -66,8 +69,12 @@ void main() {
       ? base + 0.12 * (vec3(1.0) - base)
       : a_faceClass > 0.5 ? 0.82 * base : 0.62 * base;
     vec3 displayed = ordinary;
-    if (u_selectionIndex >= 0) {
-      if (gl_InstanceID != u_selectionIndex) {
+    if (u_selectionIndex != -1) {
+      vec2 withinDistrict = a_targetRelativeMinimum.xz - u_selectionBounds.xy;
+      bool selected = u_selectionIndex < -1
+        ? all(greaterThanEqual(withinDistrict, vec2(0.0))) && all(lessThan(withinDistrict, u_selectionBounds.zw))
+        : gl_InstanceID == u_selectionIndex;
+      if (!selected) {
         displayed = 0.70 * ordinary;
         if (gl_InstanceID == u_hoverIndex) displayed = mix(displayed, ordinary, 0.15);
       }
@@ -109,6 +116,7 @@ export type SelectionAction = "next" | "previous" | "first" | "last" | "clear";
 export type PresenterEventSink<G> = Readonly<{
   hoverIndex(generation: G, index: number | null): void;
   activationIndex(generation: G, index: number | null): void;
+  districtActivation?(generation: G, index: number): void;
   selectionAction(generation: G, action: SelectionAction): void;
   districtProjection(generation: G, snapshot: DistrictProjectionSnapshot): void;
 }>;
@@ -216,7 +224,7 @@ export type CityPresenter<G> = Readonly<{
   ): PresenterStageResult;
   commit(token: PresenterToken): PresenterCommitResult;
   rollback(token: PresenterToken): void;
-  setVisualState(generation: G, hover: number | null, selection: number | null): PresenterVisualResult;
+  setVisualState(generation: G, hover: number | null, selection: number | null, district?: number | null): PresenterVisualResult;
   revealSelection(generation: G, command: BuildingRevealCommand): PresenterRevealResult;
   focusCanvas(generation: G): PresenterVisualResult;
   dispose(): void;
@@ -241,6 +249,9 @@ type Session<G> = {
   eventSink?: PresenterEventSink<G>;
   hover: number | null;
   selection: number | null;
+  districtSelection: number | null;
+  districtPicking?: PickingGeometry;
+  selectionBoundsUniform?: WebGLUniformLocation;
   canvas?: PresenterCanvas;
   gl?: WebGL2RenderingContext;
   observer?: PresenterResizeObserver;
@@ -453,7 +464,14 @@ function draw(session: Session<unknown>, size: Dimensions, view: CameraView): vo
     gl.useProgram(program);
     gl.uniformMatrix4fv(matrixUniform, false, matrix);
     gl.uniform1i(hoverUniform, session.hover ?? -1);
-    gl.uniform1i(selectionUniform, session.selection ?? -1);
+    if (session.districtSelection !== null) {
+      const plate = presentation.plates[session.districtSelection]!;
+      if (!session.selectionBoundsUniform) throw new Error("District selection is unavailable");
+      gl.uniform4f(session.selectionBoundsUniform,
+        exactRelative(plate.minimum[0], presentation.centre[0]), exactRelative(plate.minimum[2], presentation.centre[2]),
+        plate.dimensions[0], plate.dimensions[2]);
+    }
+    gl.uniform1i(selectionUniform, session.districtSelection === null ? session.selection ?? -1 : -session.districtSelection - 2);
     gl.bindVertexArray(plateVao);
     gl.uniform1i(passUniform, 0);
     gl.drawElementsInstanced(TRIANGLES, 36, UNSIGNED_BYTE, 0, presentation.plates.length);
@@ -502,6 +520,12 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   requireNoError(gl);
   if (!session.matrixUniform || !session.passUniform || !session.hoverUniform || !session.selectionUniform) {
     throw new Error("WebGL2 uniform is unavailable");
+  }
+
+  if (session.eventSink?.districtActivation) {
+    session.selectionBoundsUniform = gl.getUniformLocation(session.program, "u_selectionBounds") ?? undefined;
+    requireNoError(gl);
+    if (!session.selectionBoundsUniform) throw new Error("District uniform is unavailable");
   }
 
   const vertexShader = session.vertexShader;
@@ -691,6 +715,9 @@ function cleanup<G>(session: Session<G>): boolean {
   session.passUniform = undefined;
   session.hoverUniform = undefined;
   session.selectionUniform = undefined;
+  session.selectionBoundsUniform = undefined;
+  session.districtPicking = undefined;
+  session.districtSelection = null;
   session.buildingStaging = undefined;
   session.plateStaging = undefined;
   session.pointer = undefined;
@@ -968,6 +995,15 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
             failSession(session);
             return;
           }
+          if (session.districtPicking && session.eventSink!.districtActivation) {
+            const district = pickAtCanvasPoint(session.cameraView!, event.clientX, event.clientY,
+              canvas.getBoundingClientRect(), { width: canvas.width, height: canvas.height }, session.districtPicking);
+            if (district.kind === "failure") { failSession(session); return; }
+            if (district.index !== null && (picked.tEnter === null || district.tEnter! < picked.tEnter)) {
+              if (callbackEligible(session)) session.eventSink!.districtActivation(session.generation!, district.index);
+              return;
+            }
+          }
           if (callbackEligible(session)) session.eventSink!.activationIndex(session.generation!, picked.index);
         }
       } catch {
@@ -1112,6 +1148,12 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           token,
           hover: null,
           selection: null,
+          districtSelection: null,
+          ...(eventSink.districtActivation ? { districtPicking: {
+            count: presentation.plates.length,
+            origins: Float32Array.from(presentation.plates.flatMap(plate => [...plate.minimum])),
+            sizes: Float32Array.from(presentation.plates.flatMap(plate => [...plate.dimensions])),
+          } } : {}),
           canvas,
           model,
           presentation,
@@ -1134,6 +1176,9 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           activationIndex(callbackGeneration, index) {
             if (callbackEligible(callbackGeneration)) eventSink.activationIndex(generation, index);
           },
+          ...(eventSink.districtActivation ? { districtActivation(callbackGeneration: G, index: number) {
+            if (callbackEligible(callbackGeneration)) eventSink.districtActivation!(generation, index);
+          } } : {}),
           selectionAction(callbackGeneration, action) {
             if (callbackEligible(callbackGeneration)) eventSink.selectionAction(generation, action);
           },
@@ -1143,7 +1188,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         });
         canvas.tabIndex = 0;
         canvas.setAttribute("aria-label", "Interactive code city");
-        canvas.setAttribute("aria-describedby", "city-navigation-instructions");
+        canvas.setAttribute("aria-keyshortcuts", "ArrowUp ArrowDown ArrowLeft ArrowRight Home End Escape W A S D + - 0");
         sessions.set(token, candidate);
         installCallbacks(candidate);
         allocate(candidate, initial);
@@ -1185,7 +1230,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
       const candidate = sessions.get(token);
       if (candidate) removeSession(candidate);
     },
-    setVisualState(generation: G, hover: number | null, selection: number | null): PresenterVisualResult {
+    setVisualState(generation: G, hover: number | null, selection: number | null, district: number | null = null): PresenterVisualResult {
       const session = current;
       if (!session?.active || !session.committed || session.generation !== generation) return STALE;
       if (!eligible(session)) {
@@ -1194,14 +1239,16 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
       }
       const count = session.model!.count;
       const valid = (index: number | null): boolean => index === null || (Number.isSafeInteger(index) && index >= 0 && index < count);
-      if (!valid(hover) || !valid(selection)) {
+      if (!valid(hover) || !valid(selection) || (district !== null && (selection !== null || !session.districtPicking
+        || !Number.isSafeInteger(district) || district < 0 || district >= session.districtPicking.count))) {
         failSession(session);
         return PRESENTATION_FAILURE;
       }
       try {
-        const selectionChanged = selection !== session.selection;
+        const selectionChanged = selection !== session.selection || district !== session.districtSelection;
         const hoverChanged = hover !== session.hover;
         session.selection = selection;
+        session.districtSelection = district;
         session.hover = hover;
         if (selectionChanged || hoverChanged) {
           const size = dimensions(host);

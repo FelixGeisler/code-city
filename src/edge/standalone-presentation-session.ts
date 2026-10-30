@@ -1,4 +1,4 @@
-import type { InspectionFact, ValidatedCity } from "../application/city-payload";
+import type { DistrictDescriptor, InspectionFact, ValidatedCity } from "../application/city-payload";
 import { compareUnsignedUtf8 } from "../domain/source-admission";
 import {
   createCityPresenter,
@@ -7,7 +7,7 @@ import {
   type PresenterVisualResult,
   type SelectionAction,
 } from "./city-presenter";
-import { replaceMetricInspectorContent } from "./semantic-publication";
+import { replaceDistrictInspectorContent, replaceMetricInspectorContent } from "./semantic-publication";
 
 export type InventorySort = "S" | "U" | "M";
 export type InventoryProjection = Readonly<{
@@ -52,7 +52,7 @@ export function projectAnalyzedFiles(
 }
 
 export type InventoryState = Readonly<{
-  snapshot(): Readonly<InventoryProjection & { hover: number | null; selection: number | null }>;
+  snapshot(): Readonly<InventoryProjection & { hover: number | null; selection: number | null; district: number | null }>;
   queryChanged(
     generation: number,
     identity: InventoryPublicationIdentity,
@@ -76,17 +76,19 @@ export type InventoryState = Readonly<{
   ): void;
   cityHover(generation: number, identity: InventoryPublicationIdentity, index: number | null): void;
   cityActivated(generation: number, identity: InventoryPublicationIdentity, index: number | null): void;
+  districtActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
   selectionAction(generation: number, identity: InventoryPublicationIdentity, action: SelectionAction): void;
   dispose(): void;
 }>;
 
 export function createInventoryState(options: Readonly<{
   inspection: readonly InspectionFact[];
+  districtCount: number;
   generation: number;
   identity: InventoryPublicationIdentity;
   publishProjection(projection: InventoryProjection): void;
-  applyVisual(hover: number | null, selection: number | null): VisualResult;
-  publishSelection(selection: number | null): void;
+  applyVisual(hover: number | null, selection: number | null, district: number | null): VisualResult;
+  publishSelection(selection: number | null, district: number | null): void;
   failed(): void;
 }>): InventoryState {
   const { inspection, generation, identity, publishProjection, applyVisual, publishSelection, failed } = options;
@@ -95,6 +97,7 @@ export function createInventoryState(options: Readonly<{
   let indices = projectAnalyzedFiles(inspection, query, sort);
   let hover: number | null = null;
   let selection: number | null = null;
+  let district: number | null = null;
   let active = true;
   let failureReported = false;
 
@@ -129,22 +132,23 @@ export function createInventoryState(options: Readonly<{
     }
   };
 
-  const setVisual = (nextHover: number | null, nextSelection: number | null): void => {
+  const setVisual = (nextHover: number | null, nextSelection: number | null, nextDistrict: number | null = null): void => {
     try {
-      const result = applyVisual(nextHover, nextSelection);
+      const result = applyVisual(nextHover, nextSelection, nextDistrict);
       if (result.kind === "failure") { fail(); return; }
       if (result.kind !== "applied" || !active) return;
-      publishSelection(nextSelection);
+      if (nextSelection !== selection || nextDistrict !== district) publishSelection(nextSelection, nextDistrict);
       if (!active) return;
       hover = nextHover;
       selection = nextSelection;
+      district = nextDistrict;
     } catch {
       fail();
     }
   };
 
   return Object.freeze({
-    snapshot: () => Object.freeze({ query, sort, indices, hover, selection }),
+    snapshot: () => Object.freeze({ query, sort, indices, hover, selection, district }),
     queryChanged(callbackGeneration, callbackIdentity, expectedQuery, expectedSort, nextQuery) {
       if (!current(callbackGeneration, callbackIdentity, expectedQuery, expectedSort)) return;
       if (typeof nextQuery !== "string") { fail(); return; }
@@ -163,12 +167,17 @@ export function createInventoryState(options: Readonly<{
     cityHover(callbackGeneration, callbackIdentity, index) {
       if (!current(callbackGeneration, callbackIdentity)) return;
       if (!validIndex(inspection, index)) { fail(); return; }
-      setVisual(index, selection);
+      setVisual(index, selection, district);
     },
     cityActivated(callbackGeneration, callbackIdentity, index) {
       if (!current(callbackGeneration, callbackIdentity)) return;
       if (!validIndex(inspection, index)) { fail(); return; }
       setVisual(hover, index);
+    },
+    districtActivated(callbackGeneration, callbackIdentity, index) {
+      if (!current(callbackGeneration, callbackIdentity)) return;
+      if (!Number.isSafeInteger(index) || index < 0 || index >= options.districtCount) { fail(); return; }
+      setVisual(hover, null, index);
     },
     selectionAction(callbackGeneration, callbackIdentity, action) {
       if (!current(callbackGeneration, callbackIdentity)) return;
@@ -187,6 +196,7 @@ export function createInventoryState(options: Readonly<{
 }
 
 type InventoryPublicationSink = Readonly<{
+  districtActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
   queryChanged(
     generation: number,
     identity: InventoryPublicationIdentity,
@@ -219,6 +229,7 @@ export type StandaloneInventoryPublication = Readonly<{
   identity: InventoryPublicationIdentity;
   setProjection(projection: InventoryProjection, selection: number | null): void;
   setSelection(selection: number | null): void;
+  setDistrict(index: number): void;
   commitCanvas(canvas: PresenterCanvas): void;
   rollback(): void;
 }>;
@@ -229,7 +240,7 @@ function createInspector(documentTarget: PresentationDocument): HTMLElement {
   inspector.setAttribute("role", "status");
   inspector.setAttribute("aria-live", "polite");
   inspector.setAttribute("aria-atomic", "true");
-  inspector.setAttribute("aria-label", "Selected building metric explanation");
+  inspector.setAttribute("aria-label", "Selected item metrics");
   inspector.tabIndex = 0;
   inspector.hidden = true;
   return inspector;
@@ -240,6 +251,7 @@ export function stageStandaloneInventoryPublication(
   inspection: readonly InspectionFact[],
   generation: number,
   sink: InventoryPublicationSink,
+  districts: readonly DistrictDescriptor[],
 ): StandaloneInventoryPublication {
   const identity: InventoryPublicationIdentity = Object.freeze({});
   const analyzed = documentTarget.createElement("details");
@@ -286,14 +298,6 @@ export function stageStandaloneInventoryPublication(
   panel.append(rows, noMatches);
   analyzed.append(heading, controls, panel);
 
-  const instructions = documentTarget.createElement("p");
-  instructions.id = "city-navigation-instructions";
-  instructions.textContent = "Keyboard navigation: use Arrow keys and Home/End to select buildings; Escape clears selection. Use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview.";
-  const navigation = documentTarget.createElement("details");
-  navigation.dataset.cityNavigation = "";
-  const navigationSummary = documentTarget.createElement("summary");
-  navigationSummary.textContent = "Navigation controls";
-  navigation.append(navigationSummary, instructions);
   const cityHost = documentTarget.createElement("section");
   cityHost.dataset.city = "";
   cityHost.setAttribute("aria-label", "Code city");
@@ -311,6 +315,7 @@ export function stageStandaloneInventoryPublication(
   let selected: number | null = null;
   let rowListeners: RowListener[] = [];
   let rolledBack = false;
+  let releaseInspector = (): void => {};
 
   const clearRowListeners = (): void => {
     for (const entry of rowListeners) entry.button.removeEventListener("click", entry.listener);
@@ -323,6 +328,8 @@ export function stageStandaloneInventoryPublication(
 
   const setSelection = (selection: number | null): void => {
     if (!validIndex(inspection, selection)) throw new Error("Invalid inventory selection");
+    releaseInspector();
+    releaseInspector = (): void => {};
     selected = selection;
     updatePressed();
     if (selection === null) {
@@ -331,7 +338,11 @@ export function stageStandaloneInventoryPublication(
       return;
     }
     const fact = inspection[selection]!;
-    replaceMetricInspectorContent(documentTarget, inspector, fact, districtFor(fact.canonicalPath));
+    const district = districtFor(fact.canonicalPath);
+    const districtIndex = districts.findIndex(value => (value.root ? "/" : value.identity) === district);
+    if (districtIndex < 0) throw new Error("Selected file has no district");
+    releaseInspector = replaceMetricInspectorContent(documentTarget, inspector, fact, district,
+      () => sink.districtActivated(generation, identity, districtIndex));
     inspector.hidden = false;
   };
 
@@ -386,12 +397,21 @@ export function stageStandaloneInventoryPublication(
   setProjection(initial, null);
 
   return Object.freeze({
-    nodes: Object.freeze([tools, cityHost, navigation]),
+    nodes: Object.freeze([tools, cityHost]),
     cityHost,
     resetControl,
     identity,
     setProjection,
     setSelection,
+    setDistrict(index) {
+      const descriptor = districts[index];
+      if (!descriptor) throw new Error("Invalid selected district");
+      setSelection(null);
+      const district = descriptor.root ? "/" : descriptor.identity;
+      replaceDistrictInspectorContent(documentTarget, inspector, district,
+        inspection.filter(fact => districtFor(fact.canonicalPath) === district));
+      inspector.hidden = false;
+    },
     commitCanvas(canvas) { cityHost.replaceChildren(canvas as unknown as Node, inspector); },
     rollback() {
       if (rolledBack) return;
@@ -403,6 +423,7 @@ export function stageStandaloneInventoryPublication(
       try { sortSelect.value = "S"; } catch {}
       try { rows.replaceChildren(); } catch {}
       try { noMatches.hidden = true; } catch {}
+      try { releaseInspector(); } catch {}
       try { inspector.hidden = true; } catch {}
       try { inspector.replaceChildren(); } catch {}
       try { cityHost.replaceChildren(); } catch {}
@@ -476,11 +497,11 @@ export function createStandalonePresentationCoordinator(options: Readonly<{
     let state: InventoryState | undefined;
     try {
       const sink: InventoryPublicationSink = Object.freeze({
-        queryChanged: (...args) => state?.queryChanged(...args),
+        districtActivated: (...args) => state?.districtActivated(...args),        queryChanged: (...args) => state?.queryChanged(...args),
         sortChanged: (...args) => state?.sortChanged(...args),
         rowActivated: (...args) => state?.rowActivated(...args),
       });
-      const publication = stageStandaloneInventoryPublication(documentTarget, city.inspection, generation, sink);
+      const publication = stageStandaloneInventoryPublication(documentTarget, city.inspection, generation, sink, city.districts);
       const presenter = createCityPresenter<number>({
         host: publication.cityHost,
         resetControl: publication.resetControl,
@@ -496,17 +517,19 @@ export function createStandalonePresentationCoordinator(options: Readonly<{
       root.hidden = false;
       state = createInventoryState({
         inspection: city.inspection,
+        districtCount: city.districts.length,
         generation,
         identity: publication.identity,
         publishProjection: (projection) => publication.setProjection(projection, state?.snapshot().selection ?? null),
-        applyVisual: (hover, selection) => presenter.setVisualState(generation, hover, selection),
-        publishSelection: (selection) => publication.setSelection(selection),
+        applyVisual: (hover, selection, district) => presenter.setVisualState(generation, hover, selection, district),
+        publishSelection: (selection, district) => district === null ? publication.setSelection(selection) : publication.setDistrict(district),
         failed: () => { if (session) failClosed(session); },
       });
       session.state = state;
       const staged = presenter.stage(generation, city.geometry, city.presentation, {
         hoverIndex(callbackGeneration, index) { state?.cityHover(callbackGeneration, publication.identity, index); },
         activationIndex(callbackGeneration, index) { state?.cityActivated(callbackGeneration, publication.identity, index); },
+        districtActivation(callbackGeneration, index) { state?.districtActivated(callbackGeneration, publication.identity, index); },
         selectionAction(callbackGeneration, action) { state?.selectionAction(callbackGeneration, publication.identity, action); },
         districtProjection() {},
       });

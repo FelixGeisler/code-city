@@ -249,7 +249,7 @@ test("active progress ownership spans opening, acknowledgement, revision, replac
   assert.equal(view.isWorking(), false, "disposal must clear progress");
 });
 
-test("measured progress advances exact phase labels, permits omitted jumps, resets phase totals, and never regresses after 202", async () => {
+test("one fixed progress budget advances measured phases without reset, tolerates omitted events, and reserves publication", async () => {
   const transport = fakeTransport();
   const view = fakeView();
   const controller = createStandaloneBrowserController(transport, view);
@@ -265,10 +265,10 @@ test("measured progress advances exact phase labels, permits omitted jumps, rese
     type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
     stage: "acquisition", completed: 0, total: 3,
   });
-  assert.deepEqual(view.calls.at(-1), ["progress", "Acquiring files 0 of 3", 0, 3]);
+  assert.deepEqual(view.calls.at(-1), ["progress", "Acquiring files 0 of 3", 0, 9]);
   owner.analyzeCalls[0].result.resolve(202);
   await flush();
-  assert.deepEqual(view.calls.at(-1), ["progress", "Acquiring files 0 of 3", 0, 3], "202 regressed event-first progress");
+  assert.deepEqual(view.calls.at(-1), ["progress", "Acquiring files 0 of 3", 0, 9], "202 regressed event-first progress");
 
   owner.observer.event({
     type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
@@ -278,12 +278,12 @@ test("measured progress advances exact phase labels, permits omitted jumps, rese
     type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
     stage: "analysis-initialization",
   });
-  assert.deepEqual(view.calls.at(-1), ["progress", "Initializing analysis", undefined, undefined]);
+  assert.deepEqual(view.calls.at(-1), ["progress", "Initializing analysis", 3, 9]);
   owner.observer.event({
     type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
     stage: "analysis", completed: 0, total: 2,
   });
-  assert.deepEqual(view.calls.at(-1), ["progress", "Analyzing files 0 of 2", 0, 2]);
+  assert.deepEqual(view.calls.at(-1), ["progress", "Analyzing files 0 of 2", 5, 9]);
   owner.observer.event({
     type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
     stage: "analysis", completed: 2, total: 2,
@@ -292,7 +292,7 @@ test("measured progress advances exact phase labels, permits omitted jumps, rese
     type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
     stage: "city-construction",
   });
-  assert.deepEqual(view.calls.at(-1), ["progress", "Building city", undefined, undefined]);
+  assert.deepEqual(view.calls.at(-1), ["progress", "Building city", 7, 9]);
   owner.observer.event({
     type: "ANALYSIS_PROGRESS", sessionId: SESSION, generation: 1, revision: REVISION,
     stage: "analysis", completed: 2, total: 2,

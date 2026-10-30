@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) { return nextResolve(/^\.\.?\//u.test(specifier) && !/\.[a-z]+$/iu.test(specifier) ? `${specifier}.ts` : specifier, context); } });
+const { resetCamera, pickAtCanvasPoint } = await import("../src/domain/camera-picking-policy.ts");
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,15 +14,20 @@ import { createBrowserProviderHarness, FIXTURE_REVISION } from "./standalone-bro
 
 const WATCHDOG_MS = 600_000;
 const REPOSITORY = "https://github.com/fixture/standalone";
-const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,discard:[...document.querySelectorAll('[data-actions] button')].map(b=>b.textContent),setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,findOpen:document.querySelector('[data-analyzed]')?.open??null,failuresOpen:document.querySelector('[data-failed]').open,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
+const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,findOpen:document.querySelector('[data-analyzed]')?.open??null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
 const renderObservation = `(() => {
- window.__render={matrices:[],uploads:0};
+ window.__render={matrices:[],uploads:0,integers:{},frames:[],capturePixels:false,progress:[]};
+ const progressIds=new WeakMap();let nextProgress=0;
+ const value=Object.getOwnPropertyDescriptor(HTMLProgressElement.prototype,'value');
+ Object.defineProperty(HTMLProgressElement.prototype,'value',{...value,set(next){value.set.call(this,next);if(!progressIds.has(this))progressIds.set(this,++nextProgress);window.__render.progress.push({id:progressIds.get(this),value:this.value,max:this.max,ready:!!document.querySelector('[data-city] canvas')});}});
  const getContext=HTMLCanvasElement.prototype.getContext;
  HTMLCanvasElement.prototype.getContext=function(type,...args){
   const gl=getContext.call(this,type,...args);if(type!=='webgl2'||!gl||gl.__observed)return gl;
   gl.__observed=true;const names=new WeakMap();const location=gl.getUniformLocation.bind(gl);
   gl.getUniformLocation=(p,n)=>{const l=location(p,n);if(l)names.set(l,n);return l;};
   const matrix=gl.uniformMatrix4fv.bind(gl);gl.uniformMatrix4fv=(l,t,v)=>{if(names.get(l)==='u_clipFromTarget')window.__render.matrices.push([...v]);return matrix(l,t,v);};
+  const integer=gl.uniform1i.bind(gl);gl.uniform1i=(l,v)=>{window.__render.integers[names.get(l)]=v;return integer(l,v);};
+  const draw=gl.drawElementsInstanced.bind(gl);gl.drawElementsInstanced=(...args)=>{const result=draw(...args);if(window.__render.capturePixels&&window.__render.integers.u_passKind===1){const bytes=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,bytes);let hash=2166136261;for(const byte of bytes)hash=Math.imul(hash^byte,16777619)>>>0;window.__render.frames.push({hash,selected:window.__render.integers.u_selectionIndex});}return result;};
   const buffer=gl.bufferData.bind(gl);gl.bufferData=(...args)=>{window.__render.uploads++;return buffer(...args);};return gl;
  };
  window.__gate={active:false,opened:false,queue:[]};
@@ -133,7 +141,7 @@ export async function checkStandaloneBrowser() {
       process.stdout.write(`Browser evidence complete: ${mode}\n`);
       return { result, events: harness.events.slice(start), start };
     }
-    let ordinary = await run("success", s => s.canvases === 1 && s.analyzed === 5 && s.discard.length === 1);
+    let ordinary = await run("success", s => s.canvases === 1 && s.analyzed === 5 && s.controls);
     assert.equal(ordinary.result.commit, FIXTURE_REVISION);
     const success = ordinary.events.find(e => e.kind === "event" && e.value.type === "ANALYSIS_SUCCEEDED").value;
     assert.deepEqual(success.city.inspection.map(({ canonicalPath,S,U,M })=>({canonicalPath,S,U,M})), [
@@ -147,7 +155,8 @@ export async function checkStandaloneBrowser() {
     assert.equal(ordinary.result.controls, true);
     assert.equal(ordinary.result.findOpen, false);
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-rows] button').checkVisibility()`), false);
-    assert.equal(await p.evaluate(`document.querySelector('[data-city-navigation]').open`), false);
+    assert.equal(await p.evaluate(`document.querySelector('[data-city-navigation]')`), null);
+    assert.equal(await p.evaluate(`document.querySelector('[data-reanalyze], [data-actions]')`), null);
     const layout = await p.evaluate(`({top:document.querySelector('[data-city]').getBoundingClientRect().top,height:document.querySelector('[data-city]').getBoundingClientRect().height,viewport:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth})`);
     assert.ok(layout.top < 200 && layout.height > layout.viewport * 0.6, JSON.stringify(layout));
     assert.equal(layout.overflow, false);
@@ -175,7 +184,7 @@ export async function checkStandaloneBrowser() {
     await key("End", "End", 35);
     assert.equal(await p.evaluate(`document.querySelector('[data-canonical-path]').textContent`), "empty.js");
     assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`), initial, "closed file navigation changed camera or geometry");
-    process.stdout.write("Browser evidence: editing and reanalysis\n");
+    process.stdout.write("Browser evidence: changing repository\n");
     const requestsBeforeEditing = harness.requests.length;
     await p.click("[data-change-repository]");
     assert.equal((await p.snapshot()).setup, true);
@@ -186,13 +195,14 @@ export async function checkStandaloneBrowser() {
     assert.equal((await p.snapshot()).setup, false);
     assert.equal((await p.snapshot()).repository, REPOSITORY);
     assert.equal(harness.requests.length, requestsBeforeEditing, "opening/closing setup made network requests");
-    await p.click("[data-reanalyze]");
-    const reanalyzed = await p.wait(s => s.canvases === 1 || s.feedback !== "");
-    assert.equal(reanalyzed.feedback, "");
-    assert.equal(reanalyzed.analyzed, 5, "Reanalyze used unsent exclusions");
-    assert.equal(reanalyzed.repository, REPOSITORY);
-    assert.equal(reanalyzed.setup, false);
-    assert.equal(reanalyzed.findOpen, false);
+    await p.click("[data-change-repository]");
+    await p.evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(REPOSITORY)};document.querySelector('form').requestSubmit();true`);
+    const changed = await p.wait(s => s.canvases === 1 || s.feedback !== "");
+    assert.equal(changed.feedback, "");
+    assert.equal(changed.analyzed, 4, "Analyze did not apply the edited exclusions");
+    assert.equal(changed.repository, REPOSITORY);
+    assert.equal(changed.setup, false);
+    assert.equal(changed.findOpen, false);
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-sort]').value`), "S");
     process.stdout.write("Browser evidence: narrow workspace\n");
     await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, p.sessionId));
@@ -202,11 +212,60 @@ export async function checkStandaloneBrowser() {
     await idle.submit();
     await idle.wait(s => s.canvases === 1 && s.analyzed === 5);
     assert.equal((await p.snapshot()).canvases, 1, "one tab blocked or evicted another investigation");
-    await p.click("[data-actions] button");
-    await p.wait(s => s.canvases === 0 && s.discard.length === 0);
+    await p.click("[data-change-repository]");
     assert.equal((await p.snapshot()).setup, true);
-    assert.equal((await p.snapshot()).summary, false);
+    assert.equal((await p.snapshot()).canvases, 1);
     assert.equal((await idle.snapshot()).canvases, 1);
+
+    await p.evaluate(`window.__render.capturePixels=true;true`);
+    const districts = await run("districts", s => s.canvases === 1 && s.analyzed === 5);
+    const districtCity = districts.events.find(e => e.kind === "event" && e.value.type === "ANALYSIS_SUCCEEDED").value.city;
+    const dimensions = await p.evaluate(`(()=>{const c=document.querySelector('[data-city] canvas'),r=c.getBoundingClientRect();return {width:c.width,height:c.height,rectangle:{left:r.left,top:r.top,width:r.width,height:r.height}};})()`);
+    const camera = resetCamera(districtCity.presentation.sceneBounds, dimensions);
+    assert.equal(camera.kind, "success");
+    const geometry = { count: districtCity.geometry.count, origins: Float32Array.from(districtCity.geometry.origins), sizes: Float32Array.from(districtCity.geometry.sizes) };
+    const plates = { count: districtCity.presentation.plates.length,
+      origins: Float32Array.from(districtCity.presentation.plates.flatMap(plate => plate.minimum)),
+      sizes: Float32Array.from(districtCity.presentation.plates.flatMap(plate => plate.dimensions)) };
+    const wantedDistrict = districtCity.districts.findIndex(value => !value.root && value.identity === "src/edge");
+    let platformPoint, buildingPoint;
+    for (let y = 0; y < dimensions.height && (!platformPoint || !buildingPoint); y += 2) for (let x = 0; x < dimensions.width; x += 2) {
+      const clientX = dimensions.rectangle.left + x, clientY = dimensions.rectangle.top + y;
+      const building = pickAtCanvasPoint(camera.view, clientX, clientY, dimensions.rectangle, dimensions, geometry);
+      const plate = pickAtCanvasPoint(camera.view, clientX, clientY, dimensions.rectangle, dimensions, plates);
+      assert.equal(building.kind, "success"); assert.equal(plate.kind, "success");
+      if (plate.index === wantedDistrict && (building.tEnter === null || plate.tEnter < building.tEnter)) platformPoint ??= { x: clientX, y: clientY };
+      if (building.index !== null && (plate.tEnter === null || building.tEnter <= plate.tEnter)) buildingPoint ??= { x: clientX, y: clientY, index: building.index };
+    }
+    assert.ok(platformPoint && buildingPoint, "fixture has no visible platform/building hit");
+    const beforeDistrict = await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads,hash:window.__render.frames.at(-1).hash})`);
+    async function pointer(point) {
+      await checked(cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y }, p.sessionId));
+      await checked(cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 }, p.sessionId));
+      await checked(cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 }, p.sessionId));
+    }
+    await pointer(platformPoint);
+    await p.wait(s => s.district === "src/edge");
+    assert.deepEqual(await p.evaluate(`['data-file-count','data-source-lines','data-executable-units','data-maximum-complexity'].map(name=>document.querySelector('['+name+']').textContent)`), ["3", "3", "4", "2"]);
+    const afterDistrict = await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads,hash:window.__render.frames.at(-1).hash,selected:window.__render.integers.u_selectionIndex})`);
+    assert.equal(afterDistrict.matrix, beforeDistrict.matrix); assert.equal(afterDistrict.uploads, beforeDistrict.uploads);
+    assert.equal(afterDistrict.selected, -wantedDistrict - 2);
+    assert.notEqual(afterDistrict.hash, beforeDistrict.hash, "district did not change actual rendered pixels");
+    await p.evaluate(`document.querySelector('[data-city] canvas').focus();true`); await key("Escape", "Escape", 27);
+    assert.equal((await p.snapshot()).district, null);
+    assert.equal(await p.evaluate(`window.__render.frames.at(-1).hash`), beforeDistrict.hash, "clear did not restore the scene");
+    await pointer(buildingPoint);
+    await p.wait(s => s.selectedFile !== null);
+    assert.equal((await p.snapshot()).selectedFile, districtCity.inspection[buildingPoint.index].canonicalPath);
+    assert.equal(await p.evaluate(`document.querySelector('[data-canonical-path]').parentElement.tagName`), "H2");
+    assert.equal(await p.evaluate(`!!document.querySelector('[data-inspector-identity],[data-metric-dimensions],[data-selected-rgba],[data-dimension-policy]')`), false);
+    await p.evaluate(`document.querySelector('[data-select-district]').focus();true`); await key("Enter", "Enter", 13);
+    await p.wait(s => s.district !== null);
+    assert.equal((await p.snapshot()).selectedFile, null);
+    await p.evaluate(`window.__render.capturePixels=false;true`);
+    await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, p.sessionId));
+    assert.equal(await p.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{const panel=document.querySelector('[data-inspector]'),last=panel.querySelector('dl > div:last-child');resolve(document.documentElement.scrollWidth<=innerWidth&&last.getBoundingClientRect().bottom<=panel.getBoundingClientRect().bottom);})))`), true, "mobile district metrics were clipped or overflowed");
+    await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 1365, height: 900, deviceScaleFactor: 1, mobile: false }, p.sessionId));
 
     await run("mixed", s => s.canvases === 1 && s.analyzed === 5 && s.failed === 2);
     assert.equal((await p.snapshot()).failuresOpen, false);
@@ -214,12 +273,12 @@ export async function checkStandaloneBrowser() {
     assert.equal(await p.evaluate(`document.querySelector('[data-failed-rows] li').checkVisibility()`), false);
     await p.click("[data-failed] > summary");
     assert.equal(await p.evaluate(`document.querySelector('[data-failed-rows] li').checkVisibility()`), true);
-    await run("all-failed", s => s.canvases === 0 && s.failed === 2 && s.discard.length === 1);
+    await run("all-failed", s => s.canvases === 0 && s.failed === 2 && s.controls);
     assert.equal((await p.snapshot()).failuresOpen, false);
     assert.equal((await p.snapshot()).findOpen, null);
     assert.equal((await p.snapshot()).status, "No files could be analyzed.");
     for (const mode of ["integrity", "cors-failure"]) {
-      await run(mode, s => s.status === "Provider/resolution failure" && s.canvases === 0 && s.discard.length === 0);
+      await run(mode, s => s.status === "Provider/resolution failure" && s.canvases === 0);
     }
     for (const mode of ["too-many", "file-limit", "raw-limit", "total-limit"]) {
       const outcome = await run(mode, s => s.status === "Repository exceeds Code City limits" && s.canvases === 0);
@@ -231,7 +290,7 @@ export async function checkStandaloneBrowser() {
     harness.setMode("window"); await p.submit();
     const held = await checked(harness.waitFor(e => harness.events.indexOf(e) >= start && e.kind === "raw-held"));
     await checked(harness.waitFor(e => e.kind === "raw" && e.sessionId === held.sessionId && harness.events.filter(r => r.kind === "raw" && r.sessionId === held.sessionId).length === 8));
-    const zero = await p.wait(s => s.progress?.determinate && s.progress.value === 0 && s.progress.max === 12);
+    const zero = await p.wait(s => s.progress?.determinate && s.progress.value === 0 && s.progress.max === 27);
     assert.ok(zero.status.includes("Acquiring files 0 of 12"));
     assert.equal(zero.setup, false);
     assert.equal(zero.summary, true);
@@ -243,19 +302,25 @@ export async function checkStandaloneBrowser() {
     await p.wait(s => s.canvases === 1 && s.analyzed === 12);
 
     process.stdout.write("Browser evidence: progress barriers\n");
+    const progressStart = await p.evaluate(`window.__render.progress.length`);
     start = harness.events.length;
     await p.evaluate(`window.__gate={active:true,opened:false,queue:[]};true`);
     harness.setMode("progress"); await p.submit();
     await checked(harness.waitFor(e => harness.events.indexOf(e) >= start && e.kind === "event" && e.value.stage === "analysis" && e.value.completed === 1));
     await checked(harness.waitFor(e => harness.events.indexOf(e) >= start && e.kind === "delivery-held" && e.sessionId === p.sessionId && e.value.stage === "analysis" && e.value.completed === 1));
-    await p.wait(s => s.progress?.value === 0 && s.progress.max === 2 && s.status.includes("Analyzing files 0 of 2"));
+    await p.wait(s => s.progress?.value === 5 && s.progress.max === 9 && s.status.includes("Analyzing files 0 of 2"));
     await p.evaluate(`window.__drainProgress(1);true`);
-    await p.wait(s => s.progress?.value === 1 && s.progress.max === 2);
+    await p.wait(s => s.progress?.value === 6 && s.progress.max === 9);
     await p.evaluate(`window.__drainProgress(null);true`);
     await p.wait(s => s.canvases === 1 && s.analyzed === 2 && s.failed === 1);
+    const singleProgress = await p.evaluate(`window.__render.progress.slice(${progressStart})`);
+    assert.equal(new Set(singleProgress.map(value => value.id)).size, 1, "phases replaced the progress bar");
+    assert.ok(singleProgress.every((value, index) => value.max === 9 && (index === 0 || value.value >= singleProgress[index - 1].value)));
+    assert.equal(singleProgress.at(-1).value, 9);
+    assert.equal(singleProgress.at(-1).ready, true, "progress completed before the city was ready");
 
     harness.setMode("busy"); await p.submit();
-    await p.wait(s => s.status.includes("Analyzing files") && s.progress?.max === 8);
+    await p.wait(s => s.status.includes("Analyzing files") && s.progress?.max === 19);
     assert.equal(await p.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>resolve(true)))`), true, "worker analysis blocked the UI thread");
     await p.click("[data-status] button");
     await p.wait(s => s.status === "Cancelled" && s.progress === null);
@@ -286,7 +351,7 @@ export async function checkStandaloneBrowser() {
     await checked(cdp.send("Page.bringToFront", {}, p.sessionId));
     assert.equal((await idle.snapshot()).canvases, 1);
 
-    const maximum = await run("maximum", s => s.canvases === 1 && s.analyzed === 4000 && s.discard.length === 1 && s.progress === null);
+    const maximum = await run("maximum", s => s.canvases === 1 && s.analyzed === 4000 && s.controls && s.progress === null);
     const final = maximum.events.find(e => e.kind === "event" && e.value.type === "ANALYSIS_SUCCEEDED").value;
     assert.equal(final.city.inspection.length, 4000);
     assert.ok(final.city.inspection.every(f => f.S === 0 && f.U === 0 && f.M === 0));
@@ -296,6 +361,20 @@ export async function checkStandaloneBrowser() {
     acquisition.forEach((e, i) => { assert.equal(e.completed, i); assert.equal(e.total, 4000); });
     analysis.forEach((e, i) => { assert.equal(e.completed, i); assert.equal(e.total, 4000); });
     assert.equal((await idle.snapshot()).canvases, 1);
+    const maximumFrame = await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`);
+    await p.evaluate(`document.querySelector('[data-city] canvas').focus();true`); await key("Home", "Home", 36);
+    await p.evaluate(`document.querySelector('[data-select-district]').focus();true`); await key("Enter", "Enter", 13);
+    assert.equal((await p.snapshot()).district, "matrix");
+    assert.deepEqual(await p.evaluate(`['data-file-count','data-source-lines','data-executable-units','data-maximum-complexity'].map(name=>document.querySelector('['+name+']').textContent)`), ["4000", "0", "0", "0"]);
+    assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`), maximumFrame);
+    const progressHistory = await p.evaluate(`window.__render.progress`);
+    const previous = new Map();
+    for (const value of progressHistory) {
+      const prior = previous.get(value.id);
+      assert.ok(!prior || (prior.max === value.max && prior.value <= value.value), "bar reset or changed its budget");
+      assert.ok(value.value < value.max || value.ready, "bar reached completion before presentation");
+      previous.set(value.id, value);
+    }
     await checked(cdp.send("Page.navigate", { url: "about:blank" }, p.sessionId));
     const maximumWorker = maximum.events.find(e => e.kind === "worker");
     await checked(harness.waitFor(e => e.kind === "detached" && e.sessionId === maximumWorker.sessionId));
@@ -321,7 +400,7 @@ export async function checkStandaloneBrowser() {
     assert.equal((await idle.snapshot()).canvases, 1, "static-host shutdown discarded a browser-owned completed view");
     process.stdout.write(JSON.stringify({
       chrome: { category: discovery.category, version },
-      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "reanalysis-captured-inputs", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
+      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
       requests: harness.requests.length, workerEvents: harness.events.filter(e=>e.kind==='event').length,
       publicFiles: manifest.files.filter(f=>f.role==='public').map(f=>f.path),
     }) + "\n");
