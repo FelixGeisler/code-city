@@ -203,6 +203,15 @@ test("browser-edge publication uses native bounded semantics, safe bdi text, pre
   const noMatches = byDataset(publication.nodes, "analyzedNoMatches");
   const panel = byDataset(publication.nodes, "analyzedPanel");
 
+  const disclosure = byDataset(publication.nodes, "analyzed");
+  assert.equal(disclosure.tagName, "DETAILS");
+  assert.equal(disclosure.open, false);
+  assert.equal(disclosure.children[0].tagName, "SUMMARY");
+  assert.equal(disclosure.children[0].textContent, "Find file (5 files)");
+  assert.equal(publication.nodes[0].dataset.cityTools, "");
+  assert.equal(publication.nodes[1], publication.cityHost);
+  assert.equal(publication.nodes[2].tagName, "DETAILS");
+  assert.equal(publication.nodes[2].children[0].textContent, "Navigation controls");
   assert.equal(query.tagName, "INPUT");
   assert.equal(query.type, "search");
   assert.equal(sort.tagName, "SELECT");

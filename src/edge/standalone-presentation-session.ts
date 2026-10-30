@@ -242,10 +242,11 @@ export function stageStandaloneInventoryPublication(
   sink: InventoryPublicationSink,
 ): StandaloneInventoryPublication {
   const identity: InventoryPublicationIdentity = Object.freeze({});
-  const analyzed = documentTarget.createElement("section");
+  const analyzed = documentTarget.createElement("details");
   analyzed.dataset.analyzed = "";
-  const heading = documentTarget.createElement("h2");
-  heading.textContent = "Analyzed files";
+  analyzed.open = false;
+  const heading = documentTarget.createElement("summary");
+  heading.textContent = `Find file (${inspection.length} ${inspection.length === 1 ? "file" : "files"})`;
   const controls = documentTarget.createElement("div");
   controls.dataset.analyzedControls = "";
   const queryLabel = documentTarget.createElement("label");
@@ -288,6 +289,11 @@ export function stageStandaloneInventoryPublication(
   const instructions = documentTarget.createElement("p");
   instructions.id = "city-navigation-instructions";
   instructions.textContent = "Keyboard navigation: use Arrow keys and Home/End to select buildings; Escape clears selection. Use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview.";
+  const navigation = documentTarget.createElement("details");
+  navigation.dataset.cityNavigation = "";
+  const navigationSummary = documentTarget.createElement("summary");
+  navigationSummary.textContent = "Navigation controls";
+  navigation.append(navigationSummary, instructions);
   const cityHost = documentTarget.createElement("section");
   cityHost.dataset.city = "";
   cityHost.setAttribute("aria-label", "Code city");
@@ -295,6 +301,9 @@ export function stageStandaloneInventoryPublication(
   resetControl.dataset.cityReset = "";
   resetControl.type = "button";
   resetControl.textContent = "Reset view";
+  const tools = documentTarget.createElement("div");
+  tools.dataset.cityTools = "";
+  tools.append(analyzed, resetControl);
   const inspector = createInspector(documentTarget);
 
   let query = "";
@@ -377,7 +386,7 @@ export function stageStandaloneInventoryPublication(
   setProjection(initial, null);
 
   return Object.freeze({
-    nodes: Object.freeze([analyzed, instructions, cityHost, resetControl]),
+    nodes: Object.freeze([tools, cityHost, navigation]),
     cityHost,
     resetControl,
     identity,

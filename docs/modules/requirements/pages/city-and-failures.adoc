@@ -75,8 +75,9 @@ files. Omit its building and never fabricate zero metrics.
 [[CC-CORE-FAIL-02]]
 === Sanitized failed-file inventory
 
-Show every failed file in a separate `Not analyzed files` list as inert
-canonical path text plus one sanitized category. Invalid UTF-8 or NUL uses
+Expose every failed file in a separate list, collapsed initially behind a
+failed-file count. Expanded rows show inert canonical path text plus one
+sanitized category. Invalid UTF-8 or NUL uses
 `Source text is not supported`; malformed or recovered syntax uses `Syntax
 could not be analyzed`; metric derivation failure uses `Metrics could not be
 computed`. Expose no raw parser or provider text, stack, credential, server
@@ -87,7 +88,7 @@ path, or active content.
 
 Unsupported and path-excluded files are neither successful files nor analysis
 failures. If every attempted supported file fails, show no city and the
-complete `Not analyzed files` list.
+complete failed-file list behind its expandable count.
 
 Revision, complete-tree, blob-integrity or retrieval, processing-envelope,
 shared-parser-initialization, persistence-service, and city or presentation
@@ -286,8 +287,8 @@ The contextual-row behavior in this subsection belongs to the retained legacy
 `createMainController` and semantic-publication path. It remains documented as
 historical reference for that implementation, but the active standalone
 presentation-session coordinator does not mount it. The active composition
-publishes the analyzed-file inventory immediately before the navigation
-instructions and city host.
+publishes a collapsed file-navigation disclosure above the city and optional
+navigation instructions below it.
 
 A committed legacy semantic publication reserves one `20px` normal-flow
 contextual row immediately after path search and before the city viewport. Its
@@ -378,11 +379,35 @@ identifiable through its fixed transforms. There is no configurable lighting,
 normal or material input, texture, fog, shadow, blending, polygon offset,
 antialiasing promise, outline, or static edge pass.
 
+[[browser-investigation-workspace]]
+== Investigation workspace
+
+Initially show the repository URL input and Analyze, with optional additional
+exclusions in a closed native disclosure. Analyze hides setup and shows a
+compact captured repository/revision bar, actual phase progress, and Cancel.
+Do not show Change repository or Reanalyze while analysis is active.
+
+A terminal attempt exposes Change repository and Reanalyze in the compact bar.
+Change repository opens or closes setup without discarding the current city,
+selection, or inputs; opening it focuses the repository field. Draft edits do
+not change the displayed investigation. Reanalyze uses the last submitted URL
+and exclusions, not unsent edits, and resolves a new immutable revision through
+the existing pipeline. Invalid submission restores setup with its error.
+Discard returns to setup without erasing input fields.
+
+The city is the primary result view. File navigation, navigation help, and
+failed-file rows are native disclosures, closed initially. They use normal
+keyboard activation and focus indicators. Expanding or closing these controls
+makes no provider request, clears no selection, and does not reset the camera.
+An all-files-failed result shows `No files could be analyzed.` and its expandable
+failed-file count, but no city or successful-file navigation.
+
 == Successful-file inventory and shared selection
 
-A committed standalone city has one normal-flow section headed exactly
-`Analyzed files`. It contains every successful inspection fact as one semantic
-list item with a native `button type="button"`. Each button shows the exact
+A committed standalone city has one normal-flow native disclosure labelled
+`Find file (N files)` (singular for one file). It is closed initially rather
+than competing with the city. When expanded, it contains every successful
+inspection fact as one semantic list item with a native `button type="button"`. Each button shows the exact
 canonical path and raw `S: <value>`, `U: <value>`, and `M: <value>`, and exposes
 `aria-pressed="true"` only for the shared selected canonical index.
 
@@ -402,16 +427,17 @@ UTF-8 comparison. Filtering and sorting never reorder or rewrite geometry,
 inspection, instance buffers, picking identity, or canvas keyboard traversal.
 The complete list has no cap below the existing 4,000-module envelope and uses
 `max-block-size: min(13.75rem, 40vh)` with native vertical overflow. It remains
-in normal flow and cannot overlay the city, inspector, Reset control, or
-separate `Not analyzed files` list.
+in normal flow beside Reset view and above the city; opening it cannot overlay
+the city or inspector. Failed files are a separate disclosure below the city,
+labelled `N files not analyzed` (singular for one file).
 
 Canonical paths cross provider acquisition and the browser worker message
 boundary as successful inspection facts or sanitized
 failed-file rows. The inventory query remains browser-local. Filtering, sorting,
 and selection introduce no additional provider or HTTP request. In the
 interaction layer, successful paths are published only in analyzed-list rows and
-the selected inspector, and failed paths only in the separate `Not analyzed
-files` list, using inert `<bdi dir="auto">` nodes assigned through `textContent`.
+the selected inspector, and failed paths only in the separate failed-file
+list, using inert `<bdi dir="auto">` nodes assigned through `textContent`.
 Inventory interaction derives no path- or query-based attributes, IDs, classes,
 styles, URLs, object keys, logs, WebGL values, telemetry, or release evidence and
 sends no source payload. Ordinary native editing, select, scrolling, button
@@ -1014,8 +1040,8 @@ validated city data and sanitized failure rows. The asset host owns no analysis
 session, source/result dataset, or analysis capacity.
 
 The browser exposes every successful fact through the browser-local
-searchable and three-way sortable inventory, with one shared canonical-index
-selection across rows, buildings, and the raw file-metric inspector. The active
+searchable and three-way sortable inventory behind Find file, with one shared
+canonical-index selection across rows, buildings, and the raw file-metric inspector. The active
 composition mounts no contextual district row and no persistent complexity
 legend. Selection, filtering, and sorting do not invoke search reveal, move or
 focus the camera, or alter the presenter's independent orbit, pan, zoom, resize,
