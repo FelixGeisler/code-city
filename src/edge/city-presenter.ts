@@ -1295,6 +1295,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         releaseGesture(session);
         session.hover = null;
         session.selection = command.index;
+        session.districtSelection = null;
         draw(session as Session<unknown>, size, transition.view);
         session.cameraState = transition.state;
         session.cameraView = transition.view;

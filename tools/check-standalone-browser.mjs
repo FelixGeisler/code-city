@@ -361,10 +361,15 @@ export async function checkStandaloneBrowser() {
     acquisition.forEach((e, i) => { assert.equal(e.completed, i); assert.equal(e.total, 4000); });
     analysis.forEach((e, i) => { assert.equal(e.completed, i); assert.equal(e.total, 4000); });
     assert.equal((await idle.snapshot()).canvases, 1);
+    await p.evaluate(`window.__render.capturePixels=true;document.querySelector('[data-city] canvas').focus();true`);
+    await key("Home", "Home", 36); await key("Escape", "Escape", 27);
+    const maximumPixels = await p.evaluate(`window.__render.frames.at(-1).hash`);
     const maximumFrame = await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`);
     await p.evaluate(`document.querySelector('[data-city] canvas').focus();true`); await key("Home", "Home", 36);
     await p.evaluate(`document.querySelector('[data-select-district]').focus();true`); await key("Enter", "Enter", 13);
     assert.equal((await p.snapshot()).district, "matrix");
+    assert.notEqual(await p.evaluate(`window.__render.frames.at(-1).hash`), maximumPixels, "maximum-envelope district did not highlight");
+    await p.evaluate(`window.__render.capturePixels=false;true`);
     assert.deepEqual(await p.evaluate(`['data-file-count','data-source-lines','data-executable-units','data-maximum-complexity'].map(name=>document.querySelector('['+name+']').textContent)`), ["4000", "0", "0", "0"]);
     assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`), maximumFrame);
     const progressHistory = await p.evaluate(`window.__render.progress`);

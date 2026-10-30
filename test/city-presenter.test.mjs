@@ -580,6 +580,11 @@ test("district platforms select by nearest visible hit, preserve camera/uploads,
   assert.deepEqual(presenter.setVisualState(1, null, buildingPoint.index), APPLIED);
   activate(emptyPoint);
   assert.deepEqual(events.at(-1), ["file", 1, null]);
+  assert.deepEqual(presenter.setVisualState(1, null, null, platformPoint.index), APPLIED);
+  const reveal = createBuildingRevealCommand(city.geometry, 0);
+  assert.equal(reveal.kind, "success");
+  assert.equal(presenter.revealSelection(1, reveal.command).kind, "applied");
+  assert.deepEqual(gl.calls.filter(call => call[0] === "uniform1i").slice(-4).map(call => call[2]), [-1, 0, 0, 1]);
   gl.options.throwMethod = "uniform4f";
   assert.deepEqual(presenter.setVisualState(1, null, null, platformPoint.index), PRESENTATION_FAILURE);
   assert.equal(failures.length, 1);
