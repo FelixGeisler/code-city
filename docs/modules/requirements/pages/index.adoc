@@ -83,7 +83,11 @@ Explicit Save, Copy link, and Open saved provide immutable shared snapshots,
 a repository-grouped branch/release picker, and restart-persistent reopening
 without GitHub acquisition or parsing. See
 xref:saved-investigations.adoc[Saved Investigations] for data, limits and recovery.
-There is no automatic saving/retry, source view, login, or browser persistence.
+xref:unit-inspection.adoc[Unit source inspection] lists recorded units and opens
+read-only normalized source only on explicit unit activation, with owned
+contribution highlights and textual locations. Fresh and reopened investigations
+use the same bounded local reader; no acquisition or metric reanalysis occurs.
+There is no automatic saving/retry, source editing, login, or browser persistence.
 
 == Verification and publication
 

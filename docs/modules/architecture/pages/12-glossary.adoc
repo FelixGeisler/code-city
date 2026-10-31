@@ -13,6 +13,6 @@
 |Local owner |A browser transport/lifetime identifier, not authentication or a backend session.
 |Worker |A dedicated browser Web Worker running the shared analyzer. Native analysis adapters are regression references; a separate data-validation worker checks saved snapshots.
 |Saved investigation |An immutable client-created snapshot persisted by explicit Save and reopened without acquisition or parsing.
-|Source-free message |Presentation/progress/failure data without source text, parser trees, or provider diagnostics; source remains inside the browser worker.
+|Source-free message |Presentation/progress/failure data without source text, parser trees, or provider diagnostics. Core publication remains source-free; explicit unit inspection separately returns a bounded source excerpt.
 |Retirement notice |The historical script-free hosted notice. Workflows do not reactivate Pages or claim its repository setting was disabled.
 |===

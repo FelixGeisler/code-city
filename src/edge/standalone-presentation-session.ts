@@ -1,3 +1,4 @@
+import { attachUnitInspection, type InspectInvestigation } from "./unit-inspection-view";
 import type { DistrictDescriptor, InspectionFact, ValidatedCity } from "../application/city-payload";
 import { compareUnsignedUtf8 } from "../domain/source-admission";
 import {
@@ -252,6 +253,7 @@ export function stageStandaloneInventoryPublication(
   generation: number,
   sink: InventoryPublicationSink,
   districts: readonly DistrictDescriptor[],
+  inspect?: InspectInvestigation,
 ): StandaloneInventoryPublication {
   const identity: InventoryPublicationIdentity = Object.freeze({});
   const analyzed = documentTarget.createElement("details");
@@ -341,8 +343,10 @@ export function stageStandaloneInventoryPublication(
     const district = districtFor(fact.canonicalPath);
     const districtIndex = districts.findIndex(value => (value.root ? "/" : value.identity) === district);
     if (districtIndex < 0) throw new Error("Selected file has no district");
-    releaseInspector = replaceMetricInspectorContent(documentTarget, inspector, fact, district,
+    const releaseMetrics = replaceMetricInspectorContent(documentTarget, inspector, fact, district,
       () => sink.districtActivated(generation, identity, districtIndex));
+    const releaseUnits = inspect ? attachUnitInspection(documentTarget, inspector, fact.canonicalPath, inspect) : () => {};
+    releaseInspector = () => { releaseMetrics(); releaseUnits(); };
     inspector.hidden = false;
   };
 
@@ -451,6 +455,7 @@ export function createStandalonePresentationCoordinator(options: Readonly<{
   documentTarget: PresentationDocument;
   root: PresentationRoot;
   failed(): void;
+  inspect?: InspectInvestigation;
 }>): StandalonePresentationCoordinator {
   const { documentTarget, root, failed } = options;
   let current: ActiveSession | undefined;
@@ -501,7 +506,7 @@ export function createStandalonePresentationCoordinator(options: Readonly<{
         sortChanged: (...args) => state?.sortChanged(...args),
         rowActivated: (...args) => state?.rowActivated(...args),
       });
-      const publication = stageStandaloneInventoryPublication(documentTarget, city.inspection, generation, sink, city.districts);
+      const publication = stageStandaloneInventoryPublication(documentTarget, city.inspection, generation, sink, city.districts, options.inspect);
       const presenter = createCityPresenter<number>({
         host: publication.cityHost,
         resetControl: publication.resetControl,

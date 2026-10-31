@@ -12,6 +12,11 @@ function fixture(mode) {
     ["d.cs", "class C { int M() { return 1; } }\n"],
     ["empty.js", ""],
   ];
+  if (mode === "unit-evidence") rows = [
+    ["a.js", `const banner = '<img src=x onerror=globalThis.__sourceExecuted=true>😀';\nfunction outer(x) {\n if(x) { const inner = y => y ? 1 : 0; }\n return x && 1;\n}\n`],
+    ["b.js", Array.from({ length: 40 }, (_, index) => `const f${index} = x => x;`).join("\n")],
+    ["dense.js", "x&&x;".repeat(5000)],
+  ];
   if (mode === "districts") rows = rows.map(([name, text], index) => [index < 3 ? `src/edge/${name}` : index === 3 ? `other/${name}` : name, text]);
   if (mode === "mixed") rows.push(["bad.js", "export const = ;"], ["nul.js", Buffer.from([0])]);
   if (mode === "all-failed") rows = [["invalid.js", Buffer.from([0xc3, 0x28])], ["nul.js", Buffer.from([0])]];

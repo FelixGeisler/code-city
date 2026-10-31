@@ -47,7 +47,7 @@ test("requirements preserve per-file continuation and local inventory semantics 
   assert.match(city, /active composition mounts no contextual district row and no persistent complexity legend/u);
   assert.match(city, /browser worker message boundary/u);
   assert.match(city, /inert `<bdi dir="auto">` nodes assigned through `textContent`/u);
-  assert.match(city, /current milestone has no browser source view, unit or contribution detail, portable interchange, or recursive hierarchy/u);
+  assert.match(city, /current milestone implements read-only unit source and owned contribution inspection for fresh and saved investigations/u);
   assert.doesNotMatch(city, /current standalone M5 implementation has server-owned/u);
 });
 

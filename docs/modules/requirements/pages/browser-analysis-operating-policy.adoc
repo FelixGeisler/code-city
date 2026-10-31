@@ -20,6 +20,11 @@ server-analysis slice and does not define current temporary custody.
   or analysis worker. Worker and source ownership are local to that browser.
   Existing processing limits are input bounds, not total browser RAM or latency
   guarantees. Do not sample, truncate, retry, or silently lower those limits.
+* *Inspection:* Keep source in the worker until explicit unit activation sends
+  a bounded read-only excerpt to the UI. Unit/location metadata contains no
+  source body. Inspection neither contacts the provider/server nor reruns
+  analysis; it renders source as inert text. See
+  xref:unit-inspection.adoc[Unit Source Inspection].
 * *Provider:* Read public GitHub anonymously from the browser using only the
   fixed API/raw origins and validated immutable identities. Omit credentials
   and referrers. Never execute repository code or use its text as an asset URL.

@@ -39,6 +39,7 @@ Development output is `build/development/`. Browser analysis requires HTTPS or a
 - Keep unsaved sources/results in browser memory. Replacement, page exit, and worker loss release local ownership.
 - Idle tabs hold no server analysis session or source reservation; completed tabs do not compete for a server analysis worker.
 
+- Select a file's unit to inspect its read-only source, exact complexity, and owned branching contributions; no camera movement or reanalysis.
 - Save an immutable investigation, copy its URL, and reopen after a host restart without GitHub acquisition or parsing.
 - Open saved investigations grouped by repository, with separate branch/release/commit entries.
 

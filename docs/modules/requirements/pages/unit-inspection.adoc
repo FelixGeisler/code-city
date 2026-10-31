@@ -1,0 +1,56 @@
+= Unit Source Inspection
+
+The approved investigation behavior and ordering are defined in
+xref:city-and-failures.adoc#CC-CORE-INV-01[Shared File Selection] through
+xref:city-and-failures.adoc#CC-CORE-INV-04[Investigation Evidence Only].
+
+== Current interaction
+
+Selecting a building or file-list row shows raw file metrics and executable
+units. It does not open source or move the camera. Unit rows identify kind,
+normalized source range and exact recorded complexity. A zero-unit file says
+`No executable units.`; no synthetic unit or complexity is invented.
+
+Activating a unit explicitly opens a native read-only source dialog. An
+explicit callable shows its exact normalized syntax span; top-level shows the
+whole normalized file. Source has one-based line numbers. Locations use
+one-based Unicode scalar columns, with tabs counting as one column; range ends
+are exclusive. This is normalized analyzed text, not an editable copy or a
+promise of original CRLF/BOM presentation.
+
+Owned contribution spans are highlighted with an underline as well as color.
+A separate list names each recorded kind and its start/end location. Overlapping
+owned spans are rendered as their union; nested units' contribution records are
+not added to the parent's list. A unit of complexity one has no branching
+contributions. No finding, threshold, recommendation, or source edit is added.
+
+The city remains the default view. Close source or Escape returns to the unit
+control. Source navigation does not orbit, pan, zoom, reveal, rebuild geometry,
+or change file/district selection. A changed file, district, cleared selection,
+replacement, or page exit disposes the old inspection view. Late replies cannot
+reopen or populate it. Inspection errors stay local to the inspector and do not
+discard the completed city or prevent Save.
+
+== Bounded presentation, complete evidence
+
+Unit and contribution lists use 32-row pages. Source pages contain at most
+8,192 UTF-8 bytes and 80 line feeds and never split a Unicode scalar. A long
+single line can continue on the next page at the displayed column. Previous and
+Next expose the complete span; these windows do not truncate, sample or change
+analysis inputs, unit counts, metrics or saved snapshots.
+
+Original analysis retains packed unit/observation tables, finalized complexities
+and recorded decision-owner runs independently of the Save-only capture budget.
+Only the currently inspected file is indexed for presentation. The worker sends
+bounded unit/location metadata on file selection and source text only after
+explicit unit activation. The UI creates inert text/mark nodes, never HTML,
+imports, asset URLs or executable code from source.
+
+Fresh and reopened investigations use the same presentation reader. A reopened
+xref:saved-investigations.adoc[version-1 snapshot] supplies its stored unit and
+contribution facts; no migration, GitHub acquisition, parser initialization or
+metric reanalysis is required. Inspection sends no request to the server and
+does not save automatically. It uses local generation, revision, file and
+request identities to reject stale or mismatched replies. At most one pending
+request per inspection operation is retained. The browser's actual heap and
+latency remain device-dependent, not input-envelope guarantees.

@@ -1,3 +1,4 @@
+import { parseInspectionResult, validateInspectionQuery, type InspectionQuery, type InspectionResult } from "../application/unit-inspection";
 import { parseSavedRecord } from "./browser-saved-investigations";
 import { validSavedId, type SavedRecord } from "../application/saved-investigation";
 import { parseRepositoryReference } from "../domain/repository-reference";
@@ -9,6 +10,8 @@ type OwnedWorker = {
   generation: number;
   providerActive: boolean;
   finished: boolean;
+  revision?: string;
+  inspections: Map<InspectionQuery["type"], { id: number; query: InspectionQuery; resolve(value: InspectionResult): void; reject(error: Error): void }>;
   saveRequest?: { id: number; resolve(record: SavedRecord): void; reject(error: Error): void };
   stop?: Promise<void>;
   releaseStop?: () => void;
@@ -58,10 +61,12 @@ export function createBrowserWorkerTransport(
             const worker = createWorker();
             let disposed = false;
             const owned: OwnedWorker = {
-              worker, generation: command.generation, providerActive: command.savedId === undefined, finished: false,
+              worker, generation: command.generation, providerActive: command.savedId === undefined, finished: false, inspections: new Map(),
               dispose() {
                 if (disposed) return;
                 disposed = true;
+                for (const pending of owned.inspections.values()) pending.reject(new Error("Inspection changed"));
+                owned.inspections.clear();
                 owned.saveRequest?.reject(new Error("Investigation changed")); owned.saveRequest = undefined;
                 worker.removeEventListener("message", message);
                 worker.removeEventListener("error", error);
@@ -78,6 +83,17 @@ export function createBrowserWorkerTransport(
               if (closed || active !== owned) return;
               const raw = received.data as Record<string, unknown> | null;
               if (raw && raw.sessionId === sessionId && raw.generation === command.generation && version === selectedVersion && !owned.stop) {
+                if (raw.type === "INSPECTION_RESULT") {
+                  const entry = [...owned.inspections].find(([, pending]) => pending.id === raw.requestId);
+                  if (entry) {
+                    owned.inspections.delete(entry[0]);
+                    try {
+                      if (raw.ok !== true || raw.revision !== owned.revision) throw new Error("Unit inspection unavailable");
+                      entry[1].resolve(parseInspectionResult(raw.value, entry[1].query));
+                    } catch { entry[1].reject(new Error("Unit inspection unavailable")); }
+                  }
+                  return;
+                }
                 if (raw.type === "SAVE_RESULT") {
                   const pending = owned.saveRequest;
                   if (pending && raw.requestId === pending.id) {
@@ -107,6 +123,7 @@ export function createBrowserWorkerTransport(
                 return;
               }
               if (version !== selectedVersion) return;
+              if (event.type === "REVISION_SELECTED") owned.revision = event.revision;
               if (terminal) owned.finished = true;
               observer.event(event);
               if (event.type === "ANALYSIS_FAILED" || event.type === "ANALYSIS_CANCELLED") destroy(owned);
@@ -135,6 +152,17 @@ export function createBrowserWorkerTransport(
           if (active) await stop(active);
           if (!closed && command.generation === latestGeneration) observer.event({ type: "CURRENT_DISCARDED", ...command });
           return 204;
+        },
+        inspect(query: InspectionQuery) {
+          const owned = active;
+          if (closed || !owned?.finished || !owned.revision) return Promise.reject(new Error("Unit inspection unavailable"));
+          try { validateInspectionQuery(query); } catch { return Promise.reject(new Error("Unit inspection unavailable")); }
+          owned.inspections.get(query.type)?.reject(new Error("Inspection changed"));
+          return new Promise<InspectionResult>((resolve, reject) => {
+            const id = ++saveId; owned.inspections.set(query.type, { id, query, resolve, reject });
+            try { owned.worker.postMessage({ type: "INSPECT", sessionId, generation: owned.generation, requestId: id, query }); }
+            catch { owned.inspections.delete(query.type); reject(new Error("Unit inspection unavailable")); }
+          });
         },
         save() {
           const owned = active;

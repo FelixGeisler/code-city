@@ -1,3 +1,4 @@
+import { createFileInspection, validateInspectionQuery, type InspectionEvidence } from "../application/unit-inspection";
 import { analyzeRepository } from "../application/analyze-repository";
 import type { ProjectAnalysis } from "../application/project-analysis";
 import { validateCityPayload } from "../application/city-payload";
@@ -87,10 +88,35 @@ async function restore(id: string): Promise<void> {
   send("RESTORED", { repositoryUrl, record: receipt, exclusions });
   send("REVISION_SELECTED", { revision: selectedRevision }); publish();
 }
+let inspectionCache: { path: string; read: ReturnType<typeof createFileInspection> } | undefined;
+function inspect(requestId: number, queryValue: unknown): void {
+  try {
+    const query = validateInspectionQuery(queryValue);
+    if (!current?.city || !current.city.inspection.some(row => row.canonicalPath === query.path)) throw new Error("File unavailable");
+    if (inspectionCache?.path !== query.path) {
+      const source = current.sources.find(row => row.canonicalPath === query.path);
+      if (!source) throw new Error("Source unavailable");
+      let evidence = capture.inspection(query.path);
+      if (retainedSnapshot) {
+        const file = retainedSnapshot.header.files.find(row => row.path === query.path);
+        if (!file) throw new Error("Evidence unavailable");
+        evidence = {
+          units: { length: file.units.length, at(index) { const row = file.units[index]; return row ? { kind: row[0], startByte: row[1], endByte: row[2], complexity: row[4] } : undefined; } },
+          contributionCount: file.contributions.length,
+          contributions: () => file.contributions,
+        } satisfies InspectionEvidence;
+      }
+      if (!evidence) throw new Error("Evidence unavailable");
+      inspectionCache = { path: query.path, read: createFileInspection(query.path, source.normalizedUtf8, evidence) };
+    }
+    send("INSPECTION_RESULT", { requestId, revision: selectedRevision, ok: true, value: inspectionCache.read(query) });
+  } catch { send("INSPECTION_RESULT", { requestId, revision: selectedRevision, ok: false }); }
+}
 let retainedSnapshot: Awaited<ReturnType<typeof decodeSnapshot>> | undefined;
 scope.addEventListener("message", (event: MessageEvent<unknown>) => {
   const value = event.data as Record<string, unknown> | null;
   if (!value || typeof value !== "object") return;
+  if (value.type === "INSPECT" && identity && value.sessionId === identity.sessionId && value.generation === identity.generation && typeof value.requestId === "number" && Number.isSafeInteger(value.requestId) && value.requestId > 0) { inspect(value.requestId, value.query); return; }
   if (value.type === "SAVE" && identity && value.sessionId === identity.sessionId && value.generation === identity.generation && typeof value.requestId === "number") { void save(value.requestId); return; }
   if (value.type === "STOP" && identity && value.sessionId === identity.sessionId && value.generation === identity.generation) {
     controller?.abort(); if (current) { current = undefined; retainedSnapshot = undefined; scope.close(); } return;

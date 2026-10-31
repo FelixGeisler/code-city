@@ -380,6 +380,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "application/resolution.ts",
     "application/saved-investigation.ts",
     "application/source-retrieval.ts",
+    "application/unit-inspection.ts",
     "application/worker-attempt.ts",
     "domain/base-metrics.ts",
     "domain/camera-picking-policy.ts",
@@ -419,6 +420,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/standalone-presentation-session.ts",
     "edge/tree-sitter-adapter.ts",
     "edge/tree-sitter-assets.ts",
+    "edge/unit-inspection-view.ts",
   ]);
 
   const indexHtml = await readText("index.html");
