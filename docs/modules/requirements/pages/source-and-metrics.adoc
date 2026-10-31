@@ -23,7 +23,7 @@ arbitrary refs are excluded.
 [[CC-CORE-SRC-02]]
 === Explicit immutable-revision analysis
 
-Only an explicit Analyze or Reanalyze action resolves the then-current tip of
+Only an explicit Analyze action resolves the then-current tip of
 the supplied branch, or the default branch when no branch was supplied, and
 records its full immutable commit ID. No selection event, watch, or schedule
 starts analysis. Later runs do not alter earlier results.
@@ -215,8 +215,9 @@ before the first text-valid file and then one completion only after that file's
 parser attempt and required release have finished. Parser initialization or
 release failure does not fabricate a completion; `T = 0` emits no analysis
 counter. These counts do not change source admission, metric, city, failure,
-or retained-source behavior and are not an overall percentage or time
-estimate.
+or retained-source behavior. The
+xref:city-and-failures.adoc#browser-investigation-workspace[workspace] maps them
+to one monotonic work-progress bar, not an elapsed-time estimate.
 
 GitHub independently owns API, rate, response, and tree limits.
 Code City does not copy those values into its product contract. A truncated or

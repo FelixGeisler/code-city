@@ -8,7 +8,7 @@
 |Determinism |Canonical starts/consumption/failures, pinned parser bytes, fixed metrics/geometry, reproducible manifest. |Domain/source tests and byte reproducibility.
 |Temporary ownership |Source and results are local to the current browser worker. No backend session, source reservation, or idle dataset exists. |Browser transport tests, actual multi-tab and cancellation evidence.
 |Safe publication |Local generation gates and validated city data; inert path/failure text. Public worker/parser assets are deliberate; private server and manifest return `404`. |Packaged browser and perimeter audits.
-|Progress |Actual acquisition and parser-cleanup counts over the worker channel, with indeterminate stages where no total exists. |Shared-core and packaged browser progress tests.
+|Progress |Actual phase counts over the worker channel; the browser controller maps them to one fixed work budget after inventory admission. |Shared-core, controller, and packaged browser progress tests.
 |Release |One audited manifest-bound artifact and an isolated reproducibility build; no Pages deployment. |Workflow, package, publication, and retirement records.
 |===
 

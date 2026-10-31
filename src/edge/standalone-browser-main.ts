@@ -21,31 +21,28 @@ const commit = requiredElement<HTMLOutputElement>("[data-commit]");
 const failed = requiredElement<HTMLDetailsElement>("[data-failed]");
 const failedSummary = requiredElement<HTMLElement>("[data-failed-summary]");
 const failedRows = requiredElement<HTMLUListElement>("[data-failed-rows]");
-const actions = requiredElement<HTMLElement>("[data-actions]");
 const presentationRoot = requiredElement<HTMLElement>("[data-presentation]");
 const investigation = requiredElement<HTMLElement>("[data-investigation]");
 const repositoryName = requiredElement<HTMLElement>("[data-repository]");
 const investigationControls = requiredElement<HTMLElement>("[data-investigation-controls]");
 const changeRepository = requiredElement<HTMLButtonElement>("[data-change-repository]");
-const reanalyze = requiredElement<HTMLButtonElement>("[data-reanalyze]");
-let capturedInputs: Readonly<{ repositoryUrl: string; additionalExclusions: string }> | undefined;
+let capturedRepositoryUrl: string | undefined;
 let hasAttempt = false;
 let isWorking = false;
 let workingProgressLabel: HTMLLabelElement | undefined;
 let workingProgress: HTMLProgressElement | undefined;
 
 function showAttempt(working: boolean): void {
-  if (!capturedInputs) return;
+  if (capturedRepositoryUrl === undefined) return;
   hasAttempt = true;
   isWorking = working;
   form.hidden = true;
   investigation.hidden = false;
   investigationControls.hidden = working;
   changeRepository.disabled = working;
-  reanalyze.disabled = working;
   changeRepository.textContent = "Change repository";
   changeRepository.setAttribute("aria-expanded", "false");
-  repositoryName.textContent = capturedInputs.repositoryUrl;
+  repositoryName.textContent = capturedRepositoryUrl;
 }
 
 function replaceStatus(message: string, action?: Readonly<{ label: string; run: () => void }>): void {
@@ -117,17 +114,6 @@ function renderFailures(rows: readonly BrowserFailedFile[]): void {
   failed.hidden = false;
 }
 
-function renderDiscard(discard: () => void): void {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = "Discard";
-  button.setAttribute("aria-label", "Discard current analysis");
-  button.addEventListener("click", () => {
-    button.disabled = true;
-    discard();
-  }, { once: true });
-  actions.replaceChildren(button);
-}
 
 const presentation = createStandalonePresentationCoordinator({
   documentTarget: document,
@@ -135,7 +121,6 @@ const presentation = createStandalonePresentationCoordinator({
   failed() {
     feedback.textContent = "";
     renderFailures([]);
-    actions.replaceChildren();
     showAttempt(false);
     replaceStatus("Presentation failed (M1-PRES-1)");
   },
@@ -156,7 +141,6 @@ const view: StandaloneBrowserView = Object.freeze({
     status.replaceChildren();
     commit.textContent = "";
     renderFailures([]);
-    actions.replaceChildren();
     presentation.clear();
   },
   working(cancel) {
@@ -184,7 +168,6 @@ const view: StandaloneBrowserView = Object.freeze({
     showAttempt(false);
     presentation.clear();
     renderFailures([]);
-    actions.replaceChildren();
     commit.textContent = revision ?? "";
     replaceStatus(code ? `${category} (${code})` : category);
   },
@@ -192,33 +175,31 @@ const view: StandaloneBrowserView = Object.freeze({
     showAttempt(false);
     presentation.clear();
     renderFailures([]);
-    actions.replaceChildren();
     commit.textContent = "";
     replaceStatus("Cancelled");
   },
-  succeeded(generation, model, failures, revision, discard) {
+  succeeded(generation, model, failures, revision) {
     showAttempt(false);
-    workingProgressLabel = undefined;
-    workingProgress = undefined;
-    status.replaceChildren();
     feedback.textContent = "";
     commit.textContent = revision;
     if (!presentation.publish(generation, model)) return;
     try {
       renderFailures(failures);
-      renderDiscard(discard);
+      if (workingProgress) workingProgress.value = workingProgress.max;
+      workingProgressLabel = undefined;
+      workingProgress = undefined;
+      status.replaceChildren();
     } catch {
       presentation.failCurrent();
     }
   },
-  allFilesFailed(_generation, failures, revision, discard) {
+  allFilesFailed(_generation, failures, revision) {
     showAttempt(false);
     replaceStatus("No files could be analyzed.");
     feedback.textContent = "";
     commit.textContent = revision;
     presentation.clear();
     renderFailures(failures);
-    renderDiscard(discard);
   },
 });
 
@@ -226,7 +207,7 @@ const controller = createStandaloneBrowserController(createBrowserWorkerTranspor
 const secureAnalysis = window.isSecureContext && globalThis.crypto?.subtle !== undefined;
 function submitAnalysis(repositoryUrl: string, additionalExclusions: string): void {
   if (!secureAnalysis) { replaceStatus("Browser analysis requires HTTPS or localhost."); return; }
-  capturedInputs = Object.freeze({ repositoryUrl, additionalExclusions });
+  capturedRepositoryUrl = repositoryUrl;
   controller.submit(repositoryUrl, additionalExclusions);
 }
 form.addEventListener("submit", (event) => {
@@ -239,10 +220,6 @@ changeRepository.addEventListener("click", () => {
   changeRepository.textContent = form.hidden ? "Change repository" : "Close setup";
   changeRepository.setAttribute("aria-expanded", String(!form.hidden));
   if (!form.hidden) repository.focus();
-});
-reanalyze.addEventListener("click", () => {
-  if (!hasAttempt || isWorking || !capturedInputs) return;
-  submitAnalysis(capturedInputs.repositoryUrl, capturedInputs.additionalExclusions);
 });
 window.addEventListener("pagehide", () => {
   controller.dispose();

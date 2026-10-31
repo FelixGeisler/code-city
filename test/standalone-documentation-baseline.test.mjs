@@ -27,7 +27,7 @@ test("accepted browser ownership decision and current custody policy supersede o
 
 test("requirements describe real browser analysis, static hosting, progress, and the still-unimplemented Save boundary", async () => {
   const product = compact(await read("docs/modules/requirements/pages/index.adoc"));
-  for (const expected of ["browser Web Worker", "asset", "version-1", "package-manifest.json", "public/parser/", "Only `--host` has a default", "`--port` is required", "HTTPS", "secure localhost", "real counts beginning at `0/N` or `0/T`", "phase-local scales do not represent overall runtime", "Multiple completed tabs do not reserve shared analysis capacity", "Shared immutable Save, inventory, and reopen remain unimplemented"])
+  for (const expected of ["browser Web Worker", "asset", "version-1", "package-manifest.json", "public/parser/", "Only `--host` has a default", "`--port` is required", "HTTPS", "secure localhost", "real counts beginning at `0/N` or `0/T`", "bar remains indeterminate until the candidate total is known", "Multiple completed tabs do not reserve shared analysis capacity", "Shared immutable Save, inventory, and reopen remain unimplemented"])
     assert.ok(product.includes(expected), expected);
   assert.doesNotMatch(product, /all five capacit(?:y|ies) (?:flags )?are required|service owns revision selection/u);
 });

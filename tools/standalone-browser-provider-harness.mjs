@@ -12,6 +12,7 @@ function fixture(mode) {
     ["d.cs", "class C { int M() { return 1; } }\n"],
     ["empty.js", ""],
   ];
+  if (mode === "districts") rows = rows.map(([name, text], index) => [index < 3 ? `src/edge/${name}` : index === 3 ? `other/${name}` : name, text]);
   if (mode === "mixed") rows.push(["bad.js", "export const = ;"], ["nul.js", Buffer.from([0])]);
   if (mode === "all-failed") rows = [["invalid.js", Buffer.from([0xc3, 0x28])], ["nul.js", Buffer.from([0])]];
   if (mode === "progress") rows = [["a.js", rows[0][1]], ["b.js", "const b = 1;"], ["nul.js", Buffer.from([0])]];
