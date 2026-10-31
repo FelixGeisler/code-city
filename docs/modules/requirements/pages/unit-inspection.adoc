@@ -129,8 +129,9 @@ contribution facts; no migration, GitHub acquisition, parser initialization or
 metric reanalysis is required. Inspection sends no request to the server and
 does not save automatically. It uses local generation, revision, file and
 request identities, source-page cursor and contribution scope to reject stale or
-mismatched replies. Changing source clears old contribution rows while loading;
-late replies and detached location buttons cannot populate or navigate another
+mismatched replies. Manual source navigation clears old contribution rows while
+loading; whole-unit contribution selection retains its existing list. Late
+replies and detached location buttons cannot populate or navigate another
 page or unit. At most one pending
 request per inspection operation is retained. The browser's actual heap and
 latency remain device-dependent, not input-envelope guarantees.
