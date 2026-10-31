@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { auditStandaloneArtifact } from "./standalone-manifest.mjs";
 import { canonicalStandaloneRoot } from "./build-standalone.mjs";
-import { connectCdp, discoverInstalledChrome, launchInstalledChrome, readInstalledChromeVersion } from "./chrome-cdp.mjs";
+import { closeInstalledChrome, connectCdp, discoverInstalledChrome, launchInstalledChrome, readInstalledChromeVersion } from "./chrome-cdp.mjs";
 import { expectCleanExit, launchStandalone, readyOrigin, request, sendGracefulSignal, terminateForCleanup, writeSignalPreload } from "./standalone-check-support.mjs";
 import { createBrowserProviderHarness, FIXTURE_REVISION } from "./standalone-browser-provider-harness.mjs";
 
@@ -55,6 +55,7 @@ export async function checkStandaloneBrowser() {
   const checked = promise => Promise.race([promise, failure.promise]);
   const timer = setTimeout(() => failure.reject(new Error("Standalone browser evidence exceeded its watchdog")), WATCHDOG_MS);
   let temporary, processUnderTest, chrome, cdp, harness;
+  let chromeLaunchAttempted = false;
   const exceptions = [];
   try {
     const manifest = await checked(auditStandaloneArtifact(canonicalStandaloneRoot));
@@ -65,6 +66,7 @@ export async function checkStandaloneBrowser() {
     const origin = await checked(readyOrigin(processUnderTest));
     const discovery = await checked(discoverInstalledChrome());
     const version = await checked(readInstalledChromeVersion(discovery));
+    chromeLaunchAttempted = true;
     chrome = await checked(launchInstalledChrome(discovery, path.join(temporary, "profile")));
     const connection = connectCdp(chrome.websocketUrl);
     cdp = { ...connection, async send(method, params, sessionId) {
@@ -540,12 +542,15 @@ export async function checkStandaloneBrowser() {
   } finally {
     clearTimeout(timer);
     harness?.close();
-    if (cdp) { try { await cdp.send("Browser.close"); } catch {} cdp.close(); }
-    if (chrome?.child && chrome.child.exitCode === null && chrome.child.signalCode === null) {
-      const exited = new Promise(resolve => chrome.child.once("exit", resolve)); chrome.child.kill(); await exited;
+    let profileStopped = !chromeLaunchAttempted;
+    try {
+      await closeInstalledChrome(chrome, cdp);
+      if (chrome) profileStopped = true;
+    } finally {
+      if (processUnderTest) await terminateForCleanup(processUnderTest);
+      if (temporary && profileStopped) await rm(temporary, { recursive: true, force: true });
+      else if (temporary) process.stderr.write(`Chrome shutdown was not proven clean; temporary evidence retained at ${temporary}\n`);
     }
-    if (processUnderTest) await terminateForCleanup(processUnderTest);
-    if (temporary) await rm(temporary, { recursive: true, force: true });
   }
 }
 
