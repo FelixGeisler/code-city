@@ -24,7 +24,8 @@ test('file selection lists units without opening source, then renders inert read
  assert.deepEqual(calls.map(row=>row.type),['units']);assert.equal(data(host,'unitSource').open,false);
  const open=all(host,node=>Object.hasOwn(node.dataset,'unit'))[0];open.click();await sourceReply.promise;await flush();
  assert.equal(data(host,'unitSource').open,true);assert.ok(data(host,'sourceCode').textContent.includes('<img src=x onerror=alert(1)>'));
- assert.equal(all(host,node=>node.tagName==='IMG'||node.tagName==='SCRIPT').length,0);assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,1);
+ assert.equal(all(host,node=>node.tagName==='IMG'||node.tagName==='SCRIPT').length,0);assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,0);
+ all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0].click();await flush();assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,1);
  data(host,'unitSource').dispatchEvent(new Event('close'));assert.ok(data(host,'sourceCode').children.length>0,'a queued prior close event must not clear a reopened dialog');
  const colored=all(data(host,'sourceCode'),node=>Object.hasOwn(node.dataset,'syntaxColor'));
  assert.ok(colored.some(node=>node.dataset.syntaxColor==='5'&&node.textContent==='if'));
@@ -58,8 +59,9 @@ test('coloring failure renders exact inert plain source and ownership with a loc
  const read=createFileInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:2})},contributionCount:1,contributions:()=>[[0,'if',0,bytes.length-1]]},async()=>{throw Error('grammar failed');});
  const release=attachUnitInspection(documentTarget,host,'file.js',read);await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
  const code=data(host,'sourceCode');assert.equal(all(code,node=>node.tagName==='CODE').map(node=>node.textContent).join('\n'),source);
- assert.equal(all(code,node=>Object.hasOwn(node.dataset,'syntaxColor')).length,0);assert.equal(all(code,node=>node.tagName==='MARK').length,1);assert.equal(all(code,node=>node.tagName==='SCRIPT').length,0);
- assert.match(data(host,'sourceBody').textContent,/Syntax coloring unavailable\. Underlined:/u);assert.equal(data(host,'unitSource').open,true);release();
+ assert.equal(all(code,node=>Object.hasOwn(node.dataset,'syntaxColor')).length,0);assert.equal(all(code,node=>node.tagName==='MARK').length,0);assert.equal(all(code,node=>node.tagName==='SCRIPT').length,0);
+ all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0].click();await flush();assert.equal(all(code,node=>node.tagName==='MARK').length,1);
+ assert.match(data(host,'sourceBody').textContent,/Syntax coloring unavailable\. Underlined: selected/u);assert.equal(data(host,'unitSource').open,true);release();
 });
 test('a source reply delayed by initialization cannot repaint a replaced file view',async()=>{
  const host=new Element('section'),read=reader('return 1;',[{kind:'top-level',startByte:0,endByte:9,complexity:1}]),pending=Promise.withResolvers();
@@ -89,4 +91,28 @@ test('late contribution replies cannot populate a different source page',async()
  const host=new Element('section'),release=attachUnitInspection(documentTarget,host,'file.js',async query=>{if(query.type==='contributions'&&query.cursor===0)return old.promise;const result=await read(query);if(query.type==='contributions')ready.resolve();return result;});await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
  assert.equal(data(host,'contributionRows').children.length,0);button(host,'Next source').click();await ready.promise;await flush();assert.match(data(host,'sourceRange').textContent,/Shown source: 81:1/u);assert.match(data(host,'contributionRows').textContent,/100:1/u);
  old.resolve(await read({type:'contributions',path:'file.js',unit:0,offset:0,cursor:0}));await flush();assert.match(data(host,'contributionRows').textContent,/100:1/u);assert.doesNotMatch(data(host,'contributionRows').textContent,/if · 1:1/u);release();
+});
+test('only the selected overlapping contribution is marked using scalar columns; same-start replacement needs no source read',async()=>{
+ const source='\t😀a&&b&&c;\nif(x) y;\n'+'x;\n'.repeat(100),bytes=new TextEncoder().encode(source),byte=index=>new TextEncoder().encode(source.slice(0,index)).length,branch=source.indexOf('if('),host=new Element('section'),calls=[];
+ const read=makeInspection('file.js',bytes,{units:{length:2,at:id=>({kind:id?'function':'top-level',startByte:id?byte(branch):0,endByte:id?byte(branch+8):bytes.length,complexity:id?1:4})},contributionCount:3,contributions:()=>[[0,'logical-and',byte(1),byte(10)],[0,'logical-and',byte(1),byte(7)],[0,'if',byte(branch),byte(branch+8)]]},async()=>()=>[]);
+ const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);return read(query);});await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
+ const marks=()=>all(data(host,'sourceCode'),node=>node.tagName==='MARK').map(node=>node.textContent).join('\n'),entry=id=>all(host,node=>node.dataset.contribution===String(id))[0];
+ assert.equal(marks(),'');entry(0).click();await flush();assert.equal(marks(),'😀a&&b&&c');assert.equal(entry(0).attributes['aria-current'],'true');
+ const sourceReads=calls.filter(query=>query.type==='source').length;entry(1).click();await flush();assert.equal(marks(),'😀a&&b');assert.equal(calls.filter(query=>query.type==='source').length,sourceReads);assert.equal(entry(0).attributes['aria-current'],'false');assert.equal(entry(1).attributes['aria-current'],'true');assert.equal(entry(2).attributes['aria-current'],'false');assert.match(data(host,'sourceBody').textContent,/selected logical-and · 1:2–1:7/u);
+ button(host,'Next source').click();await flush();assert.equal(marks(),'');assert.equal(all(host,node=>node.attributes['aria-current']==='true').length,0);
+ button(host,'Previous source').click();await flush();assert.equal(marks(),'');button(host,'Close source').click();all(host,node=>node.dataset.unit==='1')[0].click();await flush();assert.equal(marks(),'');release();
+});
+test('selected spans clip to a scalar-aligned bounded source window, not the union of overlapping owners',async()=>{
+ const source='😀'.repeat(3000)+';',bytes=new TextEncoder().encode(source),host=new Element('section');
+ const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:3})},contributionCount:2,contributions:()=>[[0,'logical-and',0,bytes.length],[0,'logical-and',0,4]]},async()=>()=>[]);
+ const release=attachUnitInspection(documentTarget,host,'file.js',read);await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();const mark=()=>all(data(host,'sourceCode'),node=>node.tagName==='MARK').map(node=>node.textContent).join('');
+ assert.equal(mark(),'');all(host,node=>node.dataset.contribution==='0')[0].click();await flush();assert.equal(mark(),'😀'.repeat(2048));
+ all(host,node=>node.dataset.contribution==='1')[0].click();await flush();assert.equal(mark(),'😀');button(host,'Next source').click();await flush();assert.equal(mark(),'');release();
+});
+test('a late selected-contribution source reply cannot restore a highlight after the dialog reopens',async()=>{
+ const source='a&&b;\nc&&d;',bytes=new TextEncoder().encode(source),host=new Element('section'),pending=Promise.withResolvers();
+ const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:3})},contributionCount:2,contributions:()=>[[0,'logical-and',0,4],[0,'logical-and',6,10]]},async()=>()=>[]);
+ const release=attachUnitInspection(documentTarget,host,'file.js',query=>query.type==='source'&&query.cursor===6?pending.promise:read(query));await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();all(host,node=>node.dataset.contribution==='1')[0].click();
+ button(host,'Close source').click();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();pending.resolve(await read({type:'source',path:'file.js',unit:0,cursor:6}));await flush();
+ assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,0);assert.equal(all(host,node=>node.attributes['aria-current']==='true').length,0);assert.match(data(host,'sourceRange').textContent,/Shown source: 1:1/u);release();
 });

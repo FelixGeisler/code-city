@@ -144,6 +144,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-
 [data-owned-contributions] > label { color: var(--muted); display: grid; font-size: 0.8rem; gap: 0.35rem; }
 [data-contribution-rows] button { background: var(--surface-strong); border-color: var(--border); color: var(--text); font: inherit; overflow-wrap: anywhere; text-align: start; width: 100%; }
 [data-contribution-rows] button:hover:not(:disabled) { border-color: var(--accent); }
+[data-contribution-rows] button[aria-current="true"] { border-color: var(--focus); outline: 1px solid var(--focus); }
 @media (width < 52rem) {
   [data-source-body] { grid-template-columns: minmax(0, 1fr); }
   [data-source-code] { max-height: 46dvh; }
