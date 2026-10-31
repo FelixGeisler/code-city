@@ -52,17 +52,27 @@ uniform int u_selectionIndex;
 uniform vec4 u_selectionBounds;
 
 flat out vec4 v_color;
+out vec2 v_plateLocal;
+flat out vec2 v_plateSize;
+flat out float v_plateSurface;
+flat out float v_plateSelected;
 
 void main() {
+  v_plateLocal = a_unitPosition.xz * a_dimensions.xz;
+  v_plateSize = a_dimensions.xz;
+  v_plateSurface = u_passKind == 0 && a_faceClass > 1.5 ? (gl_InstanceID == 0 ? 1.0 : 2.0) : 0.0;
+  v_plateSelected = u_passKind == 0 && u_selectionIndex < -1 && gl_InstanceID == -u_selectionIndex - 2 ? 1.0 : 0.0;
   vec3 targetRelativePosition = a_targetRelativeMinimum + a_unitPosition * a_dimensions;
   gl_Position = u_clipFromTarget * vec4(targetRelativePosition, 1.0);
   if (u_passKind == 0) {
-    vec3 plate = a_faceClass > 1.5
-      ? vec3(24.0, 42.0, 67.0) / 255.0
-      : a_faceClass > 0.5
-        ? vec3(20.0, 34.0, 55.0) / 255.0
-        : vec3(15.0, 26.0, 42.0) / 255.0;
-    if (u_selectionIndex < -1 && gl_InstanceID == -u_selectionIndex - 2) plate = mix(plate, vec3(1.0), 0.15);
+    // Adjacent platform levels differ by exactly half a world unit. The fixed
+    // scene-relative phase alternates their neutral tones without a new buffer.
+    float levelTone = mod(floor(a_targetRelativeMinimum.y * 2.0), 2.0);
+    vec3 districtTop = mix(vec3(54.0, 80.0, 108.0), vec3(77.0, 104.0, 134.0), levelTone) / 255.0;
+    vec3 plate = gl_InstanceID == 0
+      ? (a_faceClass > 1.5 ? vec3(24.0, 42.0, 67.0) / 255.0
+        : a_faceClass > 0.5 ? vec3(20.0, 34.0, 55.0) / 255.0 : vec3(15.0, 26.0, 42.0) / 255.0)
+      : (a_faceClass > 1.5 ? districtTop : a_faceClass > 0.5 ? 0.75 * districtTop : 0.58 * districtTop);
     v_color = vec4(plate, 1.0);
   } else {
     vec3 base = a_color.rgb;
@@ -91,10 +101,24 @@ const FRAGMENT_SHADER_SOURCE = `#version 300 es
 precision highp float;
 
 flat in vec4 v_color;
+in vec2 v_plateLocal;
+flat in vec2 v_plateSize;
+flat in float v_plateSurface;
+flat in float v_plateSelected;
 layout(location = 0) out vec4 o_color;
 
 void main() {
-  o_color = v_color;
+  vec3 color = v_color.rgb;
+  if (v_plateSurface > 0.5) {
+    vec2 edgeDistance = min(v_plateLocal, v_plateSize - v_plateLocal);
+    vec2 pixelSize = max(fwidth(v_plateLocal), vec2(0.00001));
+    float pixelsToEdge = min(edgeDistance.x / pixelSize.x, edgeDistance.y / pixelSize.y);
+    float border = 1.0 - smoothstep(0.75, 1.5, pixelsToEdge);
+    vec3 edgeColor = (v_plateSelected > 0.5 ? vec3(200.0, 220.0, 240.0)
+      : v_plateSurface < 1.5 ? vec3(70.0, 91.0, 118.0) : vec3(148.0, 177.0, 205.0)) / 255.0;
+    color = mix(color, edgeColor, border);
+  }
+  o_color = vec4(color, 1.0);
 }
 `;
 

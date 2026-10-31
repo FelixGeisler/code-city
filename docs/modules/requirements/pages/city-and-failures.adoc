@@ -319,14 +319,26 @@ follows, retaining alpha `1`:
 +Z, -Z, and -Y: c' = 0.62 * c
 ----
 
-The plate branch never uses building colours; district selection can highlight
-the selected platform. Its `+Y` face is
-`#182A43FF`, its `+X/-X` faces are `#142237FF`, and its `+Z/-Z` and bottom faces
-are `#0F1A2AFF`. Plates are opaque with CCW front faces, back-face culling,
-depth `LESS`, and depth writes enabled. The building base colour remains
-identifiable through its fixed transforms. There is no configurable lighting,
-normal or material input, texture, fog, shadow, blending, polygon offset,
-antialiasing promise, outline, or static edge pass.
+Platform colors are neutral hierarchy separators, never complexity bands.
+The root baseplate keeps `+Y #182A43FF`, `+X/-X #142237FF` and other faces
+`#0F1A2AFF`. Other platforms alternate top fills `#36506CFF` and `#4D6886FF`
+between successive directory levels. The fixed scene-relative phase is
+`mod(floor(2 * minimumTargetY), 2)`; camera movement does not change it.
+Their X faces use `0.75 * top` and Z/bottom faces `0.58 * top`. Selection does
+not lighten platform fills, which could otherwise erase adjacent-level contrast.
+
+Top-face boundaries use `#465B76FF` for root and `#94B1CDFF` for other platforms;
+the selected platform uses a brighter `#C8DCF0FF` boundary instead.
+In the same fragment pass, compute distance to the nearest X/Z edge in local
+platform coordinates, divided by `max(fwidth(local), 0.00001)`. Mix the border
+color with weight `1 - smoothstep(0.75, 1.5, pixelsToEdge)`. This keeps thin
+boundaries visible at different zooms without adding geometry, uploads or a draw
+pass. Building fragments bypass platform coloring and borders entirely.
+
+Plates remain opaque with CCW front faces, back-face culling, depth `LESS` and
+depth writes. Building metric colors and face transforms are unchanged. There
+is no configurable lighting, normal/material input, texture, fog, shadow,
+blending, polygon offset, antialiasing promise or separate edge pass.
 
 [[browser-investigation-workspace]]
 == Investigation workspace
