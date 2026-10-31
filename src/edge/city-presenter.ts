@@ -251,6 +251,7 @@ type Session<G> = {
   selection: number | null;
   districtSelection: number | null;
   districtPicking?: PickingGeometry;
+  districtPickingOrder?: readonly number[];
   selectionBoundsUniform?: WebGLUniformLocation;
   canvas?: PresenterCanvas;
   gl?: WebGL2RenderingContext;
@@ -717,6 +718,7 @@ function cleanup<G>(session: Session<G>): boolean {
   session.selectionUniform = undefined;
   session.selectionBoundsUniform = undefined;
   session.districtPicking = undefined;
+  session.districtPickingOrder = undefined;
   session.districtSelection = null;
   session.buildingStaging = undefined;
   session.plateStaging = undefined;
@@ -1000,7 +1002,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
               canvas.getBoundingClientRect(), { width: canvas.width, height: canvas.height }, session.districtPicking);
             if (district.kind === "failure") { failSession(session); return; }
             if (district.index !== null && (picked.tEnter === null || district.tEnter! < picked.tEnter)) {
-              if (callbackEligible(session)) session.eventSink!.districtActivation(session.generation!, district.index);
+              if (callbackEligible(session)) session.eventSink!.districtActivation(session.generation!, session.districtPickingOrder![district.index]!);
               return;
             }
           }
@@ -1143,16 +1145,19 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         const initial = dimensions(host);
         const canvas = platform.createCanvas();
         const token = Object.freeze({}) as PresenterToken;
+        // The closed-box picker keeps the first exact tie. Prefer deeper platforms;
+        // canonical descriptor order breaks same-depth ties without changing GPU order.
+        const districtPickingOrder = presentation.plates.map((_, index) => index).sort((a, b) => presentation.plates[b]!.minimum[1] - presentation.plates[a]!.minimum[1] || a - b);
         candidate = {
           generation,
           token,
           hover: null,
           selection: null,
           districtSelection: null,
-          ...(eventSink.districtActivation ? { districtPicking: {
+          ...(eventSink.districtActivation ? { districtPickingOrder, districtPicking: {
             count: presentation.plates.length,
-            origins: Float32Array.from(presentation.plates.flatMap(plate => [...plate.minimum])),
-            sizes: Float32Array.from(presentation.plates.flatMap(plate => [...plate.dimensions])),
+            origins: Float32Array.from(districtPickingOrder.flatMap(index => [...presentation.plates[index]!.minimum])),
+            sizes: Float32Array.from(districtPickingOrder.flatMap(index => [...presentation.plates[index]!.dimensions])),
           } } : {}),
           canvas,
           model,

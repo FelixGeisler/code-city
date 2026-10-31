@@ -1,6 +1,6 @@
 import { validateCityPayload, type CityPayload } from "./city-payload";
 import { isCanonicalSourcePath, compareUnsignedUtf8, MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES, MAX_NORMALIZED_TOTAL_BYTES, FIXED_EXCLUDED_SEGMENTS } from "../domain/source-admission";
-// Version-1 wire vocabulary is pinned, not silently widened by future analyzers.
+// Version-2 wire vocabulary is pinned, not silently widened by future analyzers.
 const EXPLICIT_UNIT_FORMS = ["function", "arrow", "method", "constructor", "getter", "setter", "static-block"];
 const DECISION_KINDS = ["if", "loop", "case", "catch", "ternary", "logical-and", "logical-or", "nullish", "logical-and-assign", "logical-or-assign", "nullish-assign"];
 import { parseRepositoryReference } from "../domain/repository-reference";
@@ -14,7 +14,7 @@ export function hasSaveCapacity(count: number, usedBytes: number, uploadBytes: n
   return [count, usedBytes, uploadBytes].every(value => Number.isSafeInteger(value) && value >= 0)
     && count < SAVE_LIMITS.count && uploadBytes <= SAVE_LIMITS.snapshot && usedBytes + uploadBytes + 16384 <= SAVE_LIMITS.storage;
 }
-export const SNAPSHOT_MAGIC = new Uint8Array([67, 67, 83, 65, 86, 69, 1, 0]);
+export const SNAPSHOT_MAGIC = new Uint8Array([67, 67, 83, 65, 86, 69, 2, 0]);
 export type SavedUnit = [string, number, number, number[], number];
 export type SavedContribution = [number, string, number, number];
 export type SourceSection = { length: number; sha256: string };
@@ -23,7 +23,7 @@ export type SavedFile = {
   outcome: string; fact: { canonicalPath: string; S: number; U: number; M: number } | null;
   units: SavedUnit[]; contributions: SavedContribution[];
 };
-export type SavedHeader = { version: 1; analyzer: string; repositoryUrl: string; revision: string; exclusions: string[]; fixedExcludedSegments: string[]; hierarchy: string[]; files: SavedFile[]; city: unknown };
+export type SavedHeader = { version: 2; analyzer: string; repositoryUrl: string; revision: string; exclusions: string[]; fixedExcludedSegments: string[]; hierarchy: string[]; files: SavedFile[]; city: unknown };
 export type SavedRecord = { id: string; savedAt: string; repository: string; ref: string; revision: string; bytes: number; sha256: string };
 export const validSavedId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value);
 const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
@@ -71,7 +71,7 @@ export function cityForSnapshot(city: CityPayload | null): unknown {
 export function validateSavedHeader(value: unknown): { header: SavedHeader; sections: SourceSection[]; payloadBytes: number } {
   const data = record(value, ["version", "analyzer", "repositoryUrl", "revision", "exclusions", "fixedExcludedSegments", "hierarchy", "files", "city"]);
   requireValue(typeof data.analyzer === "string" && /^[0-9a-f]{64}$/u.test(data.analyzer));
-  requireValue(data.version === 1 && typeof data.repositoryUrl === "string" && data.repositoryUrl.length <= 4096 && parseRepositoryReference(data.repositoryUrl));
+  requireValue(data.version === 2 && typeof data.repositoryUrl === "string" && data.repositoryUrl.length <= 4096 && parseRepositoryReference(data.repositoryUrl));
   requireValue(typeof data.revision === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(data.revision));
   for (const field of ["exclusions", "hierarchy"] as const) requireValue(list(data[field], 100_000).every(path => typeof path === "string" && path.length <= 4096 && path.isWellFormed()));
   requireValue(JSON.stringify(data.fixedExcludedSegments) === JSON.stringify(FIXED_EXCLUDED_SEGMENTS));

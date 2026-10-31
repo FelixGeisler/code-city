@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';import test from 'node:test';import{registerHooks}from'node:module';
 registerHooks({resolve(specifier,context,nextResolve){return nextResolve(/^\.\.?\//u.test(specifier)&&!/\.[a-z]+$/iu.test(specifier)?specifier+'.ts':specifier,context);}});
-const{attachUnitInspection,unitKindLabel}=await import('../src/edge/unit-inspection-view.ts');const{createFileInspection}=await import('../src/application/unit-inspection.ts');
+const{attachUnitInspection,unitKindLabel}=await import('../src/edge/unit-inspection-view.ts');const{createFileInspection:makeInspection}=await import('../src/application/unit-inspection.ts');
+const{createSourceColoring}=await import('../src/edge/shiki-source-highlighting.ts');
+const createFileInspection=(path,bytes,evidence,color=createSourceColoring)=>makeInspection(path,bytes,evidence,color);
 class Element extends EventTarget{
  constructor(tag){super();this.tagName=tag.toUpperCase();this.dataset={};this.children=[];this.attributes={};this.open=false;this.hidden=false;this.ownText='';}
  set textContent(value){this.ownText=value;this.children=[];}get textContent(){return this.ownText+this.children.map(child=>typeof child==='string'?child:child.textContent).join('');}

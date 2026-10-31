@@ -1,3 +1,4 @@
+import { createSourceColoring } from "./shiki-source-highlighting";
 import { createFileInspection, validateInspectionQuery, type InspectionEvidence } from "../application/unit-inspection";
 import { analyzeRepository } from "../application/analyze-repository";
 import type { ProjectAnalysis } from "../application/project-analysis";
@@ -109,7 +110,7 @@ async function inspect(requestId: number, queryValue: unknown): Promise<void> {
         } satisfies InspectionEvidence;
       }
       if (!evidence) throw new Error("Evidence unavailable");
-      inspectionCache = { path: query.path, read: createFileInspection(query.path, source.normalizedUtf8, evidence) };
+      inspectionCache = { path: query.path, read: createFileInspection(query.path, source.normalizedUtf8, evidence, createSourceColoring) };
     }
     const result = await inspectionCache.read(query);
     if (ownsReply()) send("INSPECTION_RESULT", { requestId, revision, ok: true, value: result });

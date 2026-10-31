@@ -1,345 +1,74 @@
 import type { ModuleComplexityFact } from "./complexity";
 import { compareUnsignedUtf8, isCanonicalSourcePath, MAX_ADMITTED_MODULES } from "./source-admission";
+import { planRecursiveLayout } from "./district-layout";
 
-export const PRESENTATION_KIND = "CODE_CITY_PRESENTATION" as const;
-
-export type PresentationModel = Readonly<{
-  kind: typeof PRESENTATION_KIND;
-  count: number;
-  origins: Float32Array;
-  sizes: Float32Array;
-  rgba: Uint8Array;
-  bounds: Float32Array;
-}>;
-
+export const PRESENTATION_KIND = "CODE_CITY_RECURSIVE_PRESENTATION_1" as const;
+export type PresentationModel = Readonly<{ kind: typeof PRESENTATION_KIND; count: number; origins: Float32Array; sizes: Float32Array; rgba: Uint8Array; bounds: Float32Array }>;
 export type InspectionFact = Readonly<{ canonicalPath: string; S: number; U: number; M: number }>;
-
-export type City = Readonly<{
-  geometry: PresentationModel;
-  inspection: readonly InspectionFact[];
-}>;
-
+export type City = Readonly<{ geometry: PresentationModel; inspection: readonly InspectionFact[] }>;
 type DataRecord = Record<string, unknown>;
-type FactSnapshot = Readonly<{ canonicalPath: string; S: number; U: number; M: number }>;
-
-const MAX_FLOAT_INTEGER = 2 ** 24;
-const MAX_TARGET_RELATIVE = 2 ** 23;
+type FactSnapshot = InspectionFact;
+const MAX_FLOAT_INTEGER = 2 ** 24, MAX_TARGET_RELATIVE = 2 ** 23;
 const FACT_KEYS = ["canonicalPath", "S", "U", "M"] as const;
-const PALETTE = [
-  [0x22, 0xc5, 0x5e, 0xff],
-  [0x84, 0xcc, 0x16, 0xff],
-  [0xfa, 0xcc, 0x15, 0xff],
-  [0xf5, 0x9e, 0x0b, 0xff],
-  [0xf9, 0x73, 0x16, 0xff],
-  [0xef, 0x44, 0x44, 0xff],
-] as const;
-
+const PALETTE = [[0x22,0xc5,0x5e,0xff],[0x84,0xcc,0x16,0xff],[0xfa,0xcc,0x15,0xff],[0xf5,0x9e,0x0b,0xff],[0xf9,0x73,0x16,0xff],[0xef,0x44,0x44,0xff]] as const;
 export const COMPLEXITY_PALETTE_LEGEND = Object.freeze([
-  Object.freeze({ range: "0", rgba: "#22C55EFF" }),
-  Object.freeze({ range: "1", rgba: "#84CC16FF" }),
-  Object.freeze({ range: "2–3", rgba: "#FACC15FF" }),
-  Object.freeze({ range: "4–7", rgba: "#F59E0BFF" }),
-  Object.freeze({ range: "8–15", rgba: "#F97316FF" }),
-  Object.freeze({ range: "16+", rgba: "#EF4444FF" }),
+  Object.freeze({range:"0",rgba:"#22C55EFF"}),Object.freeze({range:"1",rgba:"#84CC16FF"}),Object.freeze({range:"2–3",rgba:"#FACC15FF"}),Object.freeze({range:"4–7",rgba:"#F59E0BFF"}),Object.freeze({range:"8–15",rgba:"#F97316FF"}),Object.freeze({range:"16+",rgba:"#EF4444FF"}),
 ]);
-
-const BUILDING_GAP = 2;
-const GROUP_GAP = 8;
-const GROUP_PADDING = 3;
-
-function invalid(): never {
-  throw new Error("M1-CITY-1");
-}
-
+function invalid(): never { throw new Error("M1-CITY-1"); }
 function ownEnumerableDataRecord(value: unknown, exactKeys: readonly string[]): DataRecord | undefined {
   try {
     if (typeof value !== "object" || value === null || Object.getPrototypeOf(value) !== Object.prototype) return undefined;
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    const keys = Reflect.ownKeys(descriptors);
-    if (keys.length !== exactKeys.length
-      || keys.some((key) => typeof key !== "string")
-      || exactKeys.some((key) => !Object.hasOwn(descriptors, key))) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value), keys = Reflect.ownKeys(descriptors);
+    if (keys.length !== exactKeys.length || keys.some(key => typeof key !== "string") || exactKeys.some(key => !Object.hasOwn(descriptors,key))) return undefined;
     const record: DataRecord = {};
-    for (const key of exactKeys) {
-      const descriptor = descriptors[key];
-      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return undefined;
-      record[key] = descriptor.value;
-    }
+    for (const key of exactKeys) { const descriptor=descriptors[key]; if(!descriptor || !("value" in descriptor) || !descriptor.enumerable) return undefined; record[key]=descriptor.value; }
     return record;
-  } catch {
-    return undefined;
-  }
+  } catch { return undefined; }
 }
-
-function nonnegativeSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function checkedAdd(left: number, right: number): number {
-  const result = left + right;
-  if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right) || !Number.isSafeInteger(result)) invalid();
-  return result;
-}
-
-function checkedMultiply(left: number, right: number): number {
-  const result = left * right;
-  if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right) || !Number.isSafeInteger(result)) invalid();
-  return result;
-}
-
-function exactFloatInteger(value: number): boolean {
-  return Number.isSafeInteger(value)
-    && value >= 0
-    && value < MAX_FLOAT_INTEGER
-    && Math.fround(value) === value;
-}
-
-function requireExactFloatInteger(value: number): number {
-  if (!exactFloatInteger(value)) invalid();
-  return value;
-}
-
-function exactTargetRelative(value: number): boolean {
-  return Number.isFinite(value)
-    && Math.abs(value) < MAX_TARGET_RELATIVE
-    && Math.fround(value) === value;
-}
-
-function paletteIndex(complexity: number): number {
-  if (complexity === 0) return 0;
-  if (complexity === 1) return 1;
-  if (complexity <= 3) return 2;
-  if (complexity <= 7) return 3;
-  if (complexity <= 15) return 4;
-  return 5;
-}
-
-export function paletteForComplexity(complexity: number): typeof PALETTE[number] {
-  return PALETTE[paletteIndex(complexity)]!;
-}
-
-export function paletteBandForComplexity(complexity: number): typeof COMPLEXITY_PALETTE_LEGEND[number] {
-  return COMPLEXITY_PALETTE_LEGEND[paletteIndex(complexity)]!;
-}
-
+function nonnegativeSafeInteger(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
+function paletteIndex(complexity: number): number { return complexity===0?0:complexity===1?1:complexity<=3?2:complexity<=7?3:complexity<=15?4:5; }
+export function paletteForComplexity(complexity: number): typeof PALETTE[number] { return PALETTE[paletteIndex(complexity)]!; }
+export function paletteBandForComplexity(complexity: number): typeof COMPLEXITY_PALETTE_LEGEND[number] { return COMPLEXITY_PALETTE_LEGEND[paletteIndex(complexity)]!; }
 export function displayedHeight(sourceLines: number): number {
   if (!nonnegativeSafeInteger(sourceLines)) invalid();
-  const capped = Math.min(sourceLines, 1000);
-  const ratio = capped / 1000;
-  const root = Math.sqrt(ratio);
-  const scaled = 36 * root;
-  const rounded = Math.floor(scaled + 0.5);
-  return 4 + rounded;
+  return 4 + Math.floor(36 * Math.sqrt(Math.min(sourceLines, 1000) / 1000) + 0.5);
 }
-
 export function displayedSide(executableUnits: number): number {
   if (!nonnegativeSafeInteger(executableUnits)) invalid();
-  const ratio = Math.log1p(Math.min(executableUnits, 100)) / Math.log(101);
-  return 3 + Math.floor(15 * ratio ** 1.5 + 0.5);
+  return 3 + Math.floor(15 * (Math.log1p(Math.min(executableUnits, 100)) / Math.log(101)) ** 1.5 + 0.5);
 }
-
-type TaggedGroup = Readonly<{ root: boolean; identity: string }>;
-type PackedBuilding = Readonly<{ index: number; side: number; x: number; z: number }>;
-type PackedGroup = Readonly<{
-  group: TaggedGroup;
-  buildings: readonly PackedBuilding[];
-  width: number;
-  depth: number;
-}>;
-
-function taggedGroup(canonicalPath: string): TaggedGroup {
-  const segments = canonicalPath.split("/");
-  segments.pop();
-  if (segments.length === 0) return { root: true, identity: "_root" };
-  return { root: false, identity: segments.slice(0, 2).join("/") };
-}
-
-function compareGroups(left: TaggedGroup, right: TaggedGroup): number {
-  const compared = compareUnsignedUtf8(left.identity, right.identity);
-  return compared !== 0 ? compared : left.root === right.root ? 0 : left.root ? -1 : 1;
-}
-
-function packFacts(facts: readonly FactSnapshot[], sides: readonly number[]): {
-  origins: readonly number[];
-  maximumX: number;
-  maximumZ: number;
-} {
-  const groups = new Map<string, { group: TaggedGroup; indices: number[] }>();
-  for (let index = 0; index < facts.length; index += 1) {
-    const group = taggedGroup(facts[index]!.canonicalPath);
-    const key = `${group.root ? "root" : "directory"}:${group.identity}`;
-    const entry = groups.get(key) ?? { group, indices: [] };
-    entry.indices.push(index);
-    groups.set(key, entry);
-  }
-
-  const packedGroups: PackedGroup[] = [];
-  for (const entry of groups.values()) {
-    entry.indices.sort((left, right) => sides[right]! - sides[left]!
-      || compareUnsignedUtf8(facts[left]!.canonicalPath, facts[right]!.canonicalPath));
-    let area = 0;
-    let maximumSide = 0;
-    for (const index of entry.indices) {
-      const side = sides[index]!;
-      area = checkedAdd(area, checkedMultiply(checkedAdd(side, BUILDING_GAP), checkedAdd(side, BUILDING_GAP)));
-      maximumSide = Math.max(maximumSide, side);
-    }
-    const target = Math.max(maximumSide, Math.ceil(Math.sqrt(area)));
-    const buildings: PackedBuilding[] = [];
-    let cursorX = 0;
-    let cursorZ = 0;
-    let rowDepth = 0;
-    let occupiedWidth = 0;
-    let occupiedDepth = 0;
-    for (const index of entry.indices) {
-      const side = sides[index]!;
-      if (cursorX !== 0 && checkedAdd(cursorX, side) > target) {
-        cursorX = 0;
-        cursorZ = checkedAdd(cursorZ, checkedAdd(rowDepth, BUILDING_GAP));
-        rowDepth = 0;
-      }
-      buildings.push({ index, side, x: checkedAdd(cursorX, GROUP_PADDING), z: checkedAdd(cursorZ, GROUP_PADDING) });
-      occupiedWidth = Math.max(occupiedWidth, checkedAdd(cursorX, side));
-      occupiedDepth = Math.max(occupiedDepth, checkedAdd(cursorZ, side));
-      cursorX = checkedAdd(cursorX, checkedAdd(side, BUILDING_GAP));
-      rowDepth = Math.max(rowDepth, side);
-    }
-    packedGroups.push({
-      group: entry.group,
-      buildings,
-      width: checkedAdd(occupiedWidth, GROUP_PADDING * 2),
-      depth: checkedAdd(occupiedDepth, GROUP_PADDING * 2),
-    });
-  }
-
-  packedGroups.sort((left, right) => checkedMultiply(right.width, right.depth) - checkedMultiply(left.width, left.depth)
-    || compareGroups(left.group, right.group));
-  let outerArea = 0;
-  let maximumCellWidth = 0;
-  for (const group of packedGroups) {
-    outerArea = checkedAdd(outerArea, checkedMultiply(checkedAdd(group.width, GROUP_GAP), checkedAdd(group.depth, GROUP_GAP)));
-    maximumCellWidth = Math.max(maximumCellWidth, group.width);
-  }
-  const outerTarget = Math.max(maximumCellWidth, Math.ceil(Math.sqrt(outerArea)));
-  const rawOrigins = new Array<number>(facts.length * 2).fill(0);
-  let cursorX = 0;
-  let cursorZ = 0;
-  let rowDepth = 0;
-  let minimumX = Number.POSITIVE_INFINITY;
-  let minimumZ = Number.POSITIVE_INFINITY;
-  for (const group of packedGroups) {
-    if (cursorX !== 0 && checkedAdd(cursorX, group.width) > outerTarget) {
-      cursorX = 0;
-      cursorZ = checkedAdd(cursorZ, checkedAdd(rowDepth, GROUP_GAP));
-      rowDepth = 0;
-    }
-    for (const building of group.buildings) {
-      const x = checkedAdd(cursorX, building.x);
-      const z = checkedAdd(cursorZ, building.z);
-      rawOrigins[building.index * 2] = x;
-      rawOrigins[building.index * 2 + 1] = z;
-      minimumX = Math.min(minimumX, x);
-      minimumZ = Math.min(minimumZ, z);
-    }
-    cursorX = checkedAdd(cursorX, checkedAdd(group.width, GROUP_GAP));
-    rowDepth = Math.max(rowDepth, group.depth);
-  }
-
-  let maximumX = 0;
-  let maximumZ = 0;
-  for (let index = 0; index < facts.length; index += 1) {
-    const x = rawOrigins[index * 2]! - minimumX;
-    const z = rawOrigins[index * 2 + 1]! - minimumZ;
-    rawOrigins[index * 2] = requireExactFloatInteger(x);
-    rawOrigins[index * 2 + 1] = requireExactFloatInteger(z);
-    maximumX = Math.max(maximumX, checkedAdd(x, sides[index]!));
-    maximumZ = Math.max(maximumZ, checkedAdd(z, sides[index]!));
-  }
-  return { origins: rawOrigins, maximumX, maximumZ };
-}
-
 function snapshotFacts(value: unknown): FactSnapshot[] {
   try {
     if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) invalid();
-    const descriptors = Object.getOwnPropertyDescriptors(value) as unknown as Record<PropertyKey, PropertyDescriptor>;
-    const lengthDescriptor = descriptors.length;
-    if (!lengthDescriptor || !("value" in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value)) invalid();
-    const length = lengthDescriptor.value as number;
-    if (length < 1 || length > MAX_ADMITTED_MODULES || Reflect.ownKeys(descriptors).length !== length + 1) invalid();
-
-    const facts: FactSnapshot[] = [];
-    const identities = new Set<string>();
-    for (let index = 0; index < length; index += 1) {
-      const element = descriptors[String(index)];
-      if (!element || !("value" in element) || !element.enumerable) invalid();
-      const record = ownEnumerableDataRecord(element.value, FACT_KEYS);
-      if (!record
-        || typeof record.canonicalPath !== "string"
-        || !isCanonicalSourcePath(record.canonicalPath)
-        || !nonnegativeSafeInteger(record.S)
-        || !nonnegativeSafeInteger(record.U)
-        || !nonnegativeSafeInteger(record.M)
-        || identities.has(record.canonicalPath)) invalid();
-      identities.add(record.canonicalPath);
-      facts.push({ canonicalPath: record.canonicalPath, S: record.S, U: record.U, M: record.M });
+    const descriptors=Object.getOwnPropertyDescriptors(value) as unknown as Record<PropertyKey,PropertyDescriptor>, lengthDescriptor=descriptors.length;
+    if(!lengthDescriptor || !("value" in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value)) invalid();
+    const length=lengthDescriptor.value as number;
+    if(length<1 || length>MAX_ADMITTED_MODULES || Reflect.ownKeys(descriptors).length!==length+1) invalid();
+    const facts: FactSnapshot[]=[], identities=new Set<string>();
+    for(let index=0;index<length;index++) {
+      const element=descriptors[String(index)]; if(!element || !("value" in element) || !element.enumerable) invalid();
+      const record=ownEnumerableDataRecord(element.value,FACT_KEYS);
+      if(!record || typeof record.canonicalPath!=="string" || !isCanonicalSourcePath(record.canonicalPath) || !nonnegativeSafeInteger(record.S) || !nonnegativeSafeInteger(record.U) || !nonnegativeSafeInteger(record.M) || identities.has(record.canonicalPath)) invalid();
+      identities.add(record.canonicalPath);facts.push({canonicalPath:record.canonicalPath,S:record.S,U:record.U,M:record.M});
     }
-    facts.sort((left, right) => compareUnsignedUtf8(left.canonicalPath, right.canonicalPath));
-    return facts;
-  } catch (error) {
-    if (error instanceof Error && error.message === "M1-CITY-1") throw error;
-    invalid();
-  }
+    facts.sort((a,b)=>compareUnsignedUtf8(a.canonicalPath,b.canonicalPath));return facts;
+  } catch { return invalid(); }
 }
 
 export function buildCity(input: readonly ModuleComplexityFact[]): City {
-  const facts = snapshotFacts(input);
-  const count = facts.length;
-  const vectorLength = checkedMultiply(count, 3);
-  const colourLength = checkedMultiply(count, 4);
-  let origins: Float32Array | undefined;
-  let sizes: Float32Array | undefined;
-  let rgba: Uint8Array | undefined;
-  let bounds: Float32Array | undefined;
-
+  const facts=snapshotFacts(input), count=facts.length;
+  let origins: Float32Array|undefined,sizes: Float32Array|undefined,rgba: Uint8Array|undefined,bounds: Float32Array|undefined;
   try {
-    origins = new Float32Array(vectorLength);
-    sizes = new Float32Array(vectorLength);
-    rgba = new Uint8Array(colourLength);
-    bounds = new Float32Array(6);
-    const sideValues = new Array<number>(count);
-    let maximumY = 0;
-    for (let index = 0; index < count; index += 1) {
-      const fact = facts[index]!;
-      const side = requireExactFloatInteger(displayedSide(fact.U));
-      const height = requireExactFloatInteger(displayedHeight(fact.S));
-      sideValues[index] = side;
-      const offset = index * 3;
-      sizes[offset] = side;
-      sizes[offset + 1] = height;
-      sizes[offset + 2] = side;
-      maximumY = Math.max(maximumY, height);
-      rgba.set(paletteForComplexity(fact.M), index * 4);
-    }
-
-    const placement = packFacts(facts, sideValues);
-    for (let index = 0; index < count; index += 1) {
-      const offset = index * 3;
-      origins[offset] = placement.origins[index * 2]!;
-      origins[offset + 1] = 0;
-      origins[offset + 2] = placement.origins[index * 2 + 1]!;
-    }
-    bounds.set([0, 0, 0, placement.maximumX, maximumY, placement.maximumZ]);
-
-    const geometry: PresentationModel = Object.freeze({ kind: PRESENTATION_KIND, count, origins, sizes, rgba, bounds });
-    const inspection = Object.freeze(facts.map((fact) => Object.freeze({ ...fact })));
-    return Object.freeze({ geometry, inspection });
-  } catch (error) {
-    origins?.fill(0);
-    sizes?.fill(0);
-    rgba?.fill(0);
-    bounds?.fill(0);
-    facts.length = 0;
-    if (error instanceof Error && error.message === "M1-CITY-1") throw error;
-    invalid();
-  }
+    sizes=new Float32Array(count*3);rgba=new Uint8Array(count*4);
+    const files=facts.map((fact,index)=>{const side=displayedSide(fact.U),height=displayedHeight(fact.S);sizes!.set([side,height,side],index*3);rgba!.set(paletteForComplexity(fact.M),index*4);return {canonicalPath:fact.canonicalPath,side,height};});
+    const plan=planRecursiveLayout(files);origins=Float32Array.from(plan.origins);bounds=Float32Array.from(plan.bounds);
+    for(let index=0;index<plan.origins.length;index++) if(!Number.isFinite(plan.origins[index]) || Math.abs(plan.origins[index]!)>=MAX_FLOAT_INTEGER || origins[index]!==plan.origins[index]) invalid();
+    for(let index=0;index<plan.bounds.length;index++) if(!Number.isFinite(plan.bounds[index]) || Math.abs(plan.bounds[index]!)>=MAX_FLOAT_INTEGER || bounds[index]!==plan.bounds[index]) invalid();
+    const centre=[0,1,2].map(axis=>plan.sceneBounds[axis]!+(plan.sceneBounds[axis+3]!-plan.sceneBounds[axis]!)/2);
+    const exactBox=(minimum:readonly number[],dimensions:readonly number[])=>{for(let axis=0;axis<3;axis++)for(const point of [minimum[axis]!,minimum[axis]!+dimensions[axis]!]) { const relative=point-centre[axis]!;if(!Number.isFinite(relative)||Math.abs(relative)>=MAX_TARGET_RELATIVE||Math.fround(relative)!==relative) invalid(); }};
+    for(let index=0;index<count;index++)exactBox(plan.origins.slice(index*3,index*3+3),[files[index]!.side,files[index]!.height,files[index]!.side]);
+    for(const plate of plan.plates)exactBox(plate.minimum,plate.dimensions);
+    const geometry:PresentationModel=Object.freeze({kind:PRESENTATION_KIND,count,origins,sizes,rgba,bounds});
+    return Object.freeze({geometry,inspection:Object.freeze(facts.map(fact=>Object.freeze({...fact})))});
+  } catch(error) {origins?.fill(0);sizes?.fill(0);rgba?.fill(0);bounds?.fill(0);facts.length=0;if(error instanceof Error&&error.message==="M1-CITY-1")throw error;invalid();}
 }

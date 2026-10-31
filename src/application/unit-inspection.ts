@@ -1,4 +1,4 @@
-import { createSourceColoring, SYNTAX_PALETTE, type SourceColoring, type SyntaxSpan } from "./source-highlighting";
+import { unavailableSourceColoring, SYNTAX_PALETTE, type SourceColoring, type SourceColoringProvider, type SyntaxSpan } from "./source-highlighting";
 import { DECISION_KINDS, EXPLICIT_UNIT_FORMS } from "../domain/base-metrics";
 import { isCanonicalSourcePath, MAX_NORMALIZED_MODULE_BYTES } from "../domain/source-admission";
 
@@ -81,7 +81,7 @@ export function parseInspectionResult(value: unknown, query: InspectionQuery): I
 }
 
 /** Presentation indexing of retained facts, never parsing or metric computation. */
-export function createFileInspection(path: string, bytes: Uint8Array, evidence: InspectionEvidence, colorSource: typeof createSourceColoring = createSourceColoring) {
+export function createFileInspection(path: string, bytes: Uint8Array, evidence: InspectionEvidence, colorSource: SourceColoringProvider = unavailableSourceColoring) {
   requireValue(isCanonicalSourcePath(path) && bytes.length <= MAX_NORMALIZED_MODULE_BYTES);
   const normalizedText = decoder.decode(bytes); // Decode retained text; do not parse or analyze it.
   let coloring: Promise<SourceColoring | undefined> | undefined;

@@ -1,3 +1,4 @@
+import { PRESENTATION_KIND } from "../domain/city-model";
 import type { InspectionQuery, InspectionResult } from "../application/unit-inspection";
 import type { SavedRecord } from "../application/saved-investigation";
 import { validateCityPayload, type ValidatedCity } from "../application/city-payload";
@@ -215,7 +216,7 @@ export function parseBrowserCity(value: unknown): ValidatedCity | undefined {
   try {
     const city = exactRecord(value, ["geometry", "inspection", "presentation", "districts"]);
     const geometry = city && exactRecord(city.geometry, ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
-    if (!geometry || geometry.kind !== "CODE_CITY_PRESENTATION" || !Number.isSafeInteger(geometry.count) || (geometry.count as number) < 1) return undefined;
+    if (!geometry || geometry.kind !== PRESENTATION_KIND || !Number.isSafeInteger(geometry.count) || (geometry.count as number) < 1) return undefined;
     const count = geometry.count as number;
     const origins = exactFloat32Array(geometry.origins, count * 3);
     const sizes = exactFloat32Array(geometry.sizes, count * 3);

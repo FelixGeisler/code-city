@@ -99,7 +99,7 @@ export function createInvestigationCapture() {
           outcome: fact ? "success" : failures.get(path)!, fact: fact ?? null, units: captured?.units.map(unit => unit[0] === "top-level" ? [unit[0], 0, norm!.length, unit[3], unit[4]] : unit) ?? [], contributions: captured?.contributions ?? [] });
         sections.push(source.bytes); if (norm) sections.push(norm);
       }
-      const header: SavedHeader = { version: 1, analyzer, repositoryUrl, revision, exclusions: [...exclusions], fixedExcludedSegments: [...FIXED_EXCLUDED_SEGMENTS], hierarchy: [...hierarchy].sort(compareUnsignedUtf8), files, city: cityForSnapshot(result.city) };
+      const header: SavedHeader = { version: 2, analyzer, repositoryUrl, revision, exclusions: [...exclusions], fixedExcludedSegments: [...FIXED_EXCLUDED_SEGMENTS], hierarchy: [...hierarchy].sort(compareUnsignedUtf8), files, city: cityForSnapshot(result.city) };
       validateSavedHeader(header);
       const encoded = new TextEncoder().encode(JSON.stringify(header));
       const blob = new Blob([snapshotPrefix(encoded).buffer, encoded.buffer, ...sections.map(bytes => bytes.slice().buffer)], { type: "application/octet-stream" });

@@ -74,7 +74,7 @@ async function buildBrowser(artifactRoot) {
   await viteBuild({
     root: projectRoot,
     configFile: false,
-    define: { __CODE_CITY_ANALYZER__: JSON.stringify(await analyzerIdentity()) },
+    define: { __CODE_CITY_ANALYZER__: JSON.stringify(await analyzerIdentity()), "process.env.VSCODE_TEXTMATE_DEBUG": "undefined" },
     publicDir: false,
     logLevel: "silent",
     base: "/",
@@ -97,7 +97,7 @@ async function buildBrowser(artifactRoot) {
   await writeFile(path.join(publicRoot, "index.html"), packageStandaloneBrowserHtml(template), "utf8");
   await writeFile(
     path.join(publicRoot, "browser.css"),
-    (await readFile(path.join(projectRoot, "src", "edge", "standalone-browser-shell.css"), "utf8")).replaceAll("\r\n", "\n"),
+    (await readFile(path.join(projectRoot, "src", "edge", "standalone-browser-shell.css"), "utf8") + "\n" + await readFile(path.join(projectRoot, "src", "edge", "source-theme.css"), "utf8")).replaceAll("\r\n", "\n"),
     "utf8",
   );
 }

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
-const { createSourceColoring, SYNTAX_PALETTE } = await import('../src/application/source-highlighting.ts');
+import { registerHooks } from 'node:module';
+registerHooks({resolve(specifier,context,nextResolve){return nextResolve(/^\.\.?\//u.test(specifier)&&!/\.[a-z]+$/iu.test(specifier)?specifier+'.ts':specifier,context);}});
+const { createSourceColoring, SYNTAX_PALETTE } = await import('../src/edge/shiki-source-highlighting.ts');
 async function spans(path, text) {
   const rows = (await createSourceColoring(path, text))(0, text.length);
   let end = 0;

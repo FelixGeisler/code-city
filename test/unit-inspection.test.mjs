@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';import test from 'node:test';import{registerHooks}from'node:module';import{createHash}from'node:crypto';
 registerHooks({resolve(specifier,context,nextResolve){return nextResolve(/^\.\.?\//u.test(specifier)&&!/\.[a-z]+$/iu.test(specifier)?specifier+'.ts':specifier,context);}});
-const{createFileInspection,parseInspectionResult,validateInspectionQuery,SOURCE_PAGE_BYTES}=await import('../src/application/unit-inspection.ts');
+const{createFileInspection:makeInspection,parseInspectionResult,validateInspectionQuery,SOURCE_PAGE_BYTES}=await import('../src/application/unit-inspection.ts');
+const{createSourceColoring}=await import('../src/edge/shiki-source-highlighting.ts');
+const createFileInspection=(path,bytes,evidence,color=createSourceColoring)=>makeInspection(path,bytes,evidence,color);
 const{createInvestigationCapture}=await import('../src/application/investigation-capture.ts');
 const{analyzeProjectSources}=await import('../src/application/project-analysis.ts');
 const{createNodeTreeSitterAdapter}=await import('../src/edge/node/parser-assets.ts');
@@ -105,6 +107,6 @@ test('concurrent source reads share initialization and retain separate source id
  const read=createFileInspection(path,bytes,{units:{length:2,at:id=>({kind:id?'function':'top-level',startByte:id?3:0,endByte:bytes.length,complexity:1})},contributionCount:0,contributions:()=>[]},()=>{calls++;return pending.promise;});
  const first=read({type:'source',path,unit:0,cursor:null}),second=read({type:'source',path,unit:1,cursor:null});
  await Promise.resolve();assert.equal(calls,1);
- const{createSourceColoring}=await import('../src/application/source-highlighting.ts');pending.resolve(await createSourceColoring(path,source));
+ pending.resolve(await createSourceColoring(path,source));
  const[a,b]=await Promise.all([first,second]);assert.equal(a.unit,0);assert.equal(b.unit,1);assert.equal(a.text,source);assert.equal(b.text,source.slice(3));assert.equal(b.syntax[0].color,1);
 });

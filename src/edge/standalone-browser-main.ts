@@ -1,3 +1,4 @@
+import "./source-theme.css";
 import {
   createStandaloneBrowserController,
   type BrowserFailedFile,
