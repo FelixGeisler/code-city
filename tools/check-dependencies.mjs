@@ -28,11 +28,12 @@ export async function inspectDependencyClosure(rootDirectory) {
   invariant(packageManifest.engines?.npm === ">=11 <12", "Root npm engine changed");
   const expectedDependencies = {
     "@vscode/tree-sitter-wasm": "0.3.1",
+    "shiki": "4.5.0",
     "web-tree-sitter": "0.27.1",
   };
   invariant(
     JSON.stringify(packageManifest.dependencies) === JSON.stringify(expectedDependencies),
-    "Direct production dependencies do not match the accepted parser pins",
+    "Direct production dependencies do not match the accepted parser and highlighting pins",
   );
   for (const [name, version] of Object.entries(packageManifest.dependencies)) {
     invariant(isExactVersion(version), `Direct production dependency is not exact: ${name}@${version}`);
@@ -322,7 +323,7 @@ export async function inspectDependencyClosure(rootDirectory) {
     invariant(JSON.stringify(lock.packages[location]?.libc) === JSON.stringify([libc]), `${location} libc metadata changed`);
   }
   invariant(!Object.hasOwn(lock.packages["node_modules/progress"], "peer"), "progress peer metadata changed");
-  invariant(registryPackageCount === 214, "The lockfile package inventory changed");
+  invariant(registryPackageCount === 259, "The lockfile package inventory changed");
 
   const parserRuntime = lock.packages["node_modules/web-tree-sitter"];
   invariant(

@@ -403,7 +403,7 @@ export function projectDistricts(
   dimensionsValue: PositiveDimensions,
 ): DistrictProjectionResult {
   try {
-    if (!Array.isArray(cells) || cells.length < 1 || cells.length > MAX_PICK_INSTANCES) {
+    if (!Array.isArray(cells) || cells.length < 1) {
       throw new Error("Invalid district cells");
     }
     const cssWidth = dimensionsValue.width;
@@ -872,9 +872,9 @@ export function intersectRayAabb(rayValue: Ray, boundsValue: Bounds3): SlabResul
   }
 }
 
-export function pickNearest(ray: Ray, geometry: PickingGeometry): PickResult {
+function pickGeometry(ray: Ray, geometry: PickingGeometry, maximumCount: number): PickResult {
   try {
-    if (!Number.isSafeInteger(geometry.count) || geometry.count < 1 || geometry.count > MAX_PICK_INSTANCES
+    if (!Number.isSafeInteger(geometry.count) || geometry.count < 1 || geometry.count > maximumCount
       || geometry.origins.length !== geometry.count * 3 || geometry.sizes.length !== geometry.count * 3) {
       throw new Error("invalid picking geometry");
     }
@@ -901,6 +901,21 @@ export function pickNearest(ray: Ray, geometry: PickingGeometry): PickResult {
   } catch {
     return PRESENTATION_FAILURE;
   }
+}
+
+export function pickNearest(ray: Ray, geometry: PickingGeometry): PickResult {
+  return pickGeometry(ray, geometry, MAX_PICK_INSTANCES);
+}
+
+/** Platform count is bounded by validated directory evidence, not the file count. */
+export function pickDistrictAtCanvasPoint(
+  view: CameraView, clientX: number, clientY: number, rectangle: CanvasRectangle,
+  backing: PositiveDimensions, geometry: PickingGeometry,
+): PickResult {
+  const ray = createPerspectiveRay(view, clientX, clientY, rectangle, backing);
+  if (ray.kind === "failure") return ray;
+  if (ray.ray === null) return Object.freeze({ kind: "success", index: null, tEnter: null });
+  return pickGeometry(ray.ray, geometry, Number.MAX_SAFE_INTEGER);
 }
 
 export function pickAtCanvasPoint(

@@ -22,11 +22,11 @@ promise of original CRLF/BOM presentation.
 
 Source uses pinned Shiki 4.5.0 grammars for JS/JSX, TS/TSX and C#, selected only
 from the admitted file suffix, with one bundled `github-dark` theme and the
-JavaScript regex engine. Coloring keeps whole-file lexical context across unit
+standard Oniguruma regex engine, with its WASM bytes bundled in the worker. Coloring keeps whole-file lexical context across unit
 and page boundaries, including multiline comments, templates and interpolated
 strings. It is a reading aid, not semantic validation or type checking. No language
-detection, repository-controlled grammar or theme, CDN or extra WASM runtime is
-used. See xref:architecture:adr/0017-offline-shiki-source-highlighting.adoc[ADR 0017].
+detection, repository-controlled grammar or theme, CDN or runtime asset fetch is
+used. The existing WASM permission also covers the highlighting engine. See xref:architecture:adr/0017-offline-shiki-source-highlighting.adoc[ADR 0017].
 
 Owned contribution spans are highlighted with an underline as well as color;
 the underline remains distinct from syntax colors.

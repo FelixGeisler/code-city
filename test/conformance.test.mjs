@@ -309,7 +309,7 @@ test("exactly four strict no-emit TypeScript configs isolate main, worker, and i
   assert.equal(main.compilerOptions.strict, true);
   assert.equal(main.compilerOptions.noEmit, true);
   assert.equal(main.compilerOptions.isolatedModules, true);
-  assert.deepEqual(main.compilerOptions.lib, ["es2024", "dom", "dom.iterable"]);
+  assert.deepEqual(main.compilerOptions.lib, ["es2024", "esnext.disposable", "dom", "dom.iterable"]);
   assert.deepEqual(main.compilerOptions.types, ["vite/client"]);
   assert.deepEqual(main.files.map((file) => file.replaceAll("\\", "/")), [
     "./src/edge/main.ts",
@@ -326,7 +326,7 @@ test("exactly four strict no-emit TypeScript configs isolate main, worker, and i
   assert.equal(worker.compilerOptions.strict, true);
   assert.equal(worker.compilerOptions.noEmit, true);
   assert.equal(worker.compilerOptions.isolatedModules, true);
-  assert.deepEqual(worker.compilerOptions.lib, ["es2024", "webworker"]);
+  assert.deepEqual(worker.compilerOptions.lib, ["es2024", "esnext.disposable", "webworker"]);
   assert(!worker.compilerOptions.lib.includes("dom"));
   assert.deepEqual(worker.compilerOptions.types, []);
   assert.deepEqual(worker.files.map((file) => file.replaceAll("\\", "/")), ["./src/edge/processing-worker.ts", "./src/edge/browser-analysis-worker.ts"]);
@@ -335,7 +335,7 @@ test("exactly four strict no-emit TypeScript configs isolate main, worker, and i
   assert.equal(node.compilerOptions.strict, true);
   assert.equal(node.compilerOptions.noEmit, true);
   assert.equal(node.compilerOptions.isolatedModules, true);
-  assert.deepEqual(node.compilerOptions.lib, ["es2024"]);
+  assert.deepEqual(node.compilerOptions.lib, ["es2024", "esnext.disposable"]);
   assert.deepEqual(node.compilerOptions.types, ["node"]);
   assert(!node.compilerOptions.lib.includes("dom"));
   assert(!node.compilerOptions.lib.includes("webworker"));
@@ -387,12 +387,14 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "domain/camera-picking-policy.ts",
     "domain/city-model.ts",
     "domain/complexity.ts",
+    "domain/district-layout.ts",
     "domain/repository-reference.ts",
     "domain/source-admission.ts",
     "edge/browser-analysis-worker.ts",
     "edge/browser-saved-investigations.ts",
     "edge/browser-worker-transport.ts",
     "edge/city-presenter.ts",
+    "edge/district-inspection-view.ts",
     "edge/github-revision-gateway.ts",
     "edge/github-source-gateway.ts",
     "edge/main.ts",
@@ -415,6 +417,8 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/processing-worker.ts",
     "edge/semantic-publication.ts",
     "edge/shell.css",
+    "edge/shiki-source-highlighting.ts",
+    "edge/source-theme.css",
     "edge/standalone-browser-controller.ts",
     "edge/standalone-browser-main.ts",
     "edge/standalone-browser-shell.css",

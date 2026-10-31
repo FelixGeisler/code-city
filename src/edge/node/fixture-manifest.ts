@@ -55,6 +55,7 @@ function denseArray(value: unknown): asserts value is unknown[] {
 }
 
 function mediaTypeFor(filePath: string): string | undefined {
+  if (filePath === "server/licenses.json") return "application/json; charset=utf-8";
   if (filePath.endsWith(".html")) return "text/html; charset=utf-8";
   if (filePath.endsWith(".css")) return "text/css; charset=utf-8";
   if (filePath.endsWith(".js") || filePath.endsWith(".mjs")) return "text/javascript; charset=utf-8";

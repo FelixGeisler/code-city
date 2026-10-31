@@ -30,7 +30,7 @@ operator deployment, not the default loopback address.
 
 == Complete versioned snapshot
 
-The version-1 container retains:
+The version-2 container retains:
 
 * Repository URL and requested ref, selected full commit, additional and fixed
   exclusions, canonical hierarchy, and original provider paths.
@@ -50,7 +50,11 @@ verify a claimed build identity, or certify GitHub provenance. Hash consistency
 is not proof that a client actually used the claimed commit or analyzer.
 xref:unit-inspection.adoc[Unit Source Inspection] uses these retained facts in
 fresh and reopened investigations. Portable import/export remains outside the
-current slice. The version-1 format is unchanged.
+current slice. Recursive geometry uses a new explicit identifier. Only version 2
+is supported: the user waived pre-production compatibility. Older formats fail
+explicitly; no migration, implicit re-layout or deletion occurs. See
+xref:recursive-districts.adoc[Recursive Districts] and
+xref:architecture:adr/0018-recursive-district-presentation.adoc[ADR 0018].
 
 == Operation and limits
 

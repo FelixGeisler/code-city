@@ -9,7 +9,7 @@
 |Dense inspection data |Retained units/observations add client memory; dense files can have many units/contributions. |Packed retention, one-file presentation indexing, bounded complete paging and no physical-memory/latency promise.
 |Unsaved loss |Reload or worker loss loses unsaved source. |Explicit Save is required; there is no automatic saving.
 |Saved disk and anonymity |Full storage, interrupted writes or hostile uploads can deny writes. |Bounded isolated validation, independent reads/static routes, stopped-host operator recovery; no per-person quota or universal DoS guarantee.
-|Shallow grouping |Current layout uses the existing grouping, not the full recursive target. |Deterministic current layout; no claim of recursive completion.
+|Hierarchy and coloring resources |Directory count can exceed file count; grammar coloring adds client CPU/memory. |Iterative hierarchy, bounded UI pages, separate platform/building counts, lazy bundled Shiki and local plain-source failure behavior; no universal hardware SLA.
 |===
 
 Browser acquisition/analysis, successful-file inventory, actual phase progress,
@@ -19,7 +19,9 @@ remain regression references only.
 
 Immutable Save, repository/ref picker and restart-persistent URL reopen are
 implemented, including explicit unit/source/contribution inspection. Remaining
-work includes recursive presentation, portable interchange, and wider deployment
-qualification. No login or server metric
+work includes portable interchange and wider deployment qualification. Recursive
+district platforms and hierarchical inspection are implemented. The single new
+snapshot format deliberately rejects older pre-production formats without rewriting
+or deleting stored files. No login or server metric
 certification is required. Anonymous operation controls are not a guarantee
 against arbitrary network denial of service.

@@ -15,13 +15,16 @@ complexity contributions distinct from syntax colors.
 * Extend the custom scanner: small dependency footprint, but incomplete grammar
   coverage and ongoing language-maintenance work.
 * highlight.js or Prism: viable alternatives, but not the user's selected library.
-* Shiki with Oniguruma WASM: adds another WASM runtime and asset/security surface.
-* Shiki's JavaScript regex engine with bundled grammars: uses the selected grammar
-  system without another WASM runtime or a CDN dependency.
+* Shiki's JavaScript regex engine avoids another WASM engine, but qualification
+  stalled on valid large single-line comments. It is not selected.
+* Shiki with bundled Oniguruma WASM uses the standard grammar engine under the
+  application's existing WASM permission, without fetching another runtime URL.
 
 == Decision
 
-Use pinned Shiki with its JavaScript regex engine in the existing browser worker.
+Use pinned Shiki with its standard Oniguruma regex engine in the existing browser
+worker. Bundle its WASM bytes in that worker, instantiated lazily on source opening;
+do not fetch a WASM URL or change CSP permissions.
 Bundle JS, JSX, TS, TSX and C# grammars, required embedded-language dependencies,
 and one dark theme. Select the language from the admitted suffix; do not detect
 languages automatically or load repository-controlled grammars, URLs or themes.
@@ -40,7 +43,11 @@ and latency are not universally guaranteed.
 
 == Consequences
 
-Adds pinned runtime dependencies and a larger worker. Qualify grammar/engine
+Adds pinned runtime dependencies and a larger worker, including inline Oniguruma
+WASM. The JavaScript engine's valid-comment stalls motivated the standard engine;
+local controlled 100,000- and near-2-MiB-comment checks completed with exact text
+using Oniguruma. This is evidence for the engine choice, not a universal timing
+promise. Qualify grammar/engine
 compatibility, long and adversarial text, context continuity, source safety,
 reproducibility, CSP and packaged asset closure. No provider call, metric
 recomputation, account, source execution or server analysis route is introduced.

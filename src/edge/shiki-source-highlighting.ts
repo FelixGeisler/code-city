@@ -1,6 +1,6 @@
-/// <reference lib="esnext.disposable" />
 import { createHighlighterCore } from "shiki/core";
-import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import { createOnigurumaEngine } from "shiki/engine/oniguruma";
+import getWasm from "shiki/wasm";
 import javascript from "shiki/langs/javascript.mjs";
 import jsx from "shiki/langs/jsx.mjs";
 import typescript from "shiki/langs/typescript.mjs";
@@ -16,7 +16,7 @@ function initialize() {
   // Cache rejection too: a coloring failure must not cause automatic initialization retries.
   return highlighter ??= createHighlighterCore({
     langs: [javascript, jsx, typescript, tsx, csharp], themes: [githubDark],
-    engine: createJavaScriptRegexEngine({ forgiving: false }),
+    engine: createOnigurumaEngine(getWasm),
   });
 }
 function language(path: string): string {

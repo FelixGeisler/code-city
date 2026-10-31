@@ -19,9 +19,10 @@ function reader(source,units,contributions=[]){return createFileInspection('file
 test('file selection lists units without opening source, then renders inert read-only source and textual owned locations',async()=>{
  const source=`if (x) '<img src=x onerror=alert(1)>';\n`,host=new Element('section'),calls=[];
  const read=reader(source,[{kind:'top-level',startByte:0,endByte:source.length,complexity:2}],[[0,'if',0,source.length-1]]);
- const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);return read(query);});await flush();
+ const sourceReply=Promise.withResolvers();
+ const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);const result=await read(query);if(query.type==='source')sourceReply.resolve();return result;});await flush();
  assert.deepEqual(calls.map(row=>row.type),['units']);assert.equal(data(host,'unitSource').open,false);
- const open=all(host,node=>Object.hasOwn(node.dataset,'unit'))[0];open.click();await flush();
+ const open=all(host,node=>Object.hasOwn(node.dataset,'unit'))[0];open.click();await sourceReply.promise;await flush();
  assert.equal(data(host,'unitSource').open,true);assert.ok(data(host,'sourceCode').textContent.includes('<img src=x onerror=alert(1)>'));
  assert.equal(all(host,node=>node.tagName==='IMG'||node.tagName==='SCRIPT').length,0);assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,1);
  data(host,'unitSource').dispatchEvent(new Event('close'));assert.ok(data(host,'sourceCode').children.length>0,'a queued prior close event must not clear a reopened dialog');

@@ -8,7 +8,7 @@ import path from 'node:path';import os from 'node:os';
 import test,{after} from 'node:test';
 import {buildStandaloneArtifact} from '../tools/build-standalone.mjs';
 import {launchStandalone,readyOrigin,writeSignalPreload,sendGracefulSignal,expectCleanExit,terminateForCleanup,request} from '../tools/standalone-check-support.mjs';
-registerHooks({resolve(specifier,context,nextResolve){return nextResolve(/^\.\.?\//u.test(specifier)&&!/\.[a-z]+$/iu.test(specifier)?`${specifier}.ts`:specifier,context);}});
+registerHooks({resolve(specifier,context,nextResolve){return nextResolve(context.parentURL?.endsWith('.ts')&&/^\.\.?\//u.test(specifier)&&!/\.[a-z]+$/iu.test(specifier)?`${specifier}.ts`:specifier,context);}});
 const {createInvestigationCapture}=await import('../src/application/investigation-capture.ts');
 const {acquireProjectSources}=await import('../src/application/source-retrieval.ts');
 const {analyzeProjectSources}=await import('../src/application/project-analysis.ts');
@@ -71,7 +71,7 @@ test('snapshot format rejects damaged source, truncation, unknown versions, extr
  const damaged=Buffer.from(bytes);damaged[damaged.length-1]^=1;await assert.rejects(()=>decodeSnapshot(damaged));
  await assert.rejects(()=>decodeSnapshot(bytes.subarray(0,-1)));
  const decoded=await decodeSnapshot(bytes);
- for(const change of [header=>{header.version=2;},header=>{header.extra=true;},header=>{header.files[0].path='../invalid.js';},header=>{header.files[1].contributions[0][0]=999;},header=>{header.hierarchy=[];},header=>{header.fixedExcludedSegments=[];}]){
+ for(const change of [header=>{header.version=1;},header=>{header.version=999;},header=>{header.extra=true;},header=>{header.files[0].path='../invalid.js';},header=>{header.files[1].contributions[0][0]=999;},header=>{header.hierarchy=[];},header=>{header.fixedExcludedSegments=[];}]){
   const header=structuredClone(decoded.header);change(header);assert.throws(()=>validateSavedHeader(header));
  }
  assert.throws(()=>snapshotPrefix(new Uint8Array(SAVE_LIMITS.header+1)));

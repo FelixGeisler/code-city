@@ -88,3 +88,10 @@ test('unsupported languages reject explicitly; palette CSS matches every vetted 
   for (const [index, color] of SYNTAX_PALETTE.entries()) assert.ok(css.includes(`[data-syntax-color="${index}"] { color: ${color.toLowerCase()}; }`));
   assert.ok(!css.includes('text-decoration:'));
 });
+test('standard bundled engine colors a valid near-2-MiB single-line comment without skipping its grammar context', async () => {
+  const text='/*'+'x'.repeat(2_097_152-32)+'*/\nconst choose = x => x;';
+  const color=await createSourceColoring('maximum.js',text);
+  assert.deepEqual(color(0,8192),[{color:1,start:0,end:8192}]);
+  const tail=text.indexOf('const choose');
+  assert.ok(color(tail,text.length).some(token=>token.color===5&&text.slice(tail+token.start,tail+token.end).includes('const')));
+});

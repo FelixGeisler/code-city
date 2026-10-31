@@ -5,6 +5,7 @@ import {
   panCameraByKeyboard,
   panCameraByPointer,
   pickAtCanvasPoint,
+  pickDistrictAtCanvasPoint,
   projectDistricts,
   resetCamera,
   resizeCamera,
@@ -998,7 +999,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
             return;
           }
           if (session.districtPicking && session.eventSink!.districtActivation) {
-            const district = pickAtCanvasPoint(session.cameraView!, event.clientX, event.clientY,
+            const district = pickDistrictAtCanvasPoint(session.cameraView!, event.clientX, event.clientY,
               canvas.getBoundingClientRect(), { width: canvas.width, height: canvas.height }, session.districtPicking);
             if (district.kind === "failure") { failSession(session); return; }
             if (district.index !== null && (picked.tEnter === null || district.tEnter! < picked.tEnter)) {

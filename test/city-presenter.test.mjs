@@ -1523,22 +1523,22 @@ test("a current projection callback failure revokes the complete session and ret
   assert.equal(failures.length, 1);
 });
 
-test("the complete N=G=4,000 presentation uploads exactly 208,420 bytes and draws two 4,000-instance passes", () => {
+test("4,000 file buildings plus 4,001 recursive platforms stage and pick without a lower directory cap", () => {
   const facts = Array.from({ length: 4000 }, (_, index) => ({
     canonicalPath: `district-${String(index).padStart(4, "0")}/module.js`, S: index % 7, U: index % 5, M: index % 17,
   }));
   const city = validateCityPayload(buildCity(facts));
   const environment = fakeEnvironment({ width: 640, height: 480 });
   const { presenter } = failuresCollector(environment);
-  const staged = presenter.stage(4000, city.geometry, city.presentation, EMPTY_EVENT_SINK);
+  const staged = presenter.stage(4000, city.geometry, city.presentation, { ...EMPTY_EVENT_SINK, districtActivation() {} });
   assert.equal(staged.kind, "staged");
   assert.deepEqual(commitKind(presenter.commit(staged.token)), COMMITTED);
   const gl = environment.canvases[0].gl;
-  assert.equal(city.presentation.plates.length, 4000);
-  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 112000, 96000]);
-  assert.equal(gl.uploads.reduce((total, { byteLength }) => total + byteLength, 0), 208420);
+  assert.equal(city.presentation.plates.length, 4001);
+  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 112000, 96024]);
+  assert.equal(gl.uploads.reduce((total, { byteLength }) => total + byteLength, 0), 208444);
   assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").map((call) => call.slice(1)), [
-    [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 4000],
+    [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 4001],
     [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 4000],
   ]);
 });

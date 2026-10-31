@@ -7,7 +7,9 @@
 |Application |`analyzeRepository`, raw acquisition, project analysis |One execution-neutral sequence for revision selection, complete bounded acquisition, per-file continuation, measured progress, and city construction.
 |Browser worker edge |GitHub gateways, Tree-sitter adapter, production worker |Perform anonymous provider reads and parsing; retain source and analysis evidence locally; export explicit snapshots directly to the host; send presentation metadata and only explicitly requested bounded source excerpts to the UI.
 |Browser main edge |Local worker transport and standalone controller |Own workers and generations, abort/drain provider work, terminate parser work, validate events, suppress stale publication, and dispose on page exit.
-|Application |Unit inspection reader and source-coloring scanner |Index retained units, finalized values and recorded ownership; page locations, source windows, lexical color spans and highlight unions without parsing or recomputing metrics.
+|Application |Unit and district inspection |Index retained facts, exact descendant aggregates, locations, source pages and owned highlight unions. Validate bounded palette-indexed spans from the coloring adapter.
+|Browser worker edge |Shiki adapter |Color retained text with bundled grammars/theme and inline Oniguruma WASM; no HTML, acquisition or analysis-parser initialization.
+|Domain |Recursive district layout |Iterative deterministic nested platforms; preserve the existing file-dimension and color functions.
 |Presentation |Inventory, inspector, presenter |Filter/sort/select canonical file identities without moving the camera or reuploading geometry. Render paths and failures as inert text.
 |Saved-data application |Snapshot codec/capture |Versioned representation, evidence retention, bounds, references and presentation validation; no metric recomputation.
 |Node edge |Native host and investigation store |Stream owned staging writes, isolate validation, publish immutable directories and bound reads. No repository analysis/session runtime is mounted or packaged.
@@ -21,9 +23,9 @@ an idle page allocates no analysis worker and sends no command to the host.
 The current worker owns normalized source and facts; the UI receives validated
 city and failure/progress data. Unit inspection reads only selected bounded
 metadata/source over a revision/generation/request-tagged local channel; it
-adds no provider or server call. The display-only scanner runs lazily in that
+adds no provider or server call. The display-only Shiki adapter runs lazily in that
 worker against one retained file, preserving lexical context across source
-windows. Syntax kinds and scalar-aligned spans are validated at the UI boundary;
+windows. Palette indices and scalar-aligned spans are validated at the UI boundary;
 coloring uses inert nodes and fixed styles, not HTML from a highlighter.
 Only explicit Save uploads source/evidence;
 the file store is independent of local analysis.

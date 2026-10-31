@@ -39,9 +39,12 @@ Development output is `build/development/`. Browser analysis requires HTTPS or a
 - Keep unsaved sources/results in browser memory. Replacement, page exit, and worker loss release local ownership.
 - Idle tabs hold no server analysis session or source reservation; completed tabs do not compete for a server analysis worker.
 
-- Select a file's unit to inspect its read-only source, exact complexity, and owned branching contributions; no camera movement or reanalysis.
+- Browse nested directory platforms and drill from root/parent directories to ranked files and units without camera movement.
+- Inspect read-only unit source with offline Shiki syntax colors, exact complexity and owned branching contributions; no reanalysis.
 - Save an immutable investigation, copy its URL, and reopen after a host restart without GitHub acquisition or parsing.
 - Open saved investigations grouped by repository, with separate branch/release/commit entries.
+
+Only the new version-2 snapshot format is supported; older pre-production saves are not migrated or deleted, but no longer reopen.
 
 There is no login, automatic saving, saved-entry management UI, or server metric certification. Snapshots include source and analysis evidence, are shared with anyone reaching the host, and never expire automatically. Back up/delete them as described in [Saved Investigations](docs/modules/requirements/pages/saved-investigations.adoc).
 
