@@ -1252,7 +1252,12 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         session.hover = hover;
         if (selectionChanged || hoverChanged) {
           const size = dimensions(host);
-          draw(session as Session<unknown>, size, session.cameraView!);
+          // Host layout may change before ResizeObserver updates the bitmap and
+          // camera. Keep the latest visual state; that observer draws it at the
+          // new size. Never draw against an obsolete drawing buffer.
+          if (session.canvas!.width === size.width && session.canvas!.height === size.height) {
+            draw(session as Session<unknown>, size, session.cameraView!);
+          }
         }
         return APPLIED;
       } catch {

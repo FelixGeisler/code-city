@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { closeDialogAndWait } from "./browser-dialog-barrier.mjs";
 import { registerHooks } from "node:module";
 registerHooks({ resolve(specifier, context, nextResolve) { return nextResolve(/^\.\.?\//u.test(specifier) && !/\.[a-z]+$/iu.test(specifier) ? `${specifier}.ts` : specifier, context); } });
 const { resetCamera, pickAtCanvasPoint } = await import("../src/domain/camera-picking-policy.ts");
@@ -14,7 +15,7 @@ import { createBrowserProviderHarness, FIXTURE_REVISION } from "./standalone-bro
 
 const WATCHDOG_MS = 600_000;
 const REPOSITORY = "https://github.com/fixture/standalone";
-const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,units:document.querySelectorAll('[data-unit-rows] li').length,unitMessage:document.querySelector('[data-units] > [role=status]')?.textContent??'',sourceOpen:document.querySelector('[data-unit-source]')?.open??false,sourceReady:document.querySelectorAll('[data-source-code] [data-source-line]').length>0,contributions:document.querySelectorAll('[data-contribution-rows] li').length,saved:document.querySelector('[data-save]')?.textContent==='Copy link',saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,findOpen:document.querySelector('[data-analyzed]')?.open??null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
+const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,units:document.querySelectorAll('[data-unit-rows] li').length,unitMessage:document.querySelector('[data-units] > [role=status]')?.textContent??'',sourceOpen:document.querySelector('[data-unit-source]')?.open??false,sourceReady:document.querySelectorAll('[data-source-code] [data-source-line]').length>0,sourceMessage:document.querySelector('[data-source-body] [role=status]')?.textContent??'',contributionMessage:document.querySelector('[data-owned-contributions] [role=status]')?.textContent??'',contributions:document.querySelectorAll('[data-contribution-rows] li').length,saved:document.querySelector('[data-save]')?.textContent==='Copy link',saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,findOpen:document.querySelector('[data-analyzed]')?.open??null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
 const renderObservation = `(() => {
  window.__render={matrices:[],uploads:0,integers:{},frames:[],capturePixels:false,progress:[]};
  const progressIds=new WeakMap();let nextProgress=0;
@@ -94,9 +95,10 @@ export async function checkStandaloneBrowser() {
         if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
         return result.result.value;
       };
-      const wait = async predicate => evaluate(`new Promise(resolve=>{const read=()=>(${snapshotExpression});const ok=${predicate.toString()};let observer;const check=()=>{const value=read();if(ok(value)){observer?.disconnect();resolve(value);}};observer=new MutationObserver(check);observer.observe(document,{subtree:true,childList:true,attributes:true,characterData:true});check();})`);
+      const wait = async predicate => evaluate(`new Promise((resolve,reject)=>{const read=()=>(${snapshotExpression});const ok=${predicate.toString()};let observer;const check=()=>{const value=read();const error=value.status.startsWith('Presentation failed')?value.status:[value.unitMessage,value.sourceMessage,value.contributionMessage].find(text=>text.includes('unavailable'));if(error){observer?.disconnect();reject(new Error(error));return;}if(ok(value)){observer?.disconnect();resolve(value);}};observer=new MutationObserver(check);observer.observe(document,{subtree:true,childList:true,attributes:true,characterData:true});check();})`);
       const submit = (url = REPOSITORY, exclusions = "") => evaluate(`(()=>{const change=document.querySelector('[data-change-repository]');if(document.querySelector('form').hidden&&!change.disabled)change.click();document.querySelector('input[name=repository]').value=${JSON.stringify(url)};document.querySelector('textarea[name=additional-exclusions]').value=${JSON.stringify(exclusions)};document.querySelector('form').requestSubmit();return true;})()`);
       const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click();true`);
+      const closeSource = () => evaluate(`(${closeDialogAndWait.toString()})(document.querySelector('[data-unit-source]'),()=>document.querySelector('[data-close-source]').click())`);
       const loaded = Promise.withResolvers();
       const onLoad = message => { if (message.sessionId === sessionId && message.method === "Page.loadEventFired") loaded.resolve(); };
       cdp.listeners.add(onLoad);
@@ -105,7 +107,7 @@ export async function checkStandaloneBrowser() {
         await checked(loaded.promise);
       } finally { cdp.listeners.delete(onLoad); }
       await wait(s => s.ready === "complete");
-      const p = { targetId, sessionId, evaluate, wait, submit, click, snapshot: () => evaluate(snapshotExpression) };
+      const p = { targetId, sessionId, evaluate, wait, submit, click, closeSource, snapshot: () => evaluate(snapshotExpression) };
       pages.push(p);return p;
     }
     const p = await page();
@@ -311,7 +313,7 @@ export async function checkStandaloneBrowser() {
     await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent==='src/edge/a.js').click();true`);
     await p.wait(s=>s.units===2); await p.click('[data-unit-rows] button'); await p.wait(s=>s.sourceReady&&s.contributions===1);
     assert.ok(await p.evaluate(`document.querySelector('[data-source-code]').textContent.includes('function choose')`));
-    await p.click('[data-close-source]'); assert.equal(harness.requests.length,beforeSavedInspection,'saved inspection reacquired source');
+    await p.closeSource(); assert.equal(harness.requests.length,beforeSavedInspection,'saved inspection reacquired source');
 
     await run("mixed", s => s.canvases === 1 && s.analyzed === 5 && s.failed === 2);
     assert.equal((await p.snapshot()).failuresOpen, false);
@@ -400,28 +402,34 @@ export async function checkStandaloneBrowser() {
     const unitEvidence = await run('unit-evidence',s=>s.canvases===1&&s.analyzed===3);
     const beforeEvidenceRequests=harness.requests.length;
     async function chooseFile(path) { await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();true`); }
+    process.stdout.write('Browser evidence: unit-evidence parent unit\n');
     await chooseFile('a.js'); await p.wait(s=>s.units===3||s.unitMessage.includes('unavailable')); assert.equal((await p.snapshot()).units,3);
     assert.deepEqual(await p.evaluate(`[...document.querySelectorAll('[data-unit-complexity]')].map(row=>row.textContent)`),['Complexity 3','Complexity 2','Complexity 1']);
     await p.click('[data-unit-rows] button'); await p.wait(s=>s.sourceReady&&s.contributions===2);
     assert.equal(await p.evaluate(`document.querySelector('[data-contribution-rows]').textContent.includes('ternary')`),false,'nested contribution leaked into parent');
-    await p.click('[data-close-source]');
+    await p.closeSource();
+    process.stdout.write('Browser evidence: unit-evidence nested unit\n');
     await p.evaluate(`document.querySelectorAll('[data-unit-rows] button')[1].click();true`); await p.wait(s=>s.sourceReady&&s.contributions===1);
     assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-source-line] code')].map(row=>row.textContent).join('\\n')`),'y => y ? 1 : 0');
-    await p.click('[data-close-source]');
+    await p.closeSource();
+    process.stdout.write('Browser evidence: unit-evidence top-level\n');
     await p.evaluate(`document.querySelectorAll('[data-unit-rows] button')[2].click();true`); await p.wait(s=>s.sourceReady);
     assert.equal(await p.evaluate(`document.querySelectorAll('[data-source-code] img,[data-source-code] script').length`),0);
     assert.ok(await p.evaluate(`document.querySelector('[data-source-code]').textContent.includes('<img src=x onerror=')`));
     assert.equal(await p.evaluate(`globalThis.__sourceExecuted===undefined`),true);
     await checked(cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId));
     assert.ok(await p.evaluate(`document.querySelector('[data-unit-source]').getBoundingClientRect().width<=innerWidth&&document.documentElement.scrollWidth<=innerWidth`));
-    await p.click('[data-close-source]');
+    await p.closeSource();
+    process.stdout.write('Browser evidence: unit-evidence unit pages\n');
     await checked(cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId));
-    await chooseFile('b.js'); await p.wait(s=>s.units===32); await p.click('[data-unit-paging] button:last-child'); await p.wait(s=>s.units===9);
+    await chooseFile('b.js');
+    await p.wait(s=>s.units===32); await p.click('[data-unit-paging] button:last-child'); await p.wait(s=>s.units===9);
+    process.stdout.write('Browser evidence: unit-evidence dense source pages\n');
     await chooseFile('dense.js'); await p.wait(s=>s.units===1); await p.click('[data-unit-rows] button'); await p.wait(s=>s.sourceReady&&s.contributions===32);
     const firstSourceRange=await p.evaluate(`document.querySelector('[data-source-range]').textContent`);
     await p.click('[data-source-paging] button:last-child');
     await p.evaluate(`new Promise(resolve=>{let observer;const check=()=>{if(document.querySelector('[data-source-range]').textContent!==${JSON.stringify(firstSourceRange)}){observer?.disconnect();resolve(true);}};observer=new MutationObserver(check);observer.observe(document.querySelector('[data-source-range]'),{subtree:true,childList:true,characterData:true});check();})`);
-    await p.click('[data-close-source]'); assert.equal(harness.requests.length,beforeEvidenceRequests,'inspection contacted provider/host');
+    await p.closeSource(); assert.equal(harness.requests.length,beforeEvidenceRequests,'inspection contacted provider/host');
 
     const maximum = await run("maximum", s => s.canvases === 1 && s.analyzed === 4000 && s.controls && s.progress === null);
     const final = maximum.events.find(e => e.kind === "event" && e.value.type === "ANALYSIS_SUCCEEDED").value;
