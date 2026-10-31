@@ -427,7 +427,7 @@ export async function checkStandaloneBrowser() {
     await checked(cdp.send("Page.bringToFront", {}, p.sessionId));
     assert.equal((await idle.snapshot()).canvases, 1);
 
-    const unitEvidence = await run('unit-evidence',s=>s.canvases===1&&s.analyzed===3);
+    const unitEvidence = await run('unit-evidence',s=>s.canvases===1&&s.analyzed===4);
     const beforeEvidenceRequests=harness.requests.length;
     async function chooseFile(path) { await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();true`); }
     process.stdout.write('Browser evidence: unit-evidence parent unit\n');
@@ -458,6 +458,22 @@ export async function checkStandaloneBrowser() {
     const firstSourceRange=await p.evaluate(`document.querySelector('[data-source-range]').textContent`);
     await p.click('[data-source-paging] button:last-child');
     await p.evaluate(`new Promise(resolve=>{let observer;const check=()=>{if(document.querySelector('[data-source-range]').textContent!==${JSON.stringify(firstSourceRange)}){observer?.disconnect();resolve(true);}};observer=new MutationObserver(check);observer.observe(document.querySelector('[data-source-range]'),{subtree:true,childList:true,characterData:true});check();})`);
+    await p.closeSource();
+    process.stdout.write('Browser evidence: source-scoped contributions and explicit location jump\n');
+    await chooseFile('long.js'); await p.wait(s=>s.units===2); await p.click('[data-unit-rows] button');
+    await p.wait(s=>s.sourceReady&&s.contributionMessage.includes('0 of 27'));
+    assert.equal(await p.evaluate(`document.querySelector('[data-source-line-number]').textContent`),'660');
+    assert.ok(await p.evaluate(`document.querySelector('[data-unit-details]').textContent.includes('Complexity 28 (whole unit)')`));
+    await p.evaluate(`(()=>{const select=document.querySelector('[data-contribution-scope]');select.value='unit';select.dispatchEvent(new Event('change'));return true;})()`);
+    await p.wait(s=>s.contributions===27); await p.evaluate(`document.querySelector('[data-contribution-rows] button').focus();true`); await key('Enter','Enter',13);
+    await p.wait(s=>s.sourceReady&&s.contributions>0&&s.contributions<27);
+    assert.equal(await p.evaluate(`document.querySelector('[data-source-line-number]').textContent`),'975');
+    assert.equal(await p.evaluate(`document.querySelector('[data-contribution-scope]').value`),'shown');
+    assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-source-code]')`),true);
+    assert.equal(await p.evaluate(`document.querySelector('[data-source-line] code').textContent.startsWith('if(x)')`),true);
+    await p.evaluate(`document.querySelector('[data-source-paging] button:first-child').focus();true`); await key('Enter','Enter',13);
+    await p.wait(s=>s.sourceReady&&s.contributionMessage.includes('0 of 27'));
+    assert.equal(await p.evaluate(`document.querySelector('[data-source-line-number]').textContent`),'660');
     await p.closeSource(); assert.equal(harness.requests.length,beforeEvidenceRequests,'inspection contacted provider/host');
 
     const maximum = await run("maximum", s => s.canvases === 1 && s.analyzed === 4000 && s.controls && s.progress === null);
@@ -542,7 +558,7 @@ export async function checkStandaloneBrowser() {
     assert.equal((await idle.snapshot()).canvases, 1, "static-host shutdown discarded a browser-owned completed view");
     process.stdout.write(JSON.stringify({
       chrome: { category: discovery.category, version },
-      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "visible-neutral-nested-platform-fills-and-edges", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "syntax-colors-distinct-from-ownership-underlines", "readable-unit-kind-labels", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
+      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "visible-neutral-nested-platform-fills-and-edges", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "syntax-colors-distinct-from-ownership-underlines", "readable-unit-kind-labels", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "shown-source-contribution-scope-and-location-jump", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
       requests: harness.requests.length, workerEvents: harness.events.filter(e=>e.kind==='event').length,
       publicFiles: manifest.files.filter(f=>f.role==='public').map(f=>f.path),
     }) + "\n");

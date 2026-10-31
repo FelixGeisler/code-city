@@ -15,7 +15,9 @@ and `Top-level code` for the file-level unit. A zero-unit file says
 
 Activating a unit explicitly opens a native read-only source dialog. An
 explicit callable shows its exact normalized syntax span; top-level shows the
-whole normalized file. Source has one-based line numbers. Locations use
+whole normalized file. The header's complexity and range describe the whole unit;
+the separate `Shown source` range describes the currently rendered page. Source
+has one-based line numbers. Locations use
 one-based Unicode scalar columns, with tabs counting as one column; range ends
 are exclusive. This is normalized analyzed text, not an editable copy or a
 promise of original CRLF/BOM presentation.
@@ -30,9 +32,19 @@ used. The existing WASM permission also covers the highlighting engine. See xref
 
 Owned contribution spans are highlighted with an underline as well as color;
 the underline remains distinct from syntax colors.
-A separate list names each recorded kind and its start/end location. Overlapping
-owned spans are rendered as their union; nested units' contribution records are
-not added to the parent's list. A unit of complexity one has no branching
+The contribution list defaults to `Shown source`: include only this unit's recorded
+spans intersecting the rendered source window, using half-open normalized byte
+ranges. Show the visible-scope total separately from the whole-unit total. A record
+ending at the page start or starting at its exclusive end is not in that page.
+Spans continuing outside the page keep their exact full locations and say so.
+
+`Whole unit` explicitly lists all owned contributions, still in bounded pages.
+Activating a native contribution-location button shows source starting at that
+record's retained start byte, returns to `Shown source`, and focuses the code.
+Previous source returns through navigation history. This moves only the source
+window, not the city camera, selection or geometry. It performs no provider read,
+parsing or metric computation. Overlapping owned highlights remain their union;
+nested units' contribution records are not added to the parent's list. A unit of complexity one has no branching
 contributions. No finding, threshold, recommendation, or source edit is added.
 
 The city remains the default view. Close source or Escape returns to the unit
@@ -73,6 +85,9 @@ xref:saved-investigations.adoc[snapshot] supplies its stored unit and
 contribution facts; no migration, GitHub acquisition, parser initialization or
 metric reanalysis is required. Inspection sends no request to the server and
 does not save automatically. It uses local generation, revision, file and
-request identities to reject stale or mismatched replies. At most one pending
+request identities, source-page cursor and contribution scope to reject stale or
+mismatched replies. Changing source clears old contribution rows while loading;
+late replies and detached location buttons cannot populate or navigate another
+page or unit. At most one pending
 request per inspection operation is retained. The browser's actual heap and
 latency remain device-dependent, not input-envelope guarantees.

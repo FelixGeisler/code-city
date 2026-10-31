@@ -9,12 +9,13 @@ export type SourceLocation = Readonly<{ line: number; column: number }>;
 export type InspectionQuery =
   | Readonly<{ type: "units"; path: string; offset: number }>
   | Readonly<{ type: "source"; path: string; unit: number; cursor: number | null }>
-  | Readonly<{ type: "contributions"; path: string; unit: number; offset: number }>;
+  | Readonly<{ type: "contributions"; path: string; unit: number; offset: number; cursor: number | null }>;
 export type UnitRow = Readonly<{ id: number; kind: string; complexity: number; start: SourceLocation; end: SourceLocation }>;
+export type ContributionRow = Readonly<{ id: number; cursor: number; kind: string; start: SourceLocation; end: SourceLocation }>;
 export type InspectionResult =
   | Readonly<{ type: "units"; path: string; offset: number; total: number; rows: readonly UnitRow[] }>
   | Readonly<{ type: "source"; path: string; unit: number; kind: string; complexity: number; start: SourceLocation; end: SourceLocation; cursor: number; next: number | null; text: string; syntax: readonly SyntaxSpan[]; syntaxUnavailable: boolean; highlights: readonly Readonly<{ start: number; end: number }>[] }>
-  | Readonly<{ type: "contributions"; path: string; unit: number; offset: number; total: number; rows: readonly Readonly<{ kind: string; start: SourceLocation; end: SourceLocation }>[] }>;
+  | Readonly<{ type: "contributions"; path: string; unit: number; cursor: number | null; offset: number; total: number; unitTotal: number; rows: readonly ContributionRow[] }>;
 export type InspectionEvidence = Readonly<{
   units: Readonly<{ length: number; at(index: number): Readonly<{ kind: string; startByte: number; endByte: number; complexity: number }> | undefined }>;
   contributionCount: number;
@@ -36,16 +37,16 @@ function location(value: unknown): void { const point = object(value, ["line", "
 export function validateInspectionQuery(value: unknown): InspectionQuery {
   const candidate = value as InspectionQuery;
   requireValue(candidate && ["units", "source", "contributions"].includes(candidate.type));
-  object(value, candidate.type === "units" ? ["type", "path", "offset"] : candidate.type === "source" ? ["type", "path", "unit", "cursor"] : ["type", "path", "unit", "offset"]);
+  object(value, candidate.type === "units" ? ["type", "path", "offset"] : candidate.type === "source" ? ["type", "path", "unit", "cursor"] : ["type", "path", "unit", "offset", "cursor"]);
   requireValue(typeof candidate.path === "string" && isCanonicalSourcePath(candidate.path));
   if (candidate.type !== "units") requireValue(integer(candidate.unit, MAX_NORMALIZED_MODULE_BYTES));
-  if (candidate.type === "source") requireValue(candidate.cursor === null || integer(candidate.cursor, MAX_NORMALIZED_MODULE_BYTES));
-  else requireValue(integer(candidate.offset, MAX_NORMALIZED_MODULE_BYTES));
+  if (candidate.type !== "units") requireValue(candidate.cursor === null || integer(candidate.cursor, MAX_NORMALIZED_MODULE_BYTES));
+  if (candidate.type !== "source") requireValue(integer(candidate.offset, MAX_NORMALIZED_MODULE_BYTES));
   return candidate;
 }
 export function parseInspectionResult(value: unknown, query: InspectionQuery): InspectionResult {
   const data = object(value, query.type === "units" ? ["type", "path", "offset", "total", "rows"] : query.type === "source"
-    ? ["type", "path", "unit", "kind", "complexity", "start", "end", "cursor", "next", "text", "syntax", "syntaxUnavailable", "highlights"] : ["type", "path", "unit", "offset", "total", "rows"]);
+    ? ["type", "path", "unit", "kind", "complexity", "start", "end", "cursor", "next", "text", "syntax", "syntaxUnavailable", "highlights"] : ["type", "path", "unit", "cursor", "offset", "total", "unitTotal", "rows"]);
   requireValue(data.type === query.type && data.path === query.path);
   if (query.type !== "units") requireValue(data.unit === query.unit);
   if (query.type === "source") {
@@ -67,14 +68,15 @@ export function parseInspectionResult(value: unknown, query: InspectionQuery): I
     }
   } else {
     requireValue(data.offset === query.offset && integer(data.total, MAX_NORMALIZED_MODULE_BYTES) && query.offset <= data.total);
+    if (query.type === "contributions") requireValue(data.cursor === query.cursor && integer(data.unitTotal, MAX_NORMALIZED_MODULE_BYTES) && data.total <= data.unitTotal);
     const rows = array(data.rows, query.type === "units" ? UNIT_PAGE_SIZE : CONTRIBUTION_PAGE_SIZE);
     requireValue(rows.length === Math.min(query.type === "units" ? UNIT_PAGE_SIZE : CONTRIBUTION_PAGE_SIZE, data.total - query.offset));
     const seen = new Set<number>();
     for (const item of rows) {
-      const row = object(item, query.type === "units" ? ["id", "kind", "complexity", "start", "end"] : ["kind", "start", "end"]);
+      const row = object(item, query.type === "units" ? ["id", "kind", "complexity", "start", "end"] : ["id", "cursor", "kind", "start", "end"]);
       location(row.start); location(row.end);
       if (query.type === "units") { requireValue(integer(row.id, data.total - 1) && !seen.has(row.id) && kinds.includes(row.kind as string) && integer(row.complexity) && row.complexity > 0); seen.add(row.id); }
-      else requireValue(decisions.includes(row.kind as string));
+      else { requireValue(decisions.includes(row.kind as string) && integer(row.id) && integer(data.unitTotal) && row.id < data.unitTotal && !seen.has(row.id) && integer(row.cursor, MAX_NORMALIZED_MODULE_BYTES)); seen.add(row.id); }
     }
   }
   return data as unknown as InspectionResult;
@@ -124,6 +126,14 @@ export function createFileInspection(path: string, bytes: Uint8Array, evidence: 
   for (let index = 0; index < position; index++) { const owner = owners[index]!; byOwner[positions[owner]!] = index; positions[owner] = positions[owner]! + 1; }
   for (let owner = 0; owner < count; owner++) byOwner.subarray(offsets[owner], offsets[owner + 1]).sort((a, b) => contributionStarts[a]! - contributionStarts[b]! || contributionEnds[b]! - contributionEnds[a]! || contributionKinds[a]! - contributionKinds[b]!);
   let unionUnit = -1, union: Array<{ start: number; end: number }> = [];
+  let contributionScope: { unit: number; cursor: number; indices: Uint32Array } | undefined;
+  const sourceEnd = (unit: number, cursor: number): number => {
+    requireValue(boundary(cursor) && cursor >= starts[unit]! && cursor <= ends[unit]!);
+    let end = Math.min(ends[unit]!, cursor + SOURCE_PAGE_BYTES), lines = 0;
+    while (!boundary(end)) end--;
+    for (let offset = cursor; offset < end; offset++) if (bytes[offset] === 10 && ++lines === 80) { end = offset + 1; break; }
+    return end;
+  };
   return async (query: InspectionQuery): Promise<InspectionResult> => {
     validateInspectionQuery(query); requireValue(query.path === path);
     if (query.type === "units") {
@@ -133,14 +143,25 @@ export function createFileInspection(path: string, bytes: Uint8Array, evidence: 
     const id = query.unit; requireValue(id < count);
     const first = offsets[id]!, last = offsets[id + 1]!;
     if (query.type === "contributions") {
-      requireValue(query.offset <= last - first);
-      return { type: "contributions", path, unit: id, offset: query.offset, total: last - first, rows: Array.from(byOwner.subarray(first + query.offset, Math.min(last, first + query.offset + CONTRIBUTION_PAGE_SIZE)), index => ({ kind: decisions[contributionKinds[index]!]!, start: locate(contributionStarts[index]!), end: locate(contributionEnds[index]!) })) };
+      if (query.cursor !== null && (contributionScope?.unit !== id || contributionScope.cursor !== query.cursor)) {
+        const end = sourceEnd(id, query.cursor), indices: number[] = [];
+        for (let position = first; position < last; position++) {
+          const index = byOwner[position]!;
+          if (contributionStarts[index]! >= end) break;
+          if (contributionEnds[index]! > query.cursor) indices.push(position - first);
+        }
+        contributionScope = { unit: id, cursor: query.cursor, indices: Uint32Array.from(indices) };
+      }
+      const scope = query.cursor === null ? undefined : contributionScope!.indices;
+      const total = scope?.length ?? last - first;
+      requireValue(query.offset <= total);
+      return { type: "contributions", path, unit: id, cursor: query.cursor, offset: query.offset, total, unitTotal: last - first,
+        rows: Array.from({ length: Math.min(CONTRIBUTION_PAGE_SIZE, total - query.offset) }, (_, position) => {
+          const ordinal = scope ? scope[query.offset + position]! : query.offset + position, index = byOwner[first + ordinal]!;
+          return { id: ordinal, cursor: contributionStarts[index]!, kind: decisions[contributionKinds[index]!]!, start: locate(contributionStarts[index]!), end: locate(contributionEnds[index]!) };
+        }) };
     }
-    const cursor = query.cursor ?? starts[id]!;
-    requireValue(boundary(cursor) && cursor >= starts[id]! && cursor <= ends[id]!);
-    let end = Math.min(ends[id]!, cursor + SOURCE_PAGE_BYTES), lines = 0;
-    while (!boundary(end)) end--;
-    for (let offset = cursor; offset < end; offset++) if (bytes[offset] === 10 && ++lines === 80) { end = offset + 1; break; }
+    const cursor = query.cursor ?? starts[id]!, end = sourceEnd(id, cursor);
     if (unionUnit !== id) {
       union = []; unionUnit = id;
       for (let offset = first; offset < last; offset++) { const index = byOwner[offset]!, start = contributionStarts[index]!, finish = contributionEnds[index]!; const prior = union.at(-1); if (prior && start <= prior.end) prior.end = Math.max(prior.end, finish); else union.push({ start, end: finish }); }

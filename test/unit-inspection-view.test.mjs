@@ -67,3 +67,25 @@ test('a source reply delayed by initialization cannot repaint a replaced file vi
  const replacement=attachUnitInspection(documentTarget,host,'other.js',async()=>({type:'units',path:'other.js',offset:0,total:0,rows:[]}));
  pending.resolve(await read({type:'source',path:'file.js',unit:0,cursor:null}));await flush();assert.equal(oldCode.children.length,0);assert.equal(data(host,'unitSource').open,false);replacement();
 });
+test('a long unit defaults to shown-source contributions and whole-unit entries jump back into matching code',async()=>{
+ const lines=Array(1371).fill('');lines[659]='function long(x) {';for(let i=0;i<27;i++)lines[974+i*14]=' if(x) x--;';lines[1370]='}';const source=lines.join('\n'),bytes=new TextEncoder().encode(source),records=[];let from=0;
+ for(let i=0;i<27;i++){const start=source.indexOf('if(x)',from);records.push([0,'if',start,start+10]);from=start+1;}
+ const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'function',startByte:659,endByte:bytes.length,complexity:28})},contributionCount:records.length,contributions:()=>records},async()=>()=>[]);
+ const host=new Element('section'),calls=[];let waiting;
+ const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);const result=await read(query);if(query.type==='contributions')waiting?.resolve(result);return result;});await flush();
+ const action=async callback=>{waiting=Promise.withResolvers();callback();const result=await waiting.promise;await flush();return result;};
+ await action(()=>all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click());
+ assert.equal(data(host,'contributionRows').children.length,0);assert.match(data(host,'contributionStatus').textContent,/0 of 27/u);assert.match(data(host,'sourceRange').textContent,/Shown source: 660:1/u);assert.match(data(host,'unitDetails').textContent,/Complexity 28 \(whole unit\).*660:1–1371:2/u);
+ const scope=data(host,'contributionScope');await action(()=>{scope.value='unit';scope.dispatchEvent(new Event('change'));});
+ assert.equal(data(host,'contributionRows').children.length,27);const target=all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0];assert.match(target.textContent,/975:2/u);
+ await action(()=>target.click());assert.equal(scope.value,'shown');assert.equal(data(host,'sourceCode').children[0].children[0].textContent,'975');assert.match(data(host,'sourceRange').textContent,/Shown source: 975:2/u);assert.ok(data(host,'contributionRows').children.length>0&&data(host,'contributionRows').children.length<27);
+ const before=calls.length;target.click();await flush();assert.equal(calls.length,before,'detached whole-unit row must not issue a stale jump');
+ await action(()=>button(host,'Previous source').click());assert.match(data(host,'sourceRange').textContent,/Shown source: 660:1/u);assert.equal(data(host,'contributionRows').children.length,0);release();
+});
+test('late contribution replies cannot populate a different source page',async()=>{
+ const lines=Array(200).fill('x;');lines[0]='if(x) x;';lines[99]='if(y) y;';const source=lines.join('\n'),bytes=new TextEncoder().encode(source),second=source.indexOf('if(y)'),old=Promise.withResolvers(),ready=Promise.withResolvers();
+ const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:3})},contributionCount:2,contributions:()=>[[0,'if',0,8],[0,'if',second,second+8]]},async()=>()=>[]);
+ const host=new Element('section'),release=attachUnitInspection(documentTarget,host,'file.js',async query=>{if(query.type==='contributions'&&query.cursor===0)return old.promise;const result=await read(query);if(query.type==='contributions')ready.resolve();return result;});await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
+ assert.equal(data(host,'contributionRows').children.length,0);button(host,'Next source').click();await ready.promise;await flush();assert.match(data(host,'sourceRange').textContent,/Shown source: 81:1/u);assert.match(data(host,'contributionRows').textContent,/100:1/u);
+ old.resolve(await read({type:'contributions',path:'file.js',unit:0,offset:0,cursor:0}));await flush();assert.match(data(host,'contributionRows').textContent,/100:1/u);assert.doesNotMatch(data(host,'contributionRows').textContent,/if · 1:1/u);release();
+});
