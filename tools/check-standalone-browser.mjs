@@ -28,7 +28,7 @@ const renderObservation = `(() => {
   gl.getUniformLocation=(p,n)=>{const l=location(p,n);if(l)names.set(l,n);return l;};
   const matrix=gl.uniformMatrix4fv.bind(gl);gl.uniformMatrix4fv=(l,t,v)=>{if(names.get(l)==='u_clipFromTarget')window.__render.matrices.push([...v]);return matrix(l,t,v);};
   const integer=gl.uniform1i.bind(gl);gl.uniform1i=(l,v)=>{window.__render.integers[names.get(l)]=v;return integer(l,v);};
-  const draw=gl.drawElementsInstanced.bind(gl);gl.drawElementsInstanced=(...args)=>{const result=draw(...args);if(window.__render.capturePixels&&window.__render.integers.u_passKind===1){const bytes=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,bytes);let hash=2166136261;for(const byte of bytes)hash=Math.imul(hash^byte,16777619)>>>0;window.__render.frames.push({hash,selected:window.__render.integers.u_selectionIndex});}return result;};
+  const draw=gl.drawElementsInstanced.bind(gl);gl.drawElementsInstanced=(...args)=>{const result=draw(...args);if(window.__render.capturePixels&&window.__render.integers.u_passKind===1){const bytes=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,bytes);let hash=2166136261;for(const byte of bytes)hash=Math.imul(hash^byte,16777619)>>>0;let contrast;if(window.__render.captureContrast){contrast={base:0,lower:0,upper:0,edge:0,selected:0};for(let i=0;i<bytes.length;i+=4){const rgb=(bytes[i]<<16)|(bytes[i+1]<<8)|bytes[i+2];if(rgb===0x182a43)contrast.base++;else if(rgb===0x36506c)contrast.lower++;else if(rgb===0x4d6886)contrast.upper++;else if(rgb===0x94b1cd)contrast.edge++;else if(rgb===0xc8dcf0)contrast.selected++;}}window.__render.frames.push({hash,selected:window.__render.integers.u_selectionIndex,contrast});}return result;};
   const buffer=gl.bufferData.bind(gl);gl.bufferData=(...args)=>{window.__render.uploads++;return buffer(...args);};return gl;
  };
  window.__gate={active:false,opened:false,queue:[]};
@@ -240,8 +240,11 @@ export async function checkStandaloneBrowser() {
     assert.equal((await p.snapshot()).canvases, 1);
     assert.equal((await idle.snapshot()).canvases, 1);
 
-    await p.evaluate(`window.__render.capturePixels=true;true`);
+    await p.evaluate(`window.__render.capturePixels=true;window.__render.captureContrast=true;true`);
     const districts = await run("districts", s => s.canvases === 1 && s.analyzed === 5);
+    const contrast = await p.evaluate(`window.__render.frames.at(-1).contrast`);
+    assert.ok(contrast.base > 0 && contrast.lower > 0 && contrast.upper > 0 && contrast.edge > 0, `Base, nested platform fills and boundaries must all remain visible: ${JSON.stringify(contrast)}`);
+    await p.evaluate(`window.__render.captureContrast=false;true`);
     const districtCity = districts.events.find(e => e.kind === "event" && e.value.type === "ANALYSIS_SUCCEEDED").value.city;
     const dimensions = await p.evaluate(`(()=>{const c=document.querySelector('[data-city] canvas'),r=c.getBoundingClientRect();return {width:c.width,height:c.height,rectangle:{left:r.left,top:r.top,width:r.width,height:r.height}};})()`);
     const camera = resetCamera(districtCity.presentation.sceneBounds, dimensions);
@@ -281,7 +284,11 @@ export async function checkStandaloneBrowser() {
     await p.evaluate(`document.querySelector('[data-district-rows="files"] button').focus();true`); await key('Enter','Enter',13);
     await p.wait(s=>s.selectedFile==='src/edge/deep/b.ts');
     assert.equal((await p.snapshot()).sourceOpen,false,'hierarchy file activation opened source automatically');
+    await p.evaluate(`window.__render.captureContrast=true;true`);
     await p.click('[data-browse-directories]'); await p.wait(s=>s.district==='/');
+    const rootContrast = await p.evaluate(`window.__render.frames.at(-1).contrast`);
+    assert.ok(rootContrast.base > 0 && rootContrast.lower > 0 && rootContrast.upper > 0 && rootContrast.edge > 0 && rootContrast.selected > 0, `Root selection must preserve fill contrast and brighten only its boundary: ${JSON.stringify(rootContrast)}`);
+    await p.evaluate(`window.__render.captureContrast=false;true`);
     assert.equal(await p.evaluate(`document.querySelector('[data-file-count]').textContent`),'5');
     for (const path of ['src','src/edge']) {
       await p.evaluate(`[...document.querySelectorAll('[data-district-rows="directories"] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();true`);
@@ -535,7 +542,7 @@ export async function checkStandaloneBrowser() {
     assert.equal((await idle.snapshot()).canvases, 1, "static-host shutdown discarded a browser-owned completed view");
     process.stdout.write(JSON.stringify({
       chrome: { category: discovery.category, version },
-      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "syntax-colors-distinct-from-ownership-underlines", "readable-unit-kind-labels", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
+      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "visible-neutral-nested-platform-fills-and-edges", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "syntax-colors-distinct-from-ownership-underlines", "readable-unit-kind-labels", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
       requests: harness.requests.length, workerEvents: harness.events.filter(e=>e.kind==='event').length,
       publicFiles: manifest.files.filter(f=>f.role==='public').map(f=>f.path),
     }) + "\n");
