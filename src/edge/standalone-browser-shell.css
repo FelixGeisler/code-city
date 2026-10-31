@@ -167,4 +167,22 @@ input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-
   [data-status] button { width: 100%; }
   [data-analyzed-controls] { grid-template-columns: minmax(0, 1fr); }
 }
+[data-browse-directories] { background: var(--surface); border-color: var(--border); color: var(--text); font-size: 0.8125rem; grid-column: 1; min-height: 2rem; padding: 0.35rem 0.65rem; }
+[data-browse-directories]:hover:not(:disabled) { background: var(--surface-strong); border-color: var(--accent); }
+[data-district-inspection] { border-block-start: 1px solid var(--border); font-size: 0.82rem; margin-block-start: 0.75rem; padding-block-start: 0.75rem; }
+[data-district-inspection] button { background: var(--surface-strong); border-color: var(--border); color: var(--text); font-size: inherit; min-height: 2.75rem; padding: 0.4rem 0.5rem; }
+[data-district-inspection] button:hover:not(:disabled) { border-color: var(--accent); }
+[data-district-inspection] button:disabled { cursor: default; }
+[data-district-inspection] bdi { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; unicode-bidi: isolate; }
+[data-district-navigation], [data-district-paging] { align-items: center; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+[data-district-breadcrumbs] { display: flex; flex-wrap: wrap; gap: 0.35rem; list-style: none; margin: 0.25rem 0; padding: 0; width: 100%; }
+[data-district-breadcrumbs] li { max-width: 100%; }
+[data-district-breadcrumbs] [aria-current] { border-color: var(--accent); }
+[data-district-list] { margin-block-start: 1rem; }
+[data-district-list] h3 { font-size: 0.9rem; margin-block: 0 0.35rem; }
+[data-district-list] p, [data-district-row-metrics] { color: var(--muted); }
+[data-district-list] label { display: grid; gap: 0.35rem; }
+[data-district-rows] { display: grid; gap: 0.35rem; list-style: none; margin-block: 0.5rem; padding: 0; }
+[data-district-rows] button { display: grid; gap: 0.3rem; text-align: start; width: 100%; }
+[data-district-paging] { justify-content: space-between; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
