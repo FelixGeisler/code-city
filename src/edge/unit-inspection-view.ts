@@ -100,7 +100,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
           const syntax = result.syntax[syntaxIndex], colored = syntax !== undefined && syntax.start <= position;
           const end = Math.min(limit, span ? marked ? span.end : span.start : limit, syntax ? colored ? syntax.end : syntax.start : limit);
           const fragment = element("span", result.text.slice(position, end));
-          if (colored) fragment.dataset.syntax = syntax.kind;
+          if (colored) fragment.dataset.syntaxColor = String(syntax.color);
           if (marked) {
             if (!mark) { mark = element("mark"); mark.title = "Owned complexity contribution"; content.append(mark); }
             mark.append(fragment);
@@ -110,7 +110,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
         row.append(number, content); code.append(row); textOffset = limit + 1;
       }
       sourceRange.textContent = `${point(result.start)}–${point(result.end)}`;
-      sourceMessage.textContent = result.highlights.length ? "Underlined: owned complexity-contribution spans." : "No owned contribution in this source page.";
+      sourceMessage.textContent = (result.syntaxUnavailable ? "Syntax coloring unavailable. " : "") + (result.highlights.length ? "Underlined: owned complexity-contribution spans." : "No owned contribution in this source page.");
       sourcePaging.hidden = history.length === 0 && next === null;
       previousSource.disabled = history.length === 0; nextSource.disabled = next === null;
       code.scrollTop = 0; code.scrollLeft = 0;

@@ -23,9 +23,9 @@ test('file selection lists units without opening source, then renders inert read
  assert.equal(data(host,'unitSource').open,true);assert.ok(data(host,'sourceCode').textContent.includes('<img src=x onerror=alert(1)>'));
  assert.equal(all(host,node=>node.tagName==='IMG'||node.tagName==='SCRIPT').length,0);assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,1);
  data(host,'unitSource').dispatchEvent(new Event('close'));assert.ok(data(host,'sourceCode').children.length>0,'a queued prior close event must not clear a reopened dialog');
- const colored=all(data(host,'sourceCode'),node=>Object.hasOwn(node.dataset,'syntax'));
- assert.ok(colored.some(node=>node.dataset.syntax==='keyword'&&node.textContent==='if'));
- assert.ok(colored.some(node=>node.dataset.syntax==='string'&&node.textContent.includes('<img')));
+ const colored=all(data(host,'sourceCode'),node=>Object.hasOwn(node.dataset,'syntaxColor'));
+ assert.ok(colored.some(node=>node.dataset.syntaxColor==='5'&&node.textContent==='if'));
+ assert.ok(colored.some(node=>node.dataset.syntaxColor==='6'&&node.textContent.includes('<img')));
  assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='CODE').map(node=>node.textContent).join('\n'),source);
  assert.match(data(host,'contributionRows').textContent,/if · 1:1–1:/u);assert.match(data(host,'unitDetails').textContent,/Complexity 2/u);
  button(host,'Close source').click();assert.equal(data(host,'unitSource').open,false);release();
@@ -49,4 +49,18 @@ test('unit controls and source headings use readable language-specific labels, n
  const host=new Element('section'),source='x => x + 1',read=reader(source,[{kind:'arrow',startByte:0,endByte:source.length,complexity:1}]);
  const release=attachUnitInspection(documentTarget,host,'file.js',async query=>read(query));await flush();assert.match(data(host,'unitRows').textContent,/Arrow function/u);
  all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();assert.match(data(host,'unitDetails').textContent,/^Arrow function · Complexity 1/u);release();
+});
+test('coloring failure renders exact inert plain source and ownership with a local message',async()=>{
+ const source='if (x) "</span><script>globalThis.executed=true</script>😀";\n',bytes=new TextEncoder().encode(source),host=new Element('section');
+ const read=createFileInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:2})},contributionCount:1,contributions:()=>[[0,'if',0,bytes.length-1]]},async()=>{throw Error('grammar failed');});
+ const release=attachUnitInspection(documentTarget,host,'file.js',read);await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
+ const code=data(host,'sourceCode');assert.equal(all(code,node=>node.tagName==='CODE').map(node=>node.textContent).join('\n'),source);
+ assert.equal(all(code,node=>Object.hasOwn(node.dataset,'syntaxColor')).length,0);assert.equal(all(code,node=>node.tagName==='MARK').length,1);assert.equal(all(code,node=>node.tagName==='SCRIPT').length,0);
+ assert.match(data(host,'sourceBody').textContent,/Syntax coloring unavailable\. Underlined:/u);assert.equal(data(host,'unitSource').open,true);release();
+});
+test('a source reply delayed by initialization cannot repaint a replaced file view',async()=>{
+ const host=new Element('section'),read=reader('return 1;',[{kind:'top-level',startByte:0,endByte:9,complexity:1}]),pending=Promise.withResolvers();
+ const release=attachUnitInspection(documentTarget,host,'file.js',query=>query.type==='source'?pending.promise:read(query));await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();const oldCode=data(host,'sourceCode');release();
+ const replacement=attachUnitInspection(documentTarget,host,'other.js',async()=>({type:'units',path:'other.js',offset:0,total:0,rows:[]}));
+ pending.resolve(await read({type:'source',path:'file.js',unit:0,cursor:null}));await flush();assert.equal(oldCode.children.length,0);assert.equal(data(host,'unitSource').open,false);replacement();
 });

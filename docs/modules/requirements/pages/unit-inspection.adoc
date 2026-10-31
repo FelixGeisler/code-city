@@ -20,10 +20,13 @@ one-based Unicode scalar columns, with tabs counting as one column; range ends
 are exclusive. This is normalized analyzed text, not an editable copy or a
 promise of original CRLF/BOM presentation.
 
-Source uses lexical syntax colors for keywords, primitive types, strings,
-comments, numbers and operators, with JS regex literals and JSX/TSX tags and
-attributes distinguished. Coloring keeps whole-file lexical context across unit
-and page boundaries. It is a reading aid, not semantic validation or type checking.
+Source uses pinned Shiki 4.5.0 grammars for JS/JSX, TS/TSX and C#, selected only
+from the admitted file suffix, with one bundled `github-dark` theme and the
+JavaScript regex engine. Coloring keeps whole-file lexical context across unit
+and page boundaries, including multiline comments, templates and interpolated
+strings. It is a reading aid, not semantic validation or type checking. No language
+detection, repository-controlled grammar or theme, CDN or extra WASM runtime is
+used. See xref:architecture:adr/0017-offline-shiki-source-highlighting.adoc[ADR 0017].
 
 Owned contribution spans are highlighted with an underline as well as color;
 the underline remains distinct from syntax colors.
@@ -37,7 +40,10 @@ control. Source navigation does not orbit, pan, zoom, reveal, rebuild geometry,
 or change file/district selection. A changed file, district, cleared selection,
 replacement, or page exit disposes the old inspection view. Late replies cannot
 reopen or populate it. Inspection errors stay local to the inspector and do not
-discard the completed city or prevent Save.
+discard the completed city or prevent Save. Grammar, initialization or tokenization
+failure preserves exact plain source, paging and owned contribution underlines,
+with `Syntax coloring unavailable.` shown locally. There is no automatic coloring
+retry or fallback lexer.
 
 == Bounded presentation, complete evidence
 
@@ -51,14 +57,19 @@ Original analysis retains packed unit/observation tables, finalized complexities
 and recorded decision-owner runs independently of the Save-only capture budget.
 Only the currently inspected file is indexed for presentation. The worker sends
 bounded unit/location metadata on file selection and source text only after
-explicit unit activation. A display-only scanner in the existing browser worker colors retained normalized
-text when source is explicitly opened; it does not initialize a parser, compute
-metrics or change saved evidence. It sends bounded, validated token spans with
-the existing source page. The UI creates inert text/span/mark nodes, never HTML,
-imports, asset URLs or executable code from source.
+explicit unit activation. Shiki initializes asynchronously in the existing browser
+worker on explicit source opening; it does not initialize the analysis parser,
+compute metrics or change saved evidence. The five bundled grammars are
+self-contained in the pinned release. Complete-file tokenization precedes page
+clipping, with no line-length or time-budget truncation of lexical context. Token
+spans are ordered, non-overlapping, scalar-aligned and bounded by the source page;
+only fixed, vetted theme-palette indices cross the inspection boundary. Theme
+font decorations are not applied: underlines remain reserved for ownership.
+The UI creates inert text/span/mark nodes, never HTML, imports, asset URLs or
+executable code from source.
 
 Fresh and reopened investigations use the same presentation reader. A reopened
-xref:saved-investigations.adoc[version-1 snapshot] supplies its stored unit and
+xref:saved-investigations.adoc[snapshot] supplies its stored unit and
 contribution facts; no migration, GitHub acquisition, parser initialization or
 metric reanalysis is required. Inspection sends no request to the server and
 does not save automatically. It uses local generation, revision, file and
