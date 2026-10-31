@@ -138,7 +138,16 @@ input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-
 [data-source-code]:focus-visible { outline: 0.2rem solid var(--focus); }
 [data-source-line] { display: block; min-height: 1.6em; unicode-bidi: isolate; }
 [data-source-line-number] { color: var(--muted); display: inline-block; margin-inline-end: 1rem; text-align: end; user-select: none; width: 5ch; }
-[data-source-code] mark { background: #4d4215; color: #fff3a6; text-decoration: underline; text-decoration-color: #eedb75; text-underline-offset: 0.2em; }
+[data-source-code] [data-syntax="keyword"] { color: #d3adff; }
+[data-source-code] [data-syntax="type"] { color: #83d6ce; }
+[data-source-code] [data-syntax="string"] { color: #b9d99b; }
+[data-source-code] [data-syntax="comment"] { color: #9eacbf; font-style: italic; }
+[data-source-code] [data-syntax="number"] { color: #f1be8b; }
+[data-source-code] [data-syntax="operator"] { color: #c5d3e8; }
+[data-source-code] [data-syntax="regex"] { color: #f0b6c6; }
+[data-source-code] [data-syntax="tag"] { color: #8fc9ff; }
+[data-source-code] [data-syntax="attribute"] { color: #dfca8c; }
+[data-source-code] mark { background: #302d1d; color: inherit; text-decoration: underline; text-decoration-color: #eedb75; text-underline-offset: 0.2em; }
 [data-contribution-rows] { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.78rem; overflow-wrap: anywhere; padding-inline-start: 1.75rem; }
 [data-contribution-rows] li { margin-block: 0.5rem; }
 @media (width < 52rem) {

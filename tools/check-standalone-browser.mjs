@@ -185,6 +185,8 @@ export async function checkStandaloneBrowser() {
     assert.equal(await p.evaluate(`document.querySelector('[data-unit-details]').textContent.includes('Complexity 2')`),true);
     assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-source-line] code')].map(row=>row.textContent).join('\\n')`), 'function choose(v) { return v ? 1 : 0; }');
     assert.ok(await p.evaluate(`document.querySelector('[data-contribution-rows]').textContent.includes('ternary')`));
+    assert.equal(await p.evaluate(`document.querySelector('[data-unit-details]').textContent.startsWith('Function ·')`),true);
+    assert.equal(await p.evaluate(`(()=>{const code=document.querySelector('[data-source-code]'),keyword=code.querySelector('[data-syntax="keyword"]'),number=code.querySelector('[data-syntax="number"]'),owned=code.querySelector('mark [data-syntax="operator"]');return keyword.textContent==='function'&&getComputedStyle(keyword).color!==getComputedStyle(number).color&&!!owned&&getComputedStyle(owned.closest('mark')).textDecorationLine.includes('underline');})()`),true);
     await p.evaluate(`document.querySelector('[data-source-code]').focus();true`); await key('ArrowRight','ArrowRight',39);
     assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`), initial, 'source inspection moved the camera');
     await key('Escape','Escape',27); await p.wait(s=>!s.sourceOpen);
@@ -313,6 +315,7 @@ export async function checkStandaloneBrowser() {
     await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent==='src/edge/a.js').click();true`);
     await p.wait(s=>s.units===2); await p.click('[data-unit-rows] button'); await p.wait(s=>s.sourceReady&&s.contributions===1);
     assert.ok(await p.evaluate(`document.querySelector('[data-source-code]').textContent.includes('function choose')`));
+    assert.equal(await p.evaluate(`document.querySelector('[data-source-code] [data-syntax="keyword"]').textContent`),'function');
     await p.closeSource(); assert.equal(harness.requests.length,beforeSavedInspection,'saved inspection reacquired source');
 
     await run("mixed", s => s.canvases === 1 && s.analyzed === 5 && s.failed === 2);
@@ -410,6 +413,7 @@ export async function checkStandaloneBrowser() {
     await p.closeSource();
     process.stdout.write('Browser evidence: unit-evidence nested unit\n');
     await p.evaluate(`document.querySelectorAll('[data-unit-rows] button')[1].click();true`); await p.wait(s=>s.sourceReady&&s.contributions===1);
+    assert.equal(await p.evaluate(`document.querySelector('[data-unit-details]').textContent.startsWith('Arrow function ·')`),true);
     assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-source-line] code')].map(row=>row.textContent).join('\\n')`),'y => y ? 1 : 0');
     await p.closeSource();
     process.stdout.write('Browser evidence: unit-evidence top-level\n');
@@ -510,7 +514,7 @@ export async function checkStandaloneBrowser() {
     assert.equal((await idle.snapshot()).canvases, 1, "static-host shutdown discarded a browser-owned completed view");
     process.stdout.write(JSON.stringify({
       chrome: { category: discovery.category, version },
-      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
+      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "syntax-colors-distinct-from-ownership-underlines", "readable-unit-kind-labels", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
       requests: harness.requests.length, workerEvents: harness.events.filter(e=>e.kind==='event').length,
       publicFiles: manifest.files.filter(f=>f.role==='public').map(f=>f.path),
     }) + "\n");

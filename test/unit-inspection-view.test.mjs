@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';import test from 'node:test';import{registerHooks}from'node:module';
 registerHooks({resolve(specifier,context,nextResolve){return nextResolve(/^\.\.?\//u.test(specifier)&&!/\.[a-z]+$/iu.test(specifier)?specifier+'.ts':specifier,context);}});
-const{attachUnitInspection}=await import('../src/edge/unit-inspection-view.ts');const{createFileInspection}=await import('../src/application/unit-inspection.ts');
+const{attachUnitInspection,unitKindLabel}=await import('../src/edge/unit-inspection-view.ts');const{createFileInspection}=await import('../src/application/unit-inspection.ts');
 class Element extends EventTarget{
  constructor(tag){super();this.tagName=tag.toUpperCase();this.dataset={};this.children=[];this.attributes={};this.open=false;this.hidden=false;this.ownText='';}
  set textContent(value){this.ownText=value;this.children=[];}get textContent(){return this.ownText+this.children.map(child=>typeof child==='string'?child:child.textContent).join('');}
@@ -23,6 +23,10 @@ test('file selection lists units without opening source, then renders inert read
  assert.equal(data(host,'unitSource').open,true);assert.ok(data(host,'sourceCode').textContent.includes('<img src=x onerror=alert(1)>'));
  assert.equal(all(host,node=>node.tagName==='IMG'||node.tagName==='SCRIPT').length,0);assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,1);
  data(host,'unitSource').dispatchEvent(new Event('close'));assert.ok(data(host,'sourceCode').children.length>0,'a queued prior close event must not clear a reopened dialog');
+ const colored=all(data(host,'sourceCode'),node=>Object.hasOwn(node.dataset,'syntax'));
+ assert.ok(colored.some(node=>node.dataset.syntax==='keyword'&&node.textContent==='if'));
+ assert.ok(colored.some(node=>node.dataset.syntax==='string'&&node.textContent.includes('<img')));
+ assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='CODE').map(node=>node.textContent).join('\n'),source);
  assert.match(data(host,'contributionRows').textContent,/if · 1:1–1:/u);assert.match(data(host,'unitDetails').textContent,/Complexity 2/u);
  button(host,'Close source').click();assert.equal(data(host,'unitSource').open,false);release();
 });
@@ -39,4 +43,10 @@ test('closing or replacing a view makes late source and list callbacks inert wit
  all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();button(host,'Close source').click();pending.resolve(read({type:'source',path:'file.js',unit:0,cursor:null}));await flush();
  assert.equal(data(host,'sourceCode').children.length,0);assert.equal(metric.textContent,'metrics retained');release();
  const delayed=Promise.withResolvers(),newHost=new Element('section');const dispose=attachUnitInspection(documentTarget,newHost,'file.js',()=>delayed.promise);const rows=data(newHost,'unitRows');dispose();delayed.resolve(read({type:'units',path:'file.js',offset:0}));await flush();assert.equal(rows.children.length,0);
+});
+test('unit controls and source headings use readable language-specific labels, not storage vocabulary',async()=>{
+ assert.equal(unitKindLabel('file.ts','arrow'),'Arrow function');assert.equal(unitKindLabel('File.CS','arrow'),'Lambda expression');assert.equal(unitKindLabel('file.js','top-level'),'Top-level code');assert.equal(unitKindLabel('file.js','static-block'),'Static initializer');assert.equal(unitKindLabel('file.js','__proto__'),'Executable unit');
+ const host=new Element('section'),source='x => x + 1',read=reader(source,[{kind:'arrow',startByte:0,endByte:source.length,complexity:1}]);
+ const release=attachUnitInspection(documentTarget,host,'file.js',async query=>read(query));await flush();assert.match(data(host,'unitRows').textContent,/Arrow function/u);
+ all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();assert.match(data(host,'unitDetails').textContent,/^Arrow function · Complexity 1/u);release();
 });
