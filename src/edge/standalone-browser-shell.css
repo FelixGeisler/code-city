@@ -141,6 +141,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-
 [data-source-code] mark { background: #302d1d; color: inherit; text-decoration: underline; text-decoration-color: #eedb75; text-underline-offset: 0.2em; }
 [data-contribution-rows] { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.78rem; overflow-wrap: anywhere; padding-inline-start: 1.75rem; }
 [data-contribution-rows] li { margin-block: 0.5rem; }
+[data-owned-contributions] > label { color: var(--muted); display: grid; font-size: 0.8rem; gap: 0.35rem; }
+[data-contribution-rows] button { background: var(--surface-strong); border-color: var(--border); color: var(--text); font: inherit; overflow-wrap: anywhere; text-align: start; width: 100%; }
+[data-contribution-rows] button:hover:not(:disabled) { border-color: var(--accent); }
 @media (width < 52rem) {
   [data-source-body] { grid-template-columns: minmax(0, 1fr); }
   [data-source-code] { max-height: 46dvh; }
