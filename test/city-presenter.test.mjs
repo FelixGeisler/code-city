@@ -1151,6 +1151,28 @@ test("picking arithmetic and eligible activation callback failures revoke the se
   }
 });
 
+test("selection between host layout resize and ResizeObserver preserves the city and draws the latest state after bitmap resize", () => {
+  const environment = fakeEnvironment();
+  const { presenter, failures } = failuresCollector(environment);
+  const geometry = oneBuilding();
+  assert.deepEqual(present(environment, presenter, 1, geometry), COMMITTED);
+  const canvas = environment.canvases[0], gl = canvas.gl;
+  const draws = names(gl).filter(name => name === "drawElementsInstanced").length, uploads = gl.uploads.length;
+  const initial = resetCamera(geometry.bounds, { width: 200, height: 100 });
+  environment.host.width = 300;
+  assert.deepEqual(presenter.setVisualState(1, null, 0), APPLIED);
+  assert.deepEqual(presenter.setVisualState(1, null, null), APPLIED);
+  assert.deepEqual(presenter.setVisualState(1, null, 0), APPLIED);
+  assert.equal(names(gl).filter(name => name === "drawElementsInstanced").length, draws, "must not draw before bitmap resize");
+  assert.deepEqual(failures, []);
+  environment.observers[0].callback();
+  assert.equal(canvas.width, 300); assert.equal(canvas.height, 100);
+  const resized = resizeCamera(initial.state, geometry.bounds, { width: 300, height: 100 });
+  assert.deepEqual(matrices(gl).at(-1), resized.view.matrix);
+  assert.deepEqual(gl.calls.filter(call => call[0] === "uniform1i").slice(-4).map(call => call[2]), [-1, 0, 0, 1]);
+  assert.equal(gl.uploads.length, uploads); assert.deepEqual(failures, []);
+});
+
 test("wheel sign, native Reset, resize retention, and browser-owned modifiers use immutable uploads", () => {
   const environment = fakeEnvironment();
   const { presenter, failures } = failuresCollector(environment);

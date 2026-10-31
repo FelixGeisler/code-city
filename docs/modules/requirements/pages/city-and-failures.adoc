@@ -507,7 +507,11 @@ segment grouping, not a new hierarchy. Repository root `/` is distinct from a
 real `_root` directory. Integer totals remain exact even above the safe Number
 sum range. Failed/excluded files do not enter these aggregates.
 
-Hover, query, sorting, Reset, and resize preserve district selection. A new file
+Hover, query, sorting, Reset, and resize preserve district selection.
+If host layout changes before the resize observer updates the canvas bitmap,
+selection updates remain valid. The observer draws the latest visual state
+with the resized bitmap/camera; a pending ordinary resize is not a presentation
+failure and must not discard the city. A new file
 selection clears it. Selection changes no geometry, immutable buffers, camera,
 provider request, metric result, or worker data contract. Old-generation and
 removed-inspector callbacks are inert.
