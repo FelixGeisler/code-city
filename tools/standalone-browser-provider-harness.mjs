@@ -20,7 +20,7 @@ function fixture(mode) {
   if (mode === "unit-evidence") {
     const lines = Array(1371).fill(""); lines[659] = "function long(x) {";
     for (let i = 0; i < 27; i++) lines[974 + i * 14] = " if(x) x--;";
-    lines[1370] = "}"; rows.push(["long.js", lines.join("\n")]);
+    lines[1370] = "}"; rows.push(["long.js", lines.join("\n")], ["overlap.js", "function overlap(x) { return x && x && x; }\n"]);
   }
   if (mode === "districts") rows = rows.map(([name, text], index) => [index < 3 ? `src/edge/${index === 1 ? "deep/" : ""}${name}` : index === 3 ? `other/${name}` : name, text]);
   if (mode === "mixed") rows.push(["bad.js", "export const = ;"], ["nul.js", Buffer.from([0])]);

@@ -188,7 +188,10 @@ export async function checkStandaloneBrowser() {
     assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-source-line] code')].map(row=>row.textContent).join('\\n')`), 'function choose(v) { return v ? 1 : 0; }');
     assert.ok(await p.evaluate(`document.querySelector('[data-contribution-rows]').textContent.includes('ternary')`));
     assert.equal(await p.evaluate(`document.querySelector('[data-unit-details]').textContent.startsWith('Function ·')`),true);
-    assert.equal(await p.evaluate(`(()=>{const code=document.querySelector('[data-source-code]'),keyword=code.querySelector('[data-syntax-color="5"]'),number=code.querySelector('[data-syntax-color="2"]'),owned=code.querySelector('mark [data-syntax-color]');return keyword.textContent==='function'&&getComputedStyle(keyword).color!==getComputedStyle(number).color&&!!owned&&getComputedStyle(owned.closest('mark')).textDecorationLine.includes('underline');})()`),true);
+    assert.equal(await p.evaluate(`(()=>{const code=document.querySelector('[data-source-code]'),keyword=code.querySelector('[data-syntax-color="5"]'),number=code.querySelector('[data-syntax-color="2"]'),owned=code.querySelector('mark [data-syntax-color]');return keyword.textContent==='function'&&getComputedStyle(keyword).color!==getComputedStyle(number).color&&!owned&&!code.querySelector('mark');})()`),true);
+    await p.evaluate(`document.querySelector('[data-contribution-rows] button').focus();true`); await key('Enter','Enter',13);
+    await p.wait(s=>s.sourceReady&&s.contributions===1&&s.sourceMessage.startsWith('Underlined: selected'));
+    assert.equal(await p.evaluate(`(()=>{const mark=document.querySelector('[data-source-code] mark');return mark.textContent==='v ? 1 : 0'&&getComputedStyle(mark).textDecorationLine.includes('underline')&&document.querySelectorAll('[data-contribution-rows] [aria-current="true"]').length===1;})()`),true);
     await p.evaluate(`document.querySelector('[data-source-code]').focus();true`); await key('ArrowRight','ArrowRight',39);
     assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`), initial, 'source inspection moved the camera');
     await key('Escape','Escape',27); await p.wait(s=>!s.sourceOpen);
@@ -427,14 +430,24 @@ export async function checkStandaloneBrowser() {
     await checked(cdp.send("Page.bringToFront", {}, p.sessionId));
     assert.equal((await idle.snapshot()).canvases, 1);
 
-    const unitEvidence = await run('unit-evidence',s=>s.canvases===1&&s.analyzed===4);
+    const unitEvidence = await run('unit-evidence',s=>s.canvases===1&&s.analyzed===5);
     const beforeEvidenceRequests=harness.requests.length;
     async function chooseFile(path) { await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();true`); }
+    process.stdout.write('Browser evidence: selected-only overlapping contributions\n');
+    await chooseFile('overlap.js'); await p.wait(s=>s.units===2); await p.click('[data-unit-rows] button'); await p.wait(s=>s.sourceReady&&s.contributions===2);
+    assert.equal(await p.evaluate(`document.querySelectorAll('[data-source-code] mark').length`),0);
+    await p.evaluate(`document.querySelector('[data-contribution-rows] button').focus();true`); await key('Enter','Enter',13); await p.wait(s=>s.sourceReady&&s.contributions===2);
+    assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-source-code] mark')].map(mark=>mark.textContent).join('')`),'x && x && x');
+    await p.evaluate(`document.querySelectorAll('[data-contribution-rows] button')[1].focus();true`); await key('Enter','Enter',13); await p.wait(s=>s.sourceReady&&s.contributions===2);
+    assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-source-code] mark')].map(mark=>mark.textContent).join('')`),'x && x');
+    assert.equal(await p.evaluate(`document.querySelector('[data-contribution-rows] [aria-current="true"]').dataset.contribution`),'1');
+    await p.closeSource();
     process.stdout.write('Browser evidence: unit-evidence parent unit\n');
     await chooseFile('a.js'); await p.wait(s=>s.units===3||s.unitMessage.includes('unavailable')); assert.equal((await p.snapshot()).units,3);
     assert.deepEqual(await p.evaluate(`[...document.querySelectorAll('[data-unit-complexity]')].map(row=>row.textContent)`),['Complexity 3','Complexity 2','Complexity 1']);
     await p.click('[data-unit-rows] button'); await p.wait(s=>s.sourceReady&&s.contributions===2);
     assert.equal(await p.evaluate(`document.querySelector('[data-contribution-rows]').textContent.includes('ternary')`),false,'nested contribution leaked into parent');
+    assert.equal(await p.evaluate(`document.querySelectorAll('[data-source-code] mark').length`),0);
     await p.closeSource();
     process.stdout.write('Browser evidence: unit-evidence nested unit\n');
     await p.evaluate(`document.querySelectorAll('[data-unit-rows] button')[1].click();true`); await p.wait(s=>s.sourceReady&&s.contributions===1);
@@ -461,6 +474,9 @@ export async function checkStandaloneBrowser() {
     const firstSourceRange=await p.evaluate(`document.querySelector('[data-source-range]').textContent`);
     await p.click('[data-source-paging] button:last-child');
     await p.evaluate(`new Promise(resolve=>{let observer;const check=()=>{if(document.querySelector('[data-source-range]').textContent!==${JSON.stringify(firstSourceRange)}){observer?.disconnect();resolve(true);}};observer=new MutationObserver(check);observer.observe(document.querySelector('[data-source-range]'),{subtree:true,childList:true,characterData:true});check();})`);
+    await p.wait(s=>s.sourceReady&&s.contributions===32);
+    assert.equal(await p.evaluate(`document.querySelectorAll('[data-source-code] mark').length`),0,'manual source navigation kept a contribution selected');
+    assert.equal(await p.evaluate(`document.querySelectorAll('[data-contribution-rows] [aria-current="true"]').length`),0);
     await p.closeSource();
     process.stdout.write('Browser evidence: source-scoped contributions and explicit location jump\n');
     await chooseFile('long.js'); await p.wait(s=>s.units===2); await p.click('[data-unit-rows] button');
@@ -561,7 +577,7 @@ export async function checkStandaloneBrowser() {
     assert.equal((await idle.snapshot()).canvases, 1, "static-host shutdown discarded a browser-owned completed view");
     process.stdout.write(JSON.stringify({
       chrome: { category: discovery.category, version },
-      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "visible-neutral-nested-platform-fills-and-edges", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "syntax-colors-distinct-from-ownership-underlines", "readable-unit-kind-labels", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "shown-source-contribution-scope-and-location-jump", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
+      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "visible-neutral-nested-platform-fills-and-edges", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "syntax-colors-distinct-from-ownership-underlines", "readable-unit-kind-labels", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "shown-source-contribution-scope-and-location-jump", "selected-only-contribution-highlight-and-overlap-replacement", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
       requests: harness.requests.length, workerEvents: harness.events.filter(e=>e.kind==='event').length,
       publicFiles: manifest.files.filter(f=>f.role==='public').map(f=>f.path),
     }) + "\n");

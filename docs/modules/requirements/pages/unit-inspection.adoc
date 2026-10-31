@@ -30,8 +30,15 @@ strings. It is a reading aid, not semantic validation or type checking. No langu
 detection, repository-controlled grammar or theme, CDN or runtime asset fetch is
 used. The existing WASM permission also covers the highlighting engine. See xref:architecture:adr/0017-offline-shiki-source-highlighting.adoc[ADR 0017].
 
-Owned contribution spans are highlighted with an underline as well as color;
-the underline remains distinct from syntax colors.
+Opening source shows syntax coloring without ownership highlights. Selecting a
+contribution from the list underlines only that record's exact span within the
+shown page, with a distinct background that preserves syntax colors. Other owned
+spans, including overlapping records, are not added to the highlight. The source
+status names the selected kind and full end-exclusive range; the current list row
+is visually and accessibly identified. Selecting another contribution replaces
+this highlight. Manual Previous/Next source navigation, changing units, closing
+or disposing the view clears it. List scope and pagination do not select a new
+contribution or change the current highlight.
 The contribution list defaults to `Shown source`: include only this unit's recorded
 spans intersecting the rendered source window, using half-open normalized byte
 ranges. Show the visible-scope total separately from the whole-unit total. A record
@@ -45,8 +52,11 @@ to its top and focuses the code. This also works when the location was selected
 from far down a long contribution list.
 Previous source returns through navigation history. This moves only the source
 window, not the city camera, selection or geometry. It performs no provider read,
-parsing or metric computation. Overlapping owned highlights remain their union;
-nested units' contribution records are not added to the parent's list. A unit of complexity one has no branching
+parsing or metric computation. Selecting a different record with the same source
+start rerenders the existing page without another source request. Highlight
+boundaries use the recorded Unicode scalar locations, not UTF-16 or byte columns;
+a span extending beyond the page is clipped for display, not changed in evidence.
+Nested units' contribution records are not added to the parent's list. A unit of complexity one has no branching
 contributions. No finding, threshold, recommendation, or source edit is added.
 
 The city remains the default view. Close source or Escape returns to the unit
@@ -55,7 +65,7 @@ or change file/district selection. A changed file, district, cleared selection,
 replacement, or page exit disposes the old inspection view. Late replies cannot
 reopen or populate it. Inspection errors stay local to the inspector and do not
 discard the completed city or prevent Save. Grammar, initialization or tokenization
-failure preserves exact plain source, paging and owned contribution underlines,
+failure preserves exact plain source, paging and selected-contribution underlines,
 with `Syntax coloring unavailable.` shown locally. There is no automatic coloring
 retry or fallback lexer.
 
@@ -78,7 +88,8 @@ self-contained in the pinned release. Complete-file tokenization precedes page
 clipping, with no line-length or time-budget truncation of lexical context. Token
 spans are ordered, non-overlapping, scalar-aligned and bounded by the source page;
 only fixed, vetted theme-palette indices cross the inspection boundary. Theme
-font decorations are not applied: underlines remain reserved for ownership.
+font decorations are not applied: underlines remain reserved for the selected
+owned contribution.
 The UI creates inert text/span/mark nodes, never HTML, imports, asset URLs or
 executable code from source.
 
