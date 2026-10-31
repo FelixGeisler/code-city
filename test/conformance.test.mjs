@@ -379,6 +379,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "application/protocol.ts",
     "application/resolution.ts",
     "application/saved-investigation.ts",
+    "application/source-highlighting.ts",
     "application/source-retrieval.ts",
     "application/unit-inspection.ts",
     "application/worker-attempt.ts",

@@ -1,3 +1,4 @@
+import { createSourceColoring, SYNTAX_KINDS, type SyntaxSpan } from "./source-highlighting";
 import { DECISION_KINDS, EXPLICIT_UNIT_FORMS } from "../domain/base-metrics";
 import { isCanonicalSourcePath, MAX_NORMALIZED_MODULE_BYTES } from "../domain/source-admission";
 
@@ -12,7 +13,7 @@ export type InspectionQuery =
 export type UnitRow = Readonly<{ id: number; kind: string; complexity: number; start: SourceLocation; end: SourceLocation }>;
 export type InspectionResult =
   | Readonly<{ type: "units"; path: string; offset: number; total: number; rows: readonly UnitRow[] }>
-  | Readonly<{ type: "source"; path: string; unit: number; kind: string; complexity: number; start: SourceLocation; end: SourceLocation; cursor: number; next: number | null; text: string; highlights: readonly Readonly<{ start: number; end: number }>[] }>
+  | Readonly<{ type: "source"; path: string; unit: number; kind: string; complexity: number; start: SourceLocation; end: SourceLocation; cursor: number; next: number | null; text: string; syntax: readonly SyntaxSpan[]; highlights: readonly Readonly<{ start: number; end: number }>[] }>
   | Readonly<{ type: "contributions"; path: string; unit: number; offset: number; total: number; rows: readonly Readonly<{ kind: string; start: SourceLocation; end: SourceLocation }>[] }>;
 export type InspectionEvidence = Readonly<{
   units: Readonly<{ length: number; at(index: number): Readonly<{ kind: string; startByte: number; endByte: number; complexity: number }> | undefined }>;
@@ -44,7 +45,7 @@ export function validateInspectionQuery(value: unknown): InspectionQuery {
 }
 export function parseInspectionResult(value: unknown, query: InspectionQuery): InspectionResult {
   const data = object(value, query.type === "units" ? ["type", "path", "offset", "total", "rows"] : query.type === "source"
-    ? ["type", "path", "unit", "kind", "complexity", "start", "end", "cursor", "next", "text", "highlights"] : ["type", "path", "unit", "offset", "total", "rows"]);
+    ? ["type", "path", "unit", "kind", "complexity", "start", "end", "cursor", "next", "text", "syntax", "highlights"] : ["type", "path", "unit", "offset", "total", "rows"]);
   requireValue(data.type === query.type && data.path === query.path);
   if (query.type !== "units") requireValue(data.unit === query.unit);
   if (query.type === "source") {
@@ -53,12 +54,15 @@ export function parseInspectionResult(value: unknown, query: InspectionQuery): I
     requireValue(integer(data.cursor, MAX_NORMALIZED_MODULE_BYTES) && (query.cursor === null || query.cursor === data.cursor));
     requireValue(data.next === null || (integer(data.next, MAX_NORMALIZED_MODULE_BYTES) && data.next > data.cursor));
     requireValue(typeof data.text === "string" && data.text.isWellFormed() && new TextEncoder().encode(data.text).length <= SOURCE_PAGE_BYTES);
-    let end = 0;
-    for (const item of array(data.highlights, SOURCE_PAGE_BYTES)) {
-      const span = object(item, ["start", "end"]);
-      requireValue(integer(span.start, data.text.length) && integer(span.end, data.text.length) && span.start >= end && span.end > span.start);
-      for (const index of [span.start, span.end]) requireValue(!(index > 0 && /[\uD800-\uDBFF]/u.test(data.text[index - 1]!) && /[\uDC00-\uDFFF]/u.test(data.text[index] ?? "")));
-      end = span.end;
+    for (const name of ["highlights", "syntax"] as const) {
+      let end = 0;
+      for (const item of array(data[name], SOURCE_PAGE_BYTES)) {
+        const span = object(item, name === "syntax" ? ["kind", "start", "end"] : ["start", "end"]);
+        if (name === "syntax") requireValue((SYNTAX_KINDS as readonly unknown[]).includes(span.kind));
+        requireValue(integer(span.start, data.text.length) && integer(span.end, data.text.length) && span.start >= end && span.end > span.start);
+        for (const index of [span.start, span.end]) requireValue(!(index > 0 && /[\uD800-\uDBFF]/u.test(data.text[index - 1]!) && /[\uDC00-\uDFFF]/u.test(data.text[index] ?? "")));
+        end = span.end;
+      }
     }
   } else {
     requireValue(data.offset === query.offset && integer(data.total, MAX_NORMALIZED_MODULE_BYTES) && query.offset <= data.total);
@@ -78,7 +82,8 @@ export function parseInspectionResult(value: unknown, query: InspectionQuery): I
 /** Presentation indexing of retained facts, never parsing or metric computation. */
 export function createFileInspection(path: string, bytes: Uint8Array, evidence: InspectionEvidence) {
   requireValue(isCanonicalSourcePath(path) && bytes.length <= MAX_NORMALIZED_MODULE_BYTES);
-  decoder.decode(bytes); // Reject malformed retained text, not a source-analysis operation.
+  const normalizedText = decoder.decode(bytes); // Decode retained text; do not parse or analyze it.
+  let coloring: ReturnType<typeof createSourceColoring> | undefined;
   const columns = new Uint32Array(bytes.length + 1), lineStarts = [0];
   let column = 1;
   for (let offset = 0; offset < bytes.length; offset++) {
@@ -147,6 +152,9 @@ export function createFileInspection(path: string, bytes: Uint8Array, evidence: 
     let low = 0, high = union.length;
     while (low < high) { const middle = (low + high) >>> 1; if (union[middle]!.end <= cursor) low = middle + 1; else high = middle; }
     for (let index = low; index < union.length && union[index]!.start < end; index++) { const span = union[index]!; highlights.push({ start: utf16[Math.max(cursor, span.start) - cursor]!, end: utf16[Math.min(end, span.end) - cursor]! }); }
-    return { type: "source", path, unit: id, kind: kinds[forms[id]!]!, complexity: complexities[id]!, start: locate(cursor), end: locate(end), cursor, next: end < ends[id]! ? end : null, text, highlights };
+    coloring ??= createSourceColoring(path, normalizedText);
+    const textStart = decoder.decode(bytes.subarray(0, cursor)).length;
+    const syntax = coloring(textStart, textStart + text.length);
+    return { type: "source", path, unit: id, kind: kinds[forms[id]!]!, complexity: complexities[id]!, start: locate(cursor), end: locate(end), cursor, next: end < ends[id]! ? end : null, text, syntax, highlights };
   };
 }

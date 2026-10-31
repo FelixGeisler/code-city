@@ -66,6 +66,16 @@ test('unit paging uses stable complexity/start/end/kind order and exposes zero-u
 test('inspection boundaries reject foreign paths, malformed metadata, out-of-range and split-scalar spans',()=>{
  assert.throws(()=>validateInspectionQuery({type:'units',path:'../bad.js',offset:0}));assert.throws(()=>validateInspectionQuery({type:'units',path:'ok.js',offset:0,extra:true}));
  assert.throws(()=>createFileInspection('bad.js',encoder.encode('é'),{units:{length:1,at:()=>({kind:'arrow',startByte:1,endByte:2,complexity:1})},contributionCount:0,contributions:()=>[]}));
- const query={type:'source',path:'ok.js',unit:0,cursor:null};const result={type:'source',path:'ok.js',unit:0,kind:'top-level',complexity:1,start:{line:1,column:1},end:{line:1,column:2},cursor:0,next:null,text:'😀',highlights:[{start:0,end:1}]};assert.throws(()=>parseInspectionResult(result,query));
+ const query={type:'source',path:'ok.js',unit:0,cursor:null};const result={type:'source',path:'ok.js',unit:0,kind:'top-level',complexity:1,start:{line:1,column:1},end:{line:1,column:2},cursor:0,next:null,text:'😀',syntax:[],highlights:[{start:0,end:1}]};assert.throws(()=>parseInspectionResult(result,query));
  assert.throws(()=>parseInspectionResult({...result,highlights:[],path:'other.js'},query));
+ assert.throws(()=>parseInspectionResult({...result,highlights:[],syntax:[{kind:'string',start:0,end:1}]},query));
+ assert.throws(()=>parseInspectionResult({...result,highlights:[],syntax:[{kind:'url(javascript:alert(1))',start:0,end:2}]},query));
+ assert.throws(()=>parseInspectionResult({...result,highlights:[],syntax:[{kind:'string',start:0,end:2},{kind:'comment',start:0,end:2}]},query));
+ assert.deepEqual(parseInspectionResult({...result,highlights:[],syntax:[{kind:'string',start:0,end:2}]},query).syntax,[{kind:'string',start:0,end:2}]);
+});
+test('paged Unicode source keeps whole-file comment context and bounded validated syntax spans',()=>{
+ const source='/* '+ '😀 x '.repeat(2000)+' if */\nconst text = "yes";',path='context.ts',bytes=encoder.encode(source);
+ const read=createFileInspection(path,bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:1})},contributionCount:0,contributions:()=>[]});
+ let cursor=null,whole='',pages=0;do{const query={type:'source',path,unit:0,cursor},page=read(query);parseInspectionResult(page,query);assert.equal(page.syntax[0].kind,'comment');assert.equal(page.syntax[0].start,0);assert.ok(page.syntax.length<=SOURCE_PAGE_BYTES);whole+=page.text;cursor=page.next;pages++;}while(cursor!==null);
+ assert.equal(whole,source);assert.ok(pages>1);
 });

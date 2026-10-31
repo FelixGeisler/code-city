@@ -8,7 +8,9 @@ xref:city-and-failures.adoc#CC-CORE-INV-04[Investigation Evidence Only].
 
 Selecting a building or file-list row shows raw file metrics and executable
 units. It does not open source or move the camera. Unit rows identify kind,
-normalized source range and exact recorded complexity. A zero-unit file says
+normalized source range and exact recorded complexity. Kind labels use readable
+names: `Arrow function` for JS/TS arrows, `Lambda expression` for C# lambdas,
+and `Top-level code` for the file-level unit. A zero-unit file says
 `No executable units.`; no synthetic unit or complexity is invented.
 
 Activating a unit explicitly opens a native read-only source dialog. An
@@ -18,7 +20,13 @@ one-based Unicode scalar columns, with tabs counting as one column; range ends
 are exclusive. This is normalized analyzed text, not an editable copy or a
 promise of original CRLF/BOM presentation.
 
-Owned contribution spans are highlighted with an underline as well as color.
+Source uses lexical syntax colors for keywords, primitive types, strings,
+comments, numbers and operators, with JS regex literals and JSX/TSX tags and
+attributes distinguished. Coloring keeps whole-file lexical context across unit
+and page boundaries. It is a reading aid, not semantic validation or type checking.
+
+Owned contribution spans are highlighted with an underline as well as color;
+the underline remains distinct from syntax colors.
 A separate list names each recorded kind and its start/end location. Overlapping
 owned spans are rendered as their union; nested units' contribution records are
 not added to the parent's list. A unit of complexity one has no branching
@@ -43,7 +51,10 @@ Original analysis retains packed unit/observation tables, finalized complexities
 and recorded decision-owner runs independently of the Save-only capture budget.
 Only the currently inspected file is indexed for presentation. The worker sends
 bounded unit/location metadata on file selection and source text only after
-explicit unit activation. The UI creates inert text/mark nodes, never HTML,
+explicit unit activation. A display-only scanner in the existing browser worker colors retained normalized
+text when source is explicitly opened; it does not initialize a parser, compute
+metrics or change saved evidence. It sends bounded, validated token spans with
+the existing source page. The UI creates inert text/span/mark nodes, never HTML,
 imports, asset URLs or executable code from source.
 
 Fresh and reopened investigations use the same presentation reader. A reopened
