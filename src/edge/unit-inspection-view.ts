@@ -43,7 +43,8 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
   let active = true, listEpoch = 0, sourceEpoch = 0, contributionEpoch = 0, offset = 0;
   let selected: UnitRow | undefined, shown: SourcePage | undefined, cursor: number | null = null, next: number | null = null;
   let sourcePending = false, contributionPending = false, contributionOffset = 0, contributionTotal = 0, wholeUnit = false, focusSource = false;
-  let selectedContribution: ContributionRow | undefined;
+  let selectedContribution: ContributionRow | undefined, firstMarked: HTMLElement | undefined;
+  const contributionButtons = new Map<number, HTMLButtonElement>();
   const history: number[] = [];
   const previousUnits = button("Previous units", () => { offset = Math.max(0, offset - UNIT_PAGE_SIZE); void loadUnits(); });
   const nextUnits = button("Next units", () => { offset += UNIT_PAGE_SIZE; void loadUnits(); }); page.append(previousUnits, range, nextUnits);
@@ -78,7 +79,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
   dialog.addEventListener("close", () => {
     if (dialog.open) return;
     selected = undefined; shown = undefined; selectedContribution = undefined; sourcePending = false; contributionPending = false; sourceEpoch++; contributionEpoch++;
-    code.replaceChildren(); contributions.replaceChildren(); scope.disabled = true;
+    code.replaceChildren(); contributions.replaceChildren(); contributionButtons.clear(); scope.disabled = true;
   });
   slot.append(message, rows, page, dialog); inspector.append(slot);
 
@@ -108,7 +109,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
   }
   function renderSource(result: SourcePage): void {
     const highlights = selectedHighlight(result, selectedContribution);
-    code.replaceChildren();
+    code.replaceChildren(); firstMarked = undefined;
     let textOffset = 0, highlight = 0, syntaxIndex = 0, line = result.start.line;
     for (const text of result.text.split("\n")) {
       const row = element("span"); row.dataset.sourceLine = "";
@@ -121,7 +122,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
         const syntax = result.syntax[syntaxIndex], colored = syntax !== undefined && syntax.start <= position;
         const end = Math.min(limit, span ? marked ? span.end : span.start : limit, syntax ? colored ? syntax.end : syntax.start : limit);
         const fragment = element("span", result.text.slice(position, end)); if (colored) fragment.dataset.syntaxColor = String(syntax.color);
-        if (marked) { if (!mark) { mark = element("mark"); mark.title = "Selected complexity contribution"; content.append(mark); } mark.append(fragment); }
+        if (marked) { if (!mark) { mark = element("mark"); mark.title = "Selected complexity contribution"; firstMarked ??= mark; content.append(mark); } mark.append(fragment); }
         else { mark = undefined; content.append(fragment); }
         position = end;
       }
@@ -132,13 +133,28 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
       ? `Underlined: selected ${contributionKindLabel(path, selectedContribution.kind)} · +1 complexity. ${contributionLocation(selectedContribution.start, selectedContribution.end)}.`
       : result.complexity === 1 ? "No branching contributions in this unit." : "Select a contribution to highlight its source span.");
   }
-  async function loadSource(contribution?: ContributionRow, preselect = false): Promise<void> {
+  function updateContributionSelection(): void {
+    for (const [id, button] of contributionButtons) button.setAttribute("aria-current", String(selectedContribution?.id === id));
+  }
+  function focusSelectedSource(): void {
+    dialog.scrollTop = 0;
+    if (firstMarked) {
+      const target = firstMarked.getBoundingClientRect(), viewport = code.getBoundingClientRect();
+      if (target.top < viewport.top || target.bottom > viewport.bottom) code.scrollTop += target.top - viewport.top - code.clientTop;
+      if (target.left < viewport.left || target.left >= viewport.right) code.scrollLeft += target.left - viewport.left - code.clientLeft;
+    }
+    code.focus?.({ preventScroll: true });
+  }
+  async function loadSource(contribution?: ContributionRow, preselect = false, preserveContributions = false): Promise<void> {
     if (!active || !selected || !dialog.open) return;
-    const epoch = ++sourceEpoch, unit = selected.id;
-    selectedContribution = contribution;
-    shown = undefined; sourcePending = true; contributionEpoch++; contributionPending = false; contributionOffset = 0; contributionTotal = 0;
-    code.replaceChildren(); contributions.replaceChildren(); sourceRange.textContent = ""; contributionPaging.hidden = true; scope.disabled = true;
-    sourceMessage.textContent = "Loading source"; contributionMessage.textContent = "Waiting for source"; previousSource.disabled = true; nextSource.disabled = true;
+    const epoch = ++sourceEpoch, unit = selected.id, retainList = preserveContributions && wholeUnit;
+    selectedContribution = contribution; shown = undefined; sourcePending = true;
+    if (!retainList) {
+      contributionEpoch++; contributionPending = false; contributionOffset = 0; contributionTotal = 0;
+      contributions.replaceChildren(); contributionButtons.clear(); contributionPaging.hidden = true; contributionMessage.textContent = "Waiting for source";
+    }
+    code.replaceChildren(); sourceRange.textContent = ""; scope.disabled = true;
+    sourceMessage.textContent = "Loading source"; previousSource.disabled = true; nextSource.disabled = true; previousContributions.disabled = true; nextContributions.disabled = true;
     try {
       const result = await inspect({ type: "source", path, unit, cursor });
       if (!active || epoch !== sourceEpoch || selected?.id !== unit || !dialog.open) return;
@@ -147,15 +163,17 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
       renderSource(result);
       sourcePaging.hidden = false; previousSource.hidden = nextSource.hidden = history.length === 0 && next === null;
       previousSource.disabled = history.length === 0; nextSource.disabled = next === null; scope.disabled = false;
-      code.scrollTop = 0; code.scrollLeft = 0; if (focusSource) { focusSource = false; dialog.scrollTop = 0; code.focus?.({ preventScroll: true }); }
-      void loadContributions(preselect);
-    } catch { if (active && epoch === sourceEpoch) { sourcePending = false; shown = undefined; selectedContribution = undefined; code.replaceChildren(); sourceMessage.textContent = "Source inspection unavailable."; contributionMessage.textContent = "No source page is shown."; } }
+      code.scrollTop = 0; code.scrollLeft = 0; if (focusSource) { focusSource = false; focusSelectedSource(); }
+      if (retainList) {
+        updateContributionSelection(); previousContributions.disabled = contributionOffset === 0; nextContributions.disabled = contributionOffset + CONTRIBUTION_PAGE_SIZE >= contributionTotal;
+      } else void loadContributions(preselect);
+    } catch { if (active && epoch === sourceEpoch) { sourcePending = false; shown = undefined; selectedContribution = undefined; focusSource = false; updateContributionSelection(); code.replaceChildren(); sourceMessage.textContent = "Source inspection unavailable."; if (!retainList) contributionMessage.textContent = "No source page is shown."; } }
   }
   async function loadContributions(preselect = false): Promise<void> {
     if (!active || !selected || !shown || sourcePending || !dialog.open) return;
     const epoch = ++contributionEpoch, unit = selected.id, source = shown, expectedSourceEpoch = sourceEpoch, all = wholeUnit;
-    const current = () => active && epoch === contributionEpoch && expectedSourceEpoch === sourceEpoch && shown === source && selected?.id === unit && dialog.open && wholeUnit === all;
-    contributionPending = true; contributions.replaceChildren(); contributionPaging.hidden = true;
+    const current = () => active && epoch === contributionEpoch && (all || (expectedSourceEpoch === sourceEpoch && shown === source)) && selected?.id === unit && dialog.open && wholeUnit === all;
+    contributionPending = true; contributions.replaceChildren(); contributionButtons.clear(); contributionPaging.hidden = true;
     contributionMessage.textContent = "Loading contributions"; previousContributions.disabled = true; nextContributions.disabled = true;
     try {
       const result = await inspect({ type: "contributions", path, unit, offset: contributionOffset, cursor: all ? null : source.cursor });
@@ -168,9 +186,13 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
         const label = contributionKindLabel(path, row.kind), location = contributionLocation(row.start, row.end);
         const item = element("li"), open = button("", () => {
           if (!current()) return;
-          wholeUnit = false; scope.value = "shown"; contributionOffset = 0; selectedContribution = row;
-          if (cursor !== row.cursor) { if (cursor !== null) history.push(cursor); cursor = row.cursor; focusSource = true; void loadSource(row); }
-          else { renderSource(source); code.scrollTop = 0; code.scrollLeft = 0; dialog.scrollTop = 0; code.focus?.({ preventScroll: true }); void loadContributions(); }
+          selectedContribution = row; updateContributionSelection();
+          if (!sourcePending && shown && compare(row.start, shown.end) < 0 && compare(row.end, shown.start) > 0) {
+            renderSource(shown); focusSelectedSource();
+          } else {
+            if (!sourcePending && shown) history.push(shown.cursor);
+            cursor = row.cursor; focusSource = true; void loadSource(row, false, true);
+          }
         });
         const summary = element("span"); summary.dataset.contributionSummary = "";
         const kind = element("span", label); kind.dataset.contributionLabel = "";
@@ -178,7 +200,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
         summary.append(kind, added);
         const position = element("span", location + (continued ? " · extends outside shown page" : "")); position.dataset.contributionLocation = "";
         open.append(summary, position); open.setAttribute("aria-label", `${label}. Adds 1 complexity. ${position.textContent}.`);
-        open.dataset.contribution = String(row.id); open.setAttribute("aria-current", String(selectedContribution?.id === row.id)); item.append(open); contributions.append(item);
+        open.dataset.contribution = String(row.id); open.setAttribute("aria-current", String(selectedContribution?.id === row.id)); contributionButtons.set(row.id, open); item.append(open); contributions.append(item);
       }
       contributionMessage.textContent = result.unitTotal === 0 ? "No branching contributions in this unit."
         : all ? `${result.unitTotal} contributions in the whole unit. Select a location to show its source.`

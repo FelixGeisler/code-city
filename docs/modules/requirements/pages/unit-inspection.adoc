@@ -64,14 +64,26 @@ ending at the page start or starting at its exclusive end is not in that page.
 Spans continuing outside the page keep their exact full locations and say so.
 
 `Whole unit` explicitly lists all owned contributions, still in bounded pages.
-Activating a native contribution-location button shows source starting at that
-record's retained start byte, returns to `Shown source`, scrolls the source dialog
-to its top and focuses the code. This also works when the location was selected
-from far down a long contribution list.
+Activating a native contribution-location button preserves the list's scope,
+page offset, membership, order, totals and existing row elements. It updates the
+current-row marker in place, never resets the list page or switches scope.
+
+When the record intersects the shown source window, highlight and reveal its
+visible span in the existing text without a source or contribution request.
+For a `Whole unit` record outside that window, read source starting at its retained
+start byte while preserving the existing whole-unit list. Rapid selections use
+the latest source request; older replies cannot replace it. Retained whole-unit
+buttons remain usable during these reads. Source failure stays local and leaves
+the list available for another explicit selection.
+
+Explicit activation brings the source dialog to its top, reveals the first
+highlighted span by scrolling only the code pane as needed, and focuses the code.
+This also works when activating a location far down a long contribution list.
 Previous source returns through navigation history. This moves only the source
 window, not the city camera, selection or geometry. It performs no provider read,
-parsing or metric computation. Selecting a different record with the same source
-start rerenders the existing page without another source request. Highlight
+parsing or metric computation. Selecting a different record already intersecting the shown page rerenders it
+without another source request. Only explicit source-page or list navigation
+refreshes contribution membership or pagination. Highlight
 boundaries use the recorded Unicode scalar locations, not UTF-16 or byte columns;
 a span extending beyond the page is clipped for display, not changed in evidence.
 Nested units' contribution records are not added to the parent's list. A unit of complexity one has no branching
@@ -117,8 +129,9 @@ contribution facts; no migration, GitHub acquisition, parser initialization or
 metric reanalysis is required. Inspection sends no request to the server and
 does not save automatically. It uses local generation, revision, file and
 request identities, source-page cursor and contribution scope to reject stale or
-mismatched replies. Changing source clears old contribution rows while loading;
-late replies and detached location buttons cannot populate or navigate another
+mismatched replies. Manual source navigation clears old contribution rows while
+loading; whole-unit contribution selection retains its existing list. Late
+replies and detached location buttons cannot populate or navigate another
 page or unit. At most one pending
 request per inspection operation is retained. The browser's actual heap and
 latency remain device-dependent, not input-envelope guarantees.

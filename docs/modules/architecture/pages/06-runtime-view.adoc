@@ -71,7 +71,10 @@ The transport retains at most one pending read per operation kind and validates
 result shape, revision, path, source-page cursor, contribution scope and request
 identity. Contribution locations carry retained byte cursors for local source
 navigation. The view additionally gates asynchronous replies by source-page and
-file/dialog lifetime. Replacement disposes the dialog
+file/dialog lifetime. Whole-unit row callbacks are bound to their list page and
+unit lifetime, not to the source page reached by selecting them. In-page selection
+reuses rendered evidence; an out-of-page whole-unit source read leaves the list
+and its row elements intact. Replacement disposes the dialog
 and rejects outstanding reads. A queued native close notification cannot clear
 a newly reopened dialog. The source view creates inert text/mark nodes, clips the
 one selected contribution's scalar-column span to the rendered page, and preserves

@@ -4,10 +4,11 @@ const{attachUnitInspection,unitKindLabel,contributionKindLabel,contributionLocat
 const{createSourceColoring}=await import('../src/edge/shiki-source-highlighting.ts');
 const createFileInspection=(path,bytes,evidence,color=createSourceColoring)=>makeInspection(path,bytes,evidence,color);
 class Element extends EventTarget{
- constructor(tag){super();this.tagName=tag.toUpperCase();this.dataset={};this.children=[];this.attributes={};this.open=false;this.hidden=false;this.ownText='';}
+ constructor(tag){super();this.tagName=tag.toUpperCase();this.dataset={};this.children=[];this.attributes={};this.open=false;this.hidden=false;this.ownText='';this.scrollTop=0;this.scrollLeft=0;this.clientTop=0;this.clientLeft=0;}
  set textContent(value){this.ownText=value;this.children=[];}get textContent(){return this.ownText+this.children.map(child=>typeof child==='string'?child:child.textContent).join('');}
  set innerHTML(_value){throw Error('Unsafe HTML sink');}
  append(...children){this.children.push(...children);}replaceChildren(...children){this.children=[];this.ownText='';this.append(...children);}setAttribute(name,value){this.attributes[name]=value;}
+ getBoundingClientRect(){return{top:0,bottom:400,left:0,right:600};}
  click(){this.dispatchEvent(new Event('click'));}showModal(){this.open=true;}close(){this.open=false;this.dispatchEvent(new Event('close'));}
 }
 const documentTarget={createElement:tag=>new Element(tag)};
@@ -69,21 +70,21 @@ test('a source reply delayed by initialization cannot repaint a replaced file vi
  const replacement=attachUnitInspection(documentTarget,host,'other.js',async()=>({type:'units',path:'other.js',offset:0,total:0,rows:[]}));
  pending.resolve(await read({type:'source',path:'file.js',unit:0,cursor:null}));await flush();assert.equal(oldCode.children.length,0);assert.equal(data(host,'unitSource').open,false);replacement();
 });
-test('a long unit defaults to shown-source contributions and whole-unit entries jump back into matching code',async()=>{
+test('whole-unit source jumps preserve scope, order, row identity and usable retained callbacks',async()=>{
  const lines=Array(1371).fill('');lines[659]='function long(x) {';for(let i=0;i<27;i++)lines[974+i*14]=' if(x) x--;';lines[1370]='}';const source=lines.join('\n'),bytes=new TextEncoder().encode(source),records=[];let from=0;
  for(let i=0;i<27;i++){const start=source.indexOf('if(x)',from);records.push([0,'if',start,start+10]);from=start+1;}
  const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'function',startByte:659,endByte:bytes.length,complexity:28})},contributionCount:records.length,contributions:()=>records},async()=>()=>[]);
- const host=new Element('section'),calls=[];let waiting;
- const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);const result=await read(query);if(query.type==='contributions')waiting?.resolve(result);return result;});await flush();
- const action=async callback=>{waiting=Promise.withResolvers();callback();const result=await waiting.promise;await flush();return result;};
+ const host=new Element('section'),calls=[];let waiting,type;
+ const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);const result=await read(query);if(query.type===type)waiting?.resolve(result);return result;});await flush();
+ const action=async(callback,operation='contributions')=>{type=operation;waiting=Promise.withResolvers();callback();const result=await waiting.promise;await flush();return result;};
  await action(()=>all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click());
  assert.equal(data(host,'contributionRows').children.length,0);assert.match(data(host,'contributionStatus').textContent,/0 of 27/u);assert.match(data(host,'sourceRange').textContent,/Shown source: 660:1/u);assert.match(data(host,'unitDetails').textContent,/Complexity 28 \(whole unit\).*660:1–1371:2/u);
  const scope=data(host,'contributionScope');await action(()=>{scope.value='unit';scope.dispatchEvent(new Event('change'));});
- assert.equal(data(host,'contributionRows').children.length,27);const target=all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0];assert.match(target.textContent,/Line 975 · starts at column 2/u);
- data(host,'unitSource').scrollTop=500;
- await action(()=>target.click());assert.equal(data(host,'unitSource').scrollTop,0);assert.equal(scope.value,'shown');assert.equal(data(host,'sourceCode').children[0].children[0].textContent,'975');assert.match(data(host,'sourceRange').textContent,/Shown source: 975:2/u);assert.ok(data(host,'contributionRows').children.length>0&&data(host,'contributionRows').children.length<27);
- const before=calls.length;target.click();await flush();assert.equal(calls.length,before,'detached whole-unit row must not issue a stale jump');
- await action(()=>button(host,'Previous source').click());assert.match(data(host,'sourceRange').textContent,/Shown source: 660:1/u);assert.equal(data(host,'contributionRows').children.length,0);release();
+ const original=[...data(host,'contributionRows').children],buttons=all(host,node=>Object.hasOwn(node.dataset,'contribution')),target=buttons[9],metadataReads=calls.filter(query=>query.type==='contributions').length;
+ assert.equal(original.length,27);data(host,'unitSource').scrollTop=500;
+ await action(()=>target.click(),'source');assert.equal(data(host,'unitSource').scrollTop,0);assert.equal(scope.value,'unit');assert.equal(data(host,'sourceCode').children[0].children[0].textContent,'1101');assert.equal(data(host,'contributionRows').children.length,27);assert.ok(original.every((row,index)=>data(host,'contributionRows').children[index]===row));assert.equal(target.attributes['aria-current'],'true');
+ await action(()=>buttons[0].click(),'source');assert.equal(data(host,'sourceCode').children[0].children[0].textContent,'975');assert.equal(calls.filter(query=>query.type==='contributions').length,metadataReads);assert.ok(original.every((row,index)=>data(host,'contributionRows').children[index]===row));
+ await action(()=>button(host,'Previous source').click());assert.match(data(host,'sourceRange').textContent,/Shown source: 1101:2/u);assert.equal(scope.value,'unit');const before=calls.length;target.click();await flush();assert.equal(calls.length,before,'row detached by explicit source navigation must be inert');release();
 });
 test('late contribution replies cannot populate a different source page',async()=>{
  const lines=Array(200).fill('x;');lines[0]='if(x) x;';lines[99]='if(y) y;';const source=lines.join('\n'),bytes=new TextEncoder().encode(source),second=source.indexOf('if(y)'),old=Promise.withResolvers(),ready=Promise.withResolvers();
@@ -110,10 +111,10 @@ test('selected spans clip to a scalar-aligned bounded source window, not the uni
  all(host,node=>node.dataset.contribution==='1')[0].click();await flush();assert.equal(mark(),'😀');button(host,'Next source').click();await flush();assert.equal(mark(),'');release();
 });
 test('a late selected-contribution source reply cannot restore a highlight after the dialog reopens',async()=>{
- const source='a&&b;\nc&&d;',bytes=new TextEncoder().encode(source),host=new Element('section'),pending=Promise.withResolvers();
- const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:3})},contributionCount:2,contributions:()=>[[0,'logical-and',0,4],[0,'logical-and',6,10]]},async()=>()=>[]);
- const release=attachUnitInspection(documentTarget,host,'file.js',query=>query.type==='source'&&query.cursor===6?pending.promise:read(query));await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();all(host,node=>node.dataset.contribution==='1')[0].click();
- button(host,'Close source').click();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();pending.resolve(await read({type:'source',path:'file.js',unit:0,cursor:6}));await flush();
+ const source='a&&b;\n'+'x;\n'.repeat(100)+'c&&d;',bytes=new TextEncoder().encode(source),late=source.indexOf('c&&d'),host=new Element('section'),pending=Promise.withResolvers();
+ const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:3})},contributionCount:2,contributions:()=>[[0,'logical-and',0,4],[0,'logical-and',late,late+4]]},async()=>()=>[]);
+ const release=attachUnitInspection(documentTarget,host,'file.js',query=>query.type==='source'&&query.cursor===late?pending.promise:read(query));await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();const scope=data(host,'contributionScope');scope.value='unit';scope.dispatchEvent(new Event('change'));await flush();all(host,node=>node.dataset.contribution==='1')[0].click();
+ button(host,'Close source').click();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();pending.resolve(await read({type:'source',path:'file.js',unit:0,cursor:late}));await flush();
  assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').map(node=>node.textContent).join(''),'a&&b');assert.equal(all(host,node=>node.attributes['aria-current']==='true')[0].dataset.contribution,'0');assert.match(data(host,'sourceRange').textContent,/Shown source: 1:1/u);release();
 });
 test('contribution labels describe every kind and explicit scalar-column ranges without mislabelling C# guards',()=>{
@@ -129,4 +130,33 @@ test('opening a unit preselects its first shown contribution without source navi
  assert.equal(focuses,0);assert.equal(calls.filter(query=>query.type==='source').length,1);assert.equal(calls.find(query=>query.type==='source').cursor,null);assert.match(data(host,'sourceRange').textContent,/Shown source: 1:1/u);
  assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').map(node=>node.textContent).join(''),'if(x) x++;');assert.equal(all(host,node=>node.attributes['aria-current']==='true')[0].dataset.contribution,'0');
  assert.equal(data(host,'contributionComplexity').dataset.contributionComplexity,'1');assert.equal(data(host,'contributionComplexity').textContent,'+1 complexity');assert.match(data(host,'contributionSort').textContent,/highest first.*ties use source order/u);assert.match(all(host,node=>node.dataset.contribution==='0')[0].attributes['aria-label'],/If statement\. Adds 1 complexity\. Line 2/u);release();
+});
+test('selecting on the second shown-source list page preserves row objects, offset, order and counts without any read',async()=>{
+ const line='if(x) x++;\n',source=line.repeat(70),bytes=new TextEncoder().encode(source),host=new Element('section'),calls=[];
+ const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:71})},contributionCount:70,contributions:()=>Array.from({length:70},(_,index)=>[0,'if',index*line.length,index*line.length+10])},async()=>()=>[]);
+ const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);return read(query);});await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();button(host,'Next contributions').click();await flush();
+ const rows=data(host,'contributionRows'),original=[...rows.children],entries=all(rows,node=>Object.hasOwn(node.dataset,'contribution')),before=calls.length,range=data(host,'sourceRange').textContent,paging=data(host,'contributionPaging').textContent;
+ entries[13].click();await flush();assert.equal(calls.length,before);assert.equal(rows.start,33);assert.ok(original.every((row,index)=>rows.children[index]===row));assert.equal(entries[13].dataset.contribution,'45');assert.equal(entries[13].attributes['aria-current'],'true');assert.equal(data(host,'contributionScope').value,'shown');assert.equal(data(host,'sourceRange').textContent,range);assert.equal(data(host,'contributionPaging').textContent,paging);
+ entries[18].click();await flush();assert.equal(entries[18].attributes['aria-current'],'true');assert.equal(calls.length,before);release();
+});
+test('an out-of-page whole-unit selection preserves the second list page and every native row',async()=>{
+ const line='if(x) x++;\n\n',source=line.repeat(140),bytes=new TextEncoder().encode(source),host=new Element('section'),calls=[];
+ const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:141})},contributionCount:140,contributions:()=>Array.from({length:140},(_,index)=>[0,'if',index*line.length,index*line.length+10])},async()=>()=>[]);
+ const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);return read(query);});await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();const scope=data(host,'contributionScope');scope.value='unit';scope.dispatchEvent(new Event('change'));await flush();button(host,'Next contributions').click();await flush();
+ const rows=data(host,'contributionRows'),original=[...rows.children],entries=all(rows,node=>Object.hasOwn(node.dataset,'contribution')),metadataReads=calls.filter(query=>query.type==='contributions').length,paging=data(host,'contributionPaging').textContent;
+ entries[31].click();await flush();assert.equal(scope.value,'unit');assert.equal(rows.start,33);assert.equal(data(host,'contributionPaging').textContent,paging);assert.equal(entries[31].dataset.contribution,'63');assert.equal(entries[31].attributes['aria-current'],'true');assert.ok(original.every((row,index)=>rows.children[index]===row));assert.equal(calls.filter(query=>query.type==='contributions').length,metadataReads);assert.match(data(host,'sourceRange').textContent,/Shown source: 127:1/u);release();
+});
+test('retained whole-unit rows allow rapid jumps and reject older selected-source replies',async()=>{
+ const lines=Array(400).fill('x;');for(const line of[100,200,300])lines[line-1]='if(x) x;';const source=lines.join('\n'),bytes=new TextEncoder().encode(source),starts=[];let from=0;for(let i=0;i<3;i++){const at=source.indexOf('if(x)',from);starts.push(at);from=at+1;}
+ const host=new Element('section'),pending=new Map(starts.map(cursor=>[cursor,Promise.withResolvers()]));
+ const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:4})},contributionCount:3,contributions:()=>starts.map(start=>[0,'if',start,start+8])},async()=>()=>[]);
+ const release=attachUnitInspection(documentTarget,host,'file.js',query=>query.type==='source'&&pending.has(query.cursor)?pending.get(query.cursor).promise:read(query));await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();const scope=data(host,'contributionScope');scope.value='unit';scope.dispatchEvent(new Event('change'));await flush();const entries=all(host,node=>Object.hasOwn(node.dataset,'contribution')),original=[...data(host,'contributionRows').children];
+ entries[0].click();entries[2].click();pending.get(starts[2]).resolve(await read({type:'source',path:'file.js',unit:0,cursor:starts[2]}));await flush();assert.match(data(host,'sourceRange').textContent,/Shown source: 300:1/u);assert.equal(entries[2].attributes['aria-current'],'true');
+ pending.get(starts[0]).resolve(await read({type:'source',path:'file.js',unit:0,cursor:starts[0]}));await flush();assert.match(data(host,'sourceRange').textContent,/Shown source: 300:1/u);assert.ok(original.every((row,index)=>data(host,'contributionRows').children[index]===row));release();
+});
+test('a failed whole-unit source read leaves retained rows usable for explicit recovery',async()=>{
+ const source='a&&b;\n'+'x;\n'.repeat(100)+'c&&d;\n'+'x;\n'.repeat(100)+'e&&f;',bytes=new TextEncoder().encode(source),starts=[0,source.indexOf('c&&d'),source.indexOf('e&&f')],host=new Element('section');
+ const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:4})},contributionCount:3,contributions:()=>starts.map(start=>[0,'logical-and',start,start+4])},async()=>()=>[]);
+ const release=attachUnitInspection(documentTarget,host,'file.js',query=>query.type==='source'&&query.cursor===starts[1]?Promise.reject(Error('unavailable')):read(query));await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();const scope=data(host,'contributionScope');scope.value='unit';scope.dispatchEvent(new Event('change'));await flush();const entries=all(host,node=>Object.hasOwn(node.dataset,'contribution'));
+ entries[1].click();await flush();assert.match(data(host,'sourceBody').textContent,/Source inspection unavailable/u);assert.equal(data(host,'contributionRows').children.length,3);entries[2].click();await flush();assert.equal(entries[2].attributes['aria-current'],'true');assert.match(data(host,'sourceCode').textContent,/e&&f/u);button(host,'Previous source').click();await flush();assert.match(data(host,'sourceRange').textContent,/Shown source: 1:1/u);release();
 });
