@@ -1,0 +1,67 @@
+= Local Working-Tree Analysis
+
+Status:: Planned; scope approved, not implemented or ready for implementation
+
+== Approved outcome
+
+Internal Azure DevOps (ADO) repositories and local checkouts are the real product
+use case. Public GitHub remains the implemented input and a demonstration/test
+provider, not the intended long-term source boundary.
+
+The next slice accepts a local checkout selected on the user's computer and
+analyzes its *working-tree contents, including uncommitted edits*, rather than
+only the checked-out commit. This also covers ADO repositories already cloned
+with the user's existing tools. Direct authenticated ADO acquisition is a separate
+follow-up, not part of this slice.
+
+== Scope
+
+* Explicit folder selection and Analyze, using the existing browser-worker
+  analysis and investigation UI. No arbitrary server filesystem path API.
+* Read-only acquisition: no repository writes, checkout, fetch, package scripts,
+  hooks, builds or tests. Source remains untrusted data and is never executed.
+* Preserve the supported languages, metric definitions, processing limits,
+  cancellation, stale-result suppression and read-only source inspection.
+* Unsaved source/results stay in the browser. Analyze must not send local source,
+  local paths, credentials or project data to the Code City host, ADO, GitHub,
+  cloud models or other services. Loading application assets is distinct from
+  transmitting repository data.
+* Identify the captured input as a working tree, not as proof of a clean or
+  immutable Git commit. A HEAD identifier alone cannot identify edited files.
+* Existing public-GitHub analysis remains available. No new metric,
+  export/import feature, watcher, background scan or automatic saving is added.
+
+This page records future approved scope. It does not relax the delivered
+xref:source-and-metrics.adoc[public-source input contract] or claim local input
+already works.
+
+== Decisions required before implementation
+
+[cols="1,2",options="header"]
+|===
+|Decision |Required result
+|File inclusion |Define tracked/untracked and ignored-file behavior, exclusions, repository metadata, nested repositories/submodules and links escaping the selected root.
+|Capture and failure behavior |Define input identity and what happens when files change, disappear or cannot be read during enumeration/capture; do not promise an atomic filesystem snapshot without evidence.
+|Folder access |Choose and qualify the browser permission/access mechanism, supported environments and explicit unsupported/denied-access behavior. Do not silently introduce a native agent or server-side acquisition.
+|Private-source persistence |Decide whether and how local investigations can be saved, where their source goes and who can read it. The current shared anonymous store is not automatically approved for private source.
+|Representation |Define local provenance and any required saved-format changes without fabricating a GitHub URL, commit, blob identity or remote verification claim.
+|===
+
+Record consequential architecture/data-contract/privacy decisions before a
+Software Developer implementation handoff. New ADRs remain Proposed until the
+user accepts them. Requirements for local input must explicitly supersede the
+applicable public-only assumptions; existing GitHub behavior remains supported.
+
+== Qualification target
+
+After the decisions above are accepted, qualify folder selection through
+Analyze/Cancel, city publication and complete file/unit/contribution inspection
+using deterministic synthetic working-tree fixtures, including uncommitted edits.
+Cover the agreed inclusion, change-during-read, access failure, path and limit
+rules and prove that analysis sends no repository data over the network and
+performs no repository writes or execution. Preserve existing GitHub and saved
+investigation regressions.
+
+Do not inspect internal repositories or send their contents to a cloud model
+merely to plan or test this slice. Use synthetic fixtures unless the user
+separately authorizes access to particular private material.

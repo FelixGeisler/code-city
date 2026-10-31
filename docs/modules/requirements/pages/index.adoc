@@ -14,6 +14,15 @@ xref:source-and-metrics.adoc[Source and Metrics]. Presentation and the whole-cor
 Current custody and network rules are defined in
 xref:browser-analysis-operating-policy.adoc[Browser Analysis Operating Policy].
 
+== Next planned slice
+
+xref:local-working-tree.adoc[Local Working-Tree Analysis] is the next approved
+scope: analyze a user-selected local checkout, including uncommitted edits.
+Internal ADO repositories and local checkouts are the real use case; public
+GitHub remains the implemented demonstration/test provider. Local acquisition
+and private-source persistence decisions remain open; this slice is not yet
+implemented or ready for an implementation handoff. Direct ADO access is separate.
+
 == Build and operation
 
 The canonical built artifact is `dist/`. The version-1 `package-manifest.json`

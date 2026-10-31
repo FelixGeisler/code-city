@@ -2,6 +2,7 @@
 * xref:index.adoc[Product]
 * xref:browser-analysis-operating-policy.adoc[Browser Analysis Operating Policy]
 * xref:source-and-metrics.adoc[Source and Metrics]
+* xref:local-working-tree.adoc[Planned: Local Working-Tree Analysis]
 * xref:unit-inspection.adoc[Unit Source Inspection]
 * xref:saved-investigations.adoc[Saved Investigations]
 * xref:recursive-districts.adoc[Recursive Districts]

@@ -19,7 +19,10 @@ remain regression references only.
 
 Immutable Save, repository/ref picker and restart-persistent URL reopen are
 implemented, including explicit unit/source/contribution inspection. Remaining
-work includes portable interchange and wider deployment qualification. Recursive
+work starts with xref:requirements:local-working-tree.adoc[local working-tree
+analysis], including uncommitted edits. Its private-source persistence, input
+identity and folder-access decisions are not yet selected. Direct authenticated
+ADO acquisition and wider deployment qualification remain separate. Recursive
 district platforms and hierarchical inspection are implemented. The single new
 snapshot format deliberately rejects older pre-production formats without rewriting
 or deleting stored files. No login or server metric
