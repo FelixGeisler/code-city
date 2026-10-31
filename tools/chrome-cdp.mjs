@@ -105,6 +105,9 @@ export async function launchInstalledChrome(discovery, profile, { spawnImpl = sp
     windowsHide: true,
   });
   invariant(child && child.stderr && typeof child.once === "function" && typeof child.kill === "function", "Chrome process could not be launched");
+  // `exit` can precede inherited stderr closure. Keep the full child-lifecycle
+  // barrier from launch so shutdown cannot miss an already-delivered event.
+  const closed = new Promise(resolve => child.once("close", (code, signal) => resolve({ code, signal })));
   let stderr = "";
   let finishStartup = () => {};
   const onError = () => finishStartup(new Error("Chrome process failed before CDP startup"));
@@ -127,15 +130,34 @@ export async function launchInstalledChrome(discovery, profile, { spawnImpl = sp
       child.stderr.on("data", onData);
     });
     invariant(/^ws:\/\/(?:127\.0\.0\.1|\[::1\]|localhost):\d+\/devtools\/browser\/[A-Za-z0-9-]+$/u.test(websocketUrl), "Chrome returned an invalid CDP endpoint");
-    return Object.freeze({ child, websocketUrl, arguments: Object.freeze([...args]) });
+    return Object.freeze({ child, closed, websocketUrl, arguments: Object.freeze([...args]) });
   } catch (error) {
     await terminateChild(child);
+    await closed;
     throw error;
   } finally {
     child.off?.("error", onError);
     child.off?.("exit", onExit);
     child.stderr.off?.("data", onData);
   }
+}
+
+/** Request normal Chrome shutdown and await process plus inherited-stream closure.
+ * A CDP acknowledgement alone does not mean profile writers have stopped.
+ * Never interrupt accepted graceful shutdown with an immediate process kill.
+ */
+export async function closeInstalledChrome(chrome, cdp) {
+  let requested = false;
+  try { if (cdp) { await cdp.send("Browser.close"); requested = true; } }
+  catch { /* A browser that already exited may close CDP before its response. */ }
+  finally { cdp?.close(); }
+  if (!chrome) return;
+  if (!requested && !childIsTerminal(chrome.child)) {
+    const killed = chrome.child.kill();
+    invariant(killed || childIsTerminal(chrome.child), "Chrome termination failed; retain its temporary profile");
+  }
+  const result = await chrome.closed;
+  invariant(result.code === 0 && result.signal === null, `Chrome did not shut down cleanly (code=${result.code}, signal=${result.signal}); retain its temporary profile`);
 }
 
 export function connectCdp(websocketUrl, { WebSocketImpl = WebSocket } = {}) {
