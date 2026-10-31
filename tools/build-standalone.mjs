@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -61,11 +62,19 @@ export function packageStandaloneBrowserHtml(template) {
   return html;
 }
 
+async function analyzerIdentity() {
+  const files = [...(await emittedFiles(path.join(projectRoot, "src"))).map(file => `src/${file}`), ...PARSER_FILES.map(([file]) => file), "package-lock.json", "tools/build-standalone.mjs"].sort(compare);
+  const records = [];
+  for (const file of files) records.push([file, createHash("sha256").update(await readFile(path.join(projectRoot, file))).digest("hex")]);
+  return createHash("sha256").update(JSON.stringify(records)).digest("hex");
+}
+
 async function buildBrowser(artifactRoot) {
   const publicRoot = path.join(artifactRoot, "public");
   await viteBuild({
     root: projectRoot,
     configFile: false,
+    define: { __CODE_CITY_ANALYZER__: JSON.stringify(await analyzerIdentity()) },
     publicDir: false,
     logLevel: "silent",
     base: "/",
@@ -116,13 +125,32 @@ async function compileSources(artifactRoot) {
       },
       files: [
         path.join(projectRoot, "src", "edge", "node", "standalone-cli.ts"),
+        path.join(projectRoot, "src", "edge", "node", "snapshot-validation-worker.ts"),
       ],
     })}\n`, "utf8");
     const compiler = path.join(projectRoot, "node_modules", "typescript", "bin", "tsc");
     execFileSync(process.execPath, [compiler, "--project", configPath], { cwd: projectRoot, stdio: "pipe" });
 
+    const emitted = new Map();
     for (const relative of await emittedFiles(output)) {
       if (!relative.endsWith(".js")) throw new Error(`Standalone compiler emitted an unsupported file: ${relative}`);
+      emitted.set(relative, rewriteModuleSpecifiers(await readFile(path.join(output, ...relative.split("/")), "utf8")));
+    }
+    // Type-only imports are emitted by tsc too; ship only the two runtime roots
+    // and their static/literal-dynamic import closure, not metric-analysis code.
+    const reachable = new Set(), pending = ["edge/node/standalone-cli.js", "edge/node/snapshot-validation-worker.js"];
+    while (pending.length) {
+      const relative = pending.pop(); if (reachable.has(relative)) continue;
+      const source = emitted.get(relative); if (source === undefined) throw new Error(`Missing runtime import: ${relative}`);
+      reachable.add(relative);
+      for (const expression of [/\b(?:from|import)\s*(["'])(\.\.?\/[^"']+)\1/gu, /\bimport\s*\(\s*(["'])(\.\.?\/[^"']+)\1/gu]) {
+        for (const match of source.matchAll(expression)) {
+          const target = path.posix.normalize(path.posix.join(path.posix.dirname(relative), match[2]));
+          if (target.startsWith("../")) throw new Error("Runtime import leaves output"); pending.push(target);
+        }
+      }
+    }
+    for (const relative of [...reachable].sort(compare)) {
       const packagedRelative = relative === "edge/node/standalone-worker-entry.js"
         ? "edge/node/analysis-worker-entry.js"
         : relative;

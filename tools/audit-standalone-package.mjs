@@ -14,8 +14,11 @@ assert.deepEqual(manifest.files.filter(f => f.role === "public").map(f => f.path
   "public/parser/web-tree-sitter.js", "public/parser/web-tree-sitter.wasm",
 ]);
 assert.deepEqual(manifest.files.filter(f => f.role === "private").map(f => f.path), [
+  "server/src/application/city-payload.js", "server/src/application/saved-investigation.js",
+  "server/src/domain/city-model.js", "server/src/domain/repository-reference.js", "server/src/domain/source-admission.js",
   "server/src/edge/node/body-reader.js", "server/src/edge/node/config.js", "server/src/edge/node/fixture-manifest.js",
-  "server/src/edge/node/http-perimeter.js", "server/src/edge/node/standalone-cli.js", "server/src/edge/node/wire-observer.js", "server/standalone.mjs",
+  "server/src/edge/node/http-perimeter.js", "server/src/edge/node/investigation-store.js", "server/src/edge/node/snapshot-validation-worker.js",
+  "server/src/edge/node/standalone-cli.js", "server/src/edge/node/wire-observer.js", "server/standalone.mjs",
 ]);
 for (const [source, name] of [
   ["node_modules/web-tree-sitter/web-tree-sitter.js", "web-tree-sitter.js"],
@@ -28,12 +31,12 @@ for (const [source, name] of [
 const main = await readFile(path.join(canonicalStandaloneRoot, "public/browser.js"), "utf8");
 const worker = await readFile(path.join(canonicalStandaloneRoot, "public/analysis-worker.js"), "utf8");
 assert.match(main, /new Worker\(/u);
-assert.doesNotMatch(main, /_code-city\/|\bfetch\s*\(/u);
+assert.doesNotMatch(main, /_code-city\/|api\.github\.com|raw\.githubusercontent\.com/u);
 assert.doesNotMatch(main + worker, /localStorage|sessionStorage|indexedDB|serviceWorker|document\.cookie|process\.env|providerOverride|fault selector|fixture selector/iu);
 assert.ok(worker.includes("api.github.com") && worker.includes("raw.githubusercontent.com") && worker.includes("/parser/web-tree-sitter.wasm"));
 for (const record of manifest.files.filter(f => f.role === "private")) {
   const code = await readFile(path.join(canonicalStandaloneRoot, record.path), "utf8");
-  assert.doesNotMatch(code, /node:worker_threads|source-retrieval|github-source-gateway|tree-sitter-adapter|session-runtime/u);
+  assert.doesNotMatch(code, /source-retrieval|github-source-gateway|tree-sitter-adapter|session-runtime|deriveBaseMetricAnalysis|finalizeModuleComplexity/u);
 }
 const temporary = await mkdtemp(path.join(os.tmpdir(), "code-city-static-package-audit-"));
 let processUnderTest;

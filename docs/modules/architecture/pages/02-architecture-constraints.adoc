@@ -17,22 +17,25 @@
 
 The canonical `dist/` artifact has a version-1 `package-manifest.json` describing
 all public/private runtime bytes. `public/` contains the UI, worker, parser
-runtime and WASM grammars. `server/` contains only the private asset host and
-its perimeter/configuration dependencies. Parser assets are under
+runtime and WASM grammars. `server/` contains the private host, file store and
+isolated snapshot validator, not repository-analysis implementations. Parser assets are under
 `public/parser/`; the package requires no empty root directories. The version-1
 file-manifest audit also accepts an older private `parser/` root, auditing every
 file if present.
 
 The host verifies every public record before serving only fixed manifest
-routes. The manifest, server code, and unlisted paths return `404`. Legacy
+asset routes and the bounded saved-investigation API. The manifest, server
+code, and unlisted paths return `404`. Legacy
 analysis routes are not mounted. Native analysis/session adapters remain
 repository regression fixtures, not shipped server capabilities.
 
-== State and later storage
+== State and storage
 
-Unsaved investigations exist only in browser memory. There is no server source
-cache, idle-tab dataset, account, persistence, or Save/reopen yet.
+Unsaved investigations exist only in browser memory. There is no server
+unsaved-source cache, idle-tab dataset, or account.
 xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015]
-assigns only explicitly saved snapshots to future server custody, without
-recomputing client metrics. Anonymous operation bounds must protect reads and
-static serving from write work; storage and recovery choices remain open.
+assigns only explicit snapshots to server custody. The
+xref:adr/0016-immutable-investigation-file-store.adoc[file store] uses a separate
+configured data directory, atomic publication and isolated validation, without
+recomputing metrics. Product bounds and recovery policy are authoritative in
+xref:requirements:saved-investigations.adoc[Saved Investigations].

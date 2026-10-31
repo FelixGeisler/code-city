@@ -129,7 +129,7 @@ export async function auditCutover() {
 
   const publicJavaScript = await readFile(path.join(canonicalStandaloneRoot, "public", "browser.js"), "utf8");
   assert.match(publicJavaScript, /new Worker\(/u);
-  assert.doesNotMatch(publicJavaScript, /_code-city\/|api\.github\.com|raw\.githubusercontent\.com|\bfetch\s*\(/u);
+  assert.doesNotMatch(publicJavaScript, /_code-city\/|api\.github\.com|raw\.githubusercontent\.com/u);
   const worker = await readFile(path.join(canonicalStandaloneRoot, "public", "analysis-worker.js"), "utf8");
   assert.ok(worker.includes("api.github.com") && worker.includes("raw.githubusercontent.com"));
   assert.doesNotMatch(publicJavaScript + worker, /providerOverride|process\.env|localStorage|sessionStorage|indexedDB|serviceWorker/iu);

@@ -6,6 +6,7 @@ details. Historical numbering does not count active decisions.
 == Current ownership decision
 
 * xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015: Browser analysis and server-saved investigations]
+* xref:adr/0016-immutable-investigation-file-store.adoc[ADR 0016: Immutable investigation file store]
 
 == Earlier decisions
 

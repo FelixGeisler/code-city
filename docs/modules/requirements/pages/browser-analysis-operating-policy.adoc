@@ -8,8 +8,8 @@ xref:standalone-m5-operating-policy.adoc[M5 policy] describes the historical
 server-analysis slice and does not define current temporary custody.
 
 * *Temporary custody:* Unsaved source and results stay in browser memory.
-  The server receives no repository URL, source, analysis command, or result.
-  Do not create application-managed source files, browser-storage snapshots,
+  Before explicit Save the server receives no repository URL, source, analysis
+  command, or result. Do not create browser-storage snapshots,
   service-worker caches, or silent saves. This does not promise protection from
   browser/OS inspection, swap, or process failure.
 * *Lifetime:* Keep the current local investigation until replacement,
@@ -23,11 +23,13 @@ server-analysis slice and does not define current temporary custody.
 * *Provider:* Read public GitHub anonymously from the browser using only the
   fixed API/raw origins and validated immutable identities. Omit credentials
   and referrers. Never execute repository code or use its text as an asset URL.
-* *Hosting:* Serve only manifest-public application/worker/parser assets.
+* *Hosting:* Serve only manifest-public application/worker/parser assets and
+  the bounded saved-investigation API.
   Keep the Node host and manifest private. Loopback is the default. Remote
   browser analysis requires HTTPS for Web Crypto; this milestone supplies no
   TLS ingress, Internet deployment, private provider, or device qualification.
-* *No accounts or persistence:* There is no login, Save, reopen, shared inventory,
-  or recovery yet. Explicit server persistence follows separately. It validates
-  user-created snapshots for safe bounded storage and reopen, not metric truth.
-  It must not recreate server ownership for unsaved or idle investigations.
+* *Explicit shared persistence:* There is no login or automatic saving. Only
+  explicit Save uploads source/evidence. The
+  xref:saved-investigations.adoc[saved-investigation policy] owns persistence,
+  bounds, sharing, and recovery. Stored client claims are not server-certified.
+  Saving must not recreate server ownership for unsaved or idle investigations.

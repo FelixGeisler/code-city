@@ -2,7 +2,7 @@
 
 Code City turns one immutable public GitHub revision into an interactive city.
 The browser owns acquisition and analysis in a dedicated Web Worker; the native
-Node.js service serves verified assets only. This boundary is selected by
+Node.js service serves verified assets and explicitly saved snapshots. This boundary is selected by
 xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015].
 
 [cols="1,3",options="header"]
@@ -13,10 +13,11 @@ xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015].
 |Deterministic evidence |Preserve immutable identity, full acquisition, accepted algorithms, and stale-publication guards.
 |Safe presentation |Validate worker results and render paths and metrics as inert data.
 |Verifiable delivery |Close the package manifest, reproduce bytes, and exercise the actual packaged browser worker.
-|Shared investigations |Later persist explicit client-created snapshots and reopen them without analysis; not implemented yet.
+|Shared investigations |Persist explicit immutable client-created snapshots; reopen by URL without GitHub or parser work.
 |===
 
-Product behavior is authoritative in the requirements module. Persistence
-technology, operation limits, and deletion/recovery are later decisions, not
-claims about this milestone. No login, server metric certification, private
+Product behavior and bounds are authoritative in
+xref:requirements:saved-investigations.adoc[Saved Investigations].
+xref:adr/0016-immutable-investigation-file-store.adoc[ADR 0016] selects the local
+file store and operator recovery. No login, server metric certification, private
 provider, Internet deployment, or device-performance guarantee is added.

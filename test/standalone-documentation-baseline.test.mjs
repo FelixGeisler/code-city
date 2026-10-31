@@ -15,7 +15,7 @@ test("accepted browser ownership decision and current custody policy supersede o
   assert.match(adr, /Do not introduce login or accounts/u);
   assert.match(policy, /Unsaved source and results stay in browser memory/u);
   assert.match(policy, /idle tab holds no server analysis session/u);
-  assert.match(policy, /no login, Save, reopen/u);
+  assert.match(policy, /no login or automatic saving/u);
   for (const name of ["0013-ownership-of-source-acquisition-analysis-and-saved-investigations", "0014-standalone-server-owned-analysis-runtime"]) {
     const historical = await read(`docs/modules/architecture/pages/adr/${name}.adoc`);
     assert.match(historical, /^Status:: Accepted$/mu);
@@ -25,9 +25,9 @@ test("accepted browser ownership decision and current custody policy supersede o
   }
 });
 
-test("requirements describe real browser analysis, static hosting, progress, and the still-unimplemented Save boundary", async () => {
+test("requirements describe browser analysis, hosting, continuous progress and the explicit persistence boundary", async () => {
   const product = compact(await read("docs/modules/requirements/pages/index.adoc"));
-  for (const expected of ["browser Web Worker", "asset", "version-1", "package-manifest.json", "public/parser/", "Only `--host` has a default", "`--port` is required", "HTTPS", "secure localhost", "real counts beginning at `0/N` or `0/T`", "bar remains indeterminate until the candidate total is known", "Multiple completed tabs do not reserve shared analysis capacity", "Shared immutable Save, inventory, and reopen remain unimplemented"])
+  for (const expected of ["browser Web Worker", "asset", "version-1", "package-manifest.json", "public/parser/", "Only `--host` has a default", "`--port` is required", "HTTPS", "secure localhost", "real counts beginning at `0/N` or `0/T`", "bar remains indeterminate until the candidate total is known", "Multiple completed tabs do not reserve shared analysis capacity", "Shared immutable Save, inventory, and reopen use the separately configured file store"])
     assert.ok(product.includes(expected), expected);
   assert.doesNotMatch(product, /all five capacit(?:y|ies) (?:flags )?are required|service owns revision selection/u);
 });
@@ -41,13 +41,13 @@ test("requirements preserve per-file continuation and local inventory semantics 
     assert.ok(source.includes(category)); assert.ok(city.includes(category));
   }
   assert.match(city, /browser-owned acquisition and analysis in a dedicated Web Worker/u);
-  assert.match(city, /asset host owns no analysis session, source\/result dataset, or analysis capacity/u);
+  assert.match(city, /asset host owns no analysis session, unsaved source\/result dataset, or analysis capacity/u);
   assert.match(city, /shared canonical-index selection/u);
   assert.match(city, /Selection, filtering, and sorting do not invoke search reveal, move or focus the camera/u);
   assert.match(city, /active composition mounts no contextual district row and no persistent complexity legend/u);
   assert.match(city, /browser worker message boundary/u);
   assert.match(city, /inert `<bdi dir="auto">` nodes assigned through `textContent`/u);
-  assert.match(city, /current milestone has no browser source view, unit or contribution detail, server persistence, Save\/reopen/u);
+  assert.match(city, /current milestone has no browser source view, unit or contribution detail, portable interchange, or recursive hierarchy/u);
   assert.doesNotMatch(city, /current standalone M5 implementation has server-owned/u);
 });
 

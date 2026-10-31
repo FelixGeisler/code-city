@@ -2,7 +2,7 @@
 
 == Asset-host startup
 
-The CLI accepts port and optional bind/canonical host, validates the exact
+The CLI accepts port, optional bind/canonical host and `--data-dir`, validates the exact
 version-1 package manifest, and verifies the length and SHA-256 digest of every
 public record before listening. It preloads only those verified asset bytes
 and prints `READY`. Startup does not validate private implementation bytes;
@@ -11,7 +11,8 @@ every recorded byte before publication.
 
 There is no application analysis session, worker reservation, retained source
 budget, or analysis route. Native SIGINT/SIGTERM close the listener and static
-connections, then print `SHUTDOWN`. Host shutdown does not discard an already
+connections, abort/settle owned storage work and validation workers, then print
+`SHUTDOWN`. Host shutdown does not discard an already
 loaded browser-owned completed view.
 
 == Analyze
@@ -25,9 +26,10 @@ loaded browser-owned completed view.
 . The same application sequence initializes the pinned parser once, processes
   supported files with per-file continuation, reports completion after cleanup,
   and constructs the deterministic city.
-. The worker retains normalized source for text-valid files, including files
-  with syntax/metric failures. Unsupported text is not retained. It publishes
-  presentation data and failure rows over the ordinary worker channel.
+. The worker retains normalized source for text-valid files and bounded
+  original source/unit/contribution evidence for explicit Save. Unsupported
+  original text is retained too. Capture-budget exhaustion disables saving,
+  not analysis. It publishes presentation data and failure rows to the UI.
 . The main context validates event shape, local identity, generation, revision,
   monotonic phase counts, and city payload before presentation. Inventory,
   inspector, and existing presenter commit as one local publication.
@@ -52,6 +54,24 @@ Discard UI action or server investigation to release. Page exit terminates owned
 work, and worker errors revoke
 the corresponding local investigation. Another tab is unaffected.
 
+== Save and reopen
+
+. Save exports the completed worker-owned snapshot; no acquisition or parser
+  invocation occurs. The worker uploads directly to the same-origin host.
+. The store reserves its single write, streams into an owned staging directory,
+  and validates structure, source hashes/byte references and presentation in
+  an isolated native worker. It never computes metrics from source.
+. After file synchronization and atomic directory rename, the host returns an
+  immutable ID and receipt. Failure leaves the browser result usable; an
+  interrupted staging directory is never catalogued.
+. A `/saved/<id>` page loads receipt and container into a new browser worker.
+  It verifies hashes and version, restores retained source/evidence and
+  publishes the recorded city. GitHub and parser initialization are not used.
+
+The picker reads only receipt metadata and groups by repository; refs/commits
+coexist under random IDs. Capacity, corruption and operator recovery are owned
+by xref:requirements:saved-investigations.adoc[Saved Investigations].
+
 == Qualification
 
 `npm run dev -- --port <port>` builds under `build/development/` and starts the
@@ -62,8 +82,11 @@ GitHub gateway. A nonshipped provider intercepts fixed GitHub requests with real
 CORS and integrity checks. Explicit message-delivery gates exercise real phase
 counts in the UI; they do not fabricate progress. Evidence covers independent
 idle/completed tabs, four grammars, source limits, slow-first acquisition,
-provider/parser cancellation, replacement, page loss, no server commands, and
+provider/parser cancellation, replacement, page loss, no server analysis commands, and
 a healthy 4,000-file / 40 MiB normalized-source attempt. Tests are not device,
 latency, or total-memory guarantees.
 
-Save/reopen, source drill-down, and recursive presentation remain later outcomes.
+Evidence also saves the maximum envelope, preserves the scene on failed Save,
+restarts the host, and reopens in a fresh browser context with provider access
+blocked and no parser-asset requests. Source drill-down and recursive
+presentation remain later outcomes.

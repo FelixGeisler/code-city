@@ -3,7 +3,8 @@
 Code City turns one public GitHub repository into a deterministic 3D city of
 its supported JavaScript, TypeScript, and C# modules. Analysis runs in a browser
 Web Worker; unsaved investigations consume no server analysis session or source
-reservation. Shared Save/reopen is the next delivery.
+reservation. Explicit Save persists immutable investigations; shared URLs
+reopen them without GitHub acquisition or parsing.
 
 image::overview-flow.svg[Flow from a repository URL to a complete Code City]
 
@@ -16,8 +17,7 @@ image::overview-flow.svg[Flow from a repository URL to a complete Code City]
 newline-separated canonical additional exclusions
 
 |Selection
-|The captured URL and exclusions, plus the explicit branch tip or, when no
-branch is supplied, the default-branch tip resolved to one immutable commit on
+|The captured URL and exclusions, plus the supplied branch/release or, when neither is supplied, the default-branch tip resolved to one immutable commit on
 Analyze
 
 |Output

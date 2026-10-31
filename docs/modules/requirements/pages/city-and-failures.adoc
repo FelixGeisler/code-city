@@ -107,13 +107,14 @@ Analyze neither silently saves nor overwrites.
 
 In the whole-core target, an unsaved analysis has no reopening identifier after
 replacement by a new analysis, page reload, navigation away,
-or close. Save and reopen remain approved whole-core outcomes.
+or close. Explicit Save supplies a reopening identifier.
 
 The browser-analysis milestone retains temporary source and results only in
 browser memory and releases them on replacement, page exit/reload, or
 worker loss. Its cleanup policy is defined in
 xref:browser-analysis-operating-policy.adoc[Browser Analysis Operating Policy].
-Save and reopen are the next delivery, not implemented current behavior.
+Explicit Save and reopening are implemented as defined in
+xref:saved-investigations.adoc[Saved Investigations].
 
 [[CC-CORE-SAVE-03]]
 === Immutable saved snapshot
@@ -126,8 +127,9 @@ performs no GitHub acquisition or analysis. Saved snapshots have no automatic
 expiry.
 
 Failed Save leaves the temporary investigation usable. Reanalysis never
-overwrites a snapshot. The inventory label is `<owner>/<repository> @ <short
-commit>` plus saved UTC time, with the full commit visible.
+overwrites a snapshot. The picker groups entries by `<owner>/<repository>`;
+rows show requested branch/tag, short commit and saved UTC time. Opening an
+entry shows the full commit.
 
 [[CC-CORE-SAVE-04]]
 === Shared inventory and retained source
@@ -135,12 +137,14 @@ commit>` plus saved UTC time, with the full commit visible.
 Every user admitted to the internal Code City website can view the shared
 saved-analysis inventory and retained source. This requirement does not select
 a login or account system. The initial shared-view product has no login;
-bounded operation, storage, deletion, recovery, ingress, deployment, and API
-contracts remain to be selected before implementation. Stored client metrics
+xref:saved-investigations.adoc[Saved Investigations] defines bounded storage,
+read-only inventory, API operation and operator recovery. Ingress and Internet
+deployment remain separate. Stored client metrics
 are not server-certified facts and are not recomputed for certification.
 
 Server persistence is the initial Save and reopen implementation. Its storage
-technology remains unresolved. Portable source-bearing export and import is not
+technology is selected by
+xref:architecture:adr/0016-immutable-investigation-file-store.adoc[ADR 0016]. Portable source-bearing export and import is not
 permanently excluded. Whether it is added, whether it shares the server
 representation, and its representation, format, and I/O contract remain
 unresolved. A downstream API is outside the whole core.
@@ -1027,7 +1031,7 @@ inventory query remains browser-local, and filtering, sorting, or selection adds
 no provider or HTTP call. Interaction derives no path- or query-based attribute,
 object key, URL, log, WebGL value, telemetry, or evidence payload and sends no
 source payload. Source bodies, provider locators and values, parser values,
-credentials, raw diagnostics, telemetry, and persisted product state do not
+credentials, raw diagnostics, and telemetry do not
 reach interaction, inspection, WebGL, or release evidence. Packaged-browser
 evidence compares controlled synthetic fixture values and emits only scenario,
 count, and numeric rendering summaries; it does not emit source bodies.
@@ -1037,8 +1041,10 @@ count, and numeric rendering summaries; it does not emit source bodies.
 The approved whole core excludes:
 
 * automatic camera movement after initialization;
-* favorites, bookmarks, catalog, or account features added for them;
-* history, tags, commit links, generic arbitrary refs, watching, or scheduling.
+* favorites, bookmarks, or account features added for them;
+* history exploration, tag management, commit links, generic arbitrary refs,
+  watching, or scheduling; explicit branch/release inputs and saved snapshots
+  are supported.
 * private repositories, non-GitHub providers, uploads, archives, or local
   folders;
 * source editing or automated fixes;
@@ -1055,12 +1061,11 @@ unresolved.
 
 == Unresolved target design beyond browser analysis
 
-Recursive presentation, complete snapshot representation, persistent storage,
-bounded Save/read operations, deletion, recovery, and deployment remain later
-decisions. Browser analysis and a native asset host are selected by
-xref:architecture:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015].
-No login or server metric certification is required. This milestone does not
-implement the later persistence, source-view, or saved-investigation outcomes.
+Recursive presentation, browser source/unit-detail views, portable interchange,
+and wider deployment remain later decisions. Browser analysis is selected by
+xref:architecture:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015];
+xref:saved-investigations.adoc[Saved Investigations] defines current persistence
+and recovery. No login or server metric certification is required.
 
 == Current baseline boundaries
 
@@ -1070,7 +1075,8 @@ continue as `Source text is not supported`, `Syntax could not be analyzed`, or
 `Metrics could not be computed`; successful files form the city. The worker
 retains the normalized source association locally and sends the main context
 validated city data and sanitized failure rows. The asset host owns no analysis
-session, source/result dataset, or analysis capacity.
+session, unsaved source/result dataset, or analysis capacity. Only explicit
+Save uploads complete snapshots to the separate file store.
 
 The browser exposes every successful fact through the browser-local
 searchable and three-way sortable inventory behind Find file, with one shared
@@ -1084,7 +1090,8 @@ and search-reveal capabilities are historical implementation references, not
 current standalone behavior.
 
 The current milestone has no browser source view, unit or contribution detail,
-server persistence, Save/reopen, portable interchange, or recursive hierarchy.
+portable interchange, or recursive hierarchy. Save retains that evidence but
+does not implement those inspection interfaces.
 Two-segment geometry and camera navigation remain unchanged; picking also
 supports district platforms. The inventory changes no admission, syntax, metric formula, source
 limit, provider, privacy, failure-category, retry, fallback, or canonical city

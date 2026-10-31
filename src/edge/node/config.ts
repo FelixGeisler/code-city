@@ -13,6 +13,7 @@ export interface AssetHostConfiguration {
   readonly host: string;
   readonly canonicalHost: string;
   readonly port: number;
+  readonly dataDirectory?: string;
 }
 
 export interface StandaloneConfiguration extends AssetHostConfiguration {
@@ -146,7 +147,7 @@ export function parseAssetHostArguments(argv: readonly string[]): AssetHostConfi
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
     const value = argv[index + 1];
-    if (!flag || !["--host", "--canonical-host", "--port"].includes(flag) || !value || value.startsWith("--") || supplied.has(flag)) invalid();
+    if (!flag || !["--host", "--canonical-host", "--port", "--data-dir"].includes(flag) || !value || value.startsWith("--") || supplied.has(flag)) invalid();
     supplied.set(flag, value);
   }
   const host = supplied.get("--host") ?? "127.0.0.1";
@@ -154,7 +155,9 @@ export function parseAssetHostArguments(argv: readonly string[]): AssetHostConfi
   const requested = supplied.get("--canonical-host");
   if (host === "127.0.0.1" && requested !== undefined) invalid();
   const canonicalHost = host === "127.0.0.1" ? host : validateCanonicalHost(requested ?? invalid());
-  return Object.freeze({ host, canonicalHost, port: parsePort(supplied.get("--port") ?? invalid()) });
+  const dataDirectory = supplied.get("--data-dir");
+  if (dataDirectory !== undefined && /[\u0000-\u001f\u007f]/u.test(dataDirectory)) invalid();
+  return Object.freeze({ host, canonicalHost, port: parsePort(supplied.get("--port") ?? invalid()), ...(dataDirectory === undefined ? {} : { dataDirectory }) });
 }
 
 export function canonicalAuthority(canonicalHost: string, actualPort: number): string {

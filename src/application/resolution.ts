@@ -51,7 +51,7 @@ export async function resolveRevision(
     if (result.kind === "http" && result.status === 404) {
       return {
         kind: "failure",
-        category: repository.branch === null
+        category: repository.branch === null && repository.tag === undefined
           ? "Repository unavailable for anonymous access"
           : "Revision unavailable",
       };

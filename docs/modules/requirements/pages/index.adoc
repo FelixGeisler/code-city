@@ -1,16 +1,16 @@
 = Product
 
-== Current browser-analysis milestone
+== Current implementation
 
 Code City analyzes one anonymously accessible public GitHub repository in a
 browser Web Worker. The browser owns immutable revision selection, source
 acquisition, parsing, metrics, city construction, and the unsaved investigation.
-The native Node.js HTTP host serves manifest-verified application assets only;
-it owns no analysis worker, temporary source dataset, or per-tab analysis session.
+The native Node.js HTTP host serves manifest-verified assets and explicitly
+saved snapshots. It owns no repository-analysis worker, unsaved source dataset,
+or per-tab analysis session.
 
 Stable admission, language, and metric behavior is defined in
-xref:source-and-metrics.adoc[Source and Metrics]. Presentation and the later
-shared Save target are defined in xref:city-and-failures.adoc[City and Failures].
+xref:source-and-metrics.adoc[Source and Metrics]. Presentation and the whole-core Save contract are defined in xref:city-and-failures.adoc[City and Failures].
 Current custody and network rules are defined in
 xref:browser-analysis-operating-policy.adoc[Browser Analysis Operating Policy].
 
@@ -22,8 +22,9 @@ type, byte length, and SHA-256 digest.
 
 * `public/` contains the browser UI, analysis worker, parser runtime, and grammar
   WASM. Only verified public records are served.
-* `server/` contains the private static host. It contains no analysis or session
-  runtime. Private files, the manifest, and unlisted paths return `404`.
+* `server/` contains the private asset host, snapshot store and isolated data
+  validator, not repository analysis or sessions. Private files, the manifest,
+  and unlisted paths return `404`. Saved data is outside the artifact.
 * Active parser assets are public records under `public/parser/`. The package
   requires no empty directories, so file-only archive transport preserves its
   complete manifest closure. Older version-1 packages may retain a private
@@ -78,8 +79,11 @@ An idle tab creates no analysis worker or backend analysis request. Multiple
 completed tabs do not reserve shared analysis capacity. Filtering, sorting,
 selection, and camera interaction remain local.
 
-There is no automatic retry, recovery, source view, Save, shared inventory,
-reopen, login, or application-managed persistence in this milestone.
+Explicit Save, Copy link, and Open saved provide immutable shared snapshots,
+a repository-grouped branch/release picker, and restart-persistent reopening
+without GitHub acquisition or parsing. See
+xref:saved-investigations.adoc[Saved Investigations] for data, limits and recovery.
+There is no automatic saving/retry, source view, login, or browser persistence.
 
 == Verification and publication
 
@@ -95,11 +99,12 @@ run record. No Pages deployment is reactivated. The earlier live retirement
 notice and former-analyzer URL evidence remain unchanged in
 `publication/retirement-live-verification-v1.json`.
 
-== Next delivery
+== Persistence boundary
 
 xref:architecture:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015]
-keeps computation and unsaved state in the browser and assigns custody only of
-explicitly saved investigations to the server. Shared immutable Save, inventory,
-and reopen remain unimplemented. No login or metric certification is required;
-storage format, operation limits, deletion, and recovery need decisions before
-that delivery. Private-source and Internet deployment are not implied.
+keeps computation and unsaved state in the browser. Shared immutable Save,
+inventory, and reopen use the separately configured file store selected by
+xref:architecture:adr/0016-immutable-investigation-file-store.adoc[ADR 0016].
+`--data-dir` enables persistence; without it analysis remains usable.
+No login, server metric certification, private-source support, or Internet
+exposure is implied.

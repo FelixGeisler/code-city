@@ -1,3 +1,4 @@
+import type { SavedRecord } from "../application/saved-investigation";
 import { validateCityPayload, type ValidatedCity } from "../application/city-payload";
 import { compareUnsignedUtf8, isCanonicalSourcePath, MAX_ADMITTED_MODULES } from "../domain/source-admission";
 
@@ -57,7 +58,7 @@ export type BrowserSessionObserver = Readonly<{
 }>;
 
 export type BrowserCommand = Readonly<{ sessionId: string; generation: number }>;
-export type BrowserAnalyzeCommand = Readonly<BrowserCommand & { repositoryUrl: string; additionalExclusions: string }>;
+export type BrowserAnalyzeCommand = Readonly<BrowserCommand & { repositoryUrl: string; additionalExclusions: string; savedId?: string }>;
 
 export type BrowserSessionOpenResult = Readonly<{ kind: "opened"; sessionId: string }> | Readonly<{ kind: "capacity" }> | Readonly<{ kind: "lost" }>;
 
@@ -67,6 +68,7 @@ export interface BrowserSessionOwner {
   cancel(command: BrowserCommand): Promise<number>;
   discard(command: BrowserCommand): Promise<number>;
   close(): void;
+  save?(): Promise<SavedRecord>;
 }
 
 export type BrowserSessionTransport = Readonly<{
@@ -90,6 +92,8 @@ export type StandaloneBrowserView = Readonly<{
 export type StandaloneBrowserController = Readonly<{
   start(): void;
   submit(repositoryUrl: string, additionalExclusions: string): void;
+  openSaved(id: string): void;
+  save(): Promise<SavedRecord>;
   dispose(): void;
 }>;
 
@@ -103,12 +107,14 @@ type BrowserAttemptState = {
   acquisitionCompleted?: number;
   analysisTotal?: number;
   analysisCompleted?: number;
+  saved?: boolean;
 };
 
 const FAILURE_CATEGORIES = new Set([
   "Repository unavailable for anonymous access",
   "Revision unavailable",
   "Provider/resolution failure",
+  "Saved investigation unavailable",
   "Repository exceeds Code City limits",
   "No supported modules",
   "Source admission failed",
@@ -478,7 +484,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       if (state.terminal || state.revision !== undefined || state.stage !== 0) { lose(epoch); return; }
       state.revision = event.revision;
       view.revision(event.revision);
-      view.progress("Preparing file inventory");
+      view.progress(state.saved ? "Preparing saved investigation" : "Preparing file inventory");
       return;
     }
 
@@ -621,7 +627,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     }
   };
 
-  const submit = (repositoryUrl: string, additionalExclusions: string): void => {
+  const submit = (repositoryUrl: string, additionalExclusions: string, savedId?: string): void => {
     if (disposed) return;
     const generation = nextBrowserGeneration(latestGeneration);
     clearAssociation();
@@ -644,7 +650,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       view.lost();
       return;
     }
-    attemptState = { terminal: false, stage: 0 };
+    attemptState = { terminal: false, stage: 0, ...(savedId === undefined ? {} : { saved: true }) };
     const selected = ensureOwner();
     view.working(() => { void cancelGeneration(selected.epoch, generation); });
     void (async () => {
@@ -652,7 +658,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       if (disposed || selected.epoch !== ownerEpoch || generation !== latestGeneration || owner !== selected.owner) return;
       if (opened.kind !== "opened") return;
       sessionId = opened.sessionId;
-      const command: BrowserAnalyzeCommand = { sessionId: opened.sessionId, generation, repositoryUrl, additionalExclusions };
+      const command: BrowserAnalyzeCommand = { sessionId: opened.sessionId, generation, repositoryUrl, additionalExclusions, ...(savedId === undefined ? {} : { savedId }) };
       let serialized: string;
       try { serialized = JSON.stringify(command); }
       catch { lose(selected.epoch); return; }
@@ -663,7 +669,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
         if (status === 202) {
           const state = attemptState;
           if (state && !state.terminal && state.revision === undefined && state.stage === 0) {
-            view.progress("Resolving revision");
+            view.progress(state.saved ? "Opening saved investigation" : "Resolving revision");
           }
           return;
         }
@@ -684,6 +690,11 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
   return Object.freeze({
     start() { if (!disposed && !owner) openOwner(); },
     submit,
+    openSaved(id) { submit("", "", id); },
+    async save() {
+      if (disposed || currentGeneration === undefined || !owner?.save) throw new Error("No completed investigation is available");
+      return owner.save();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

@@ -5,13 +5,13 @@
 |Party |Interaction
 |User browser |Loads application/worker/parser assets, then acquires and analyzes a public GitHub revision locally. Presents the city and owns the unsaved investigation.
 |Public GitHub |Receives anonymous fixed-route requests from the browser worker for revision, commit, recursive tree, and raw files.
-|Native Node.js host |Serves verified public assets; receives no analysis command, source, result, or per-tab session.
-|Operator |Selects port and optional bind/canonical host; operates the static host.
+|Native Node.js host |Serves verified assets and explicit snapshots. Accepts complete Save data, never analysis commands or unsaved per-tab sessions.
+|Operator |Selects port, bind/canonical host and optional data directory; backs up and recovers saved files.
 |===
 
 Provider content, paths, bytes, and worker messages cross validation boundaries.
 The UI consumes only validated presentation data from its own worker. Source
-stays worker-local and is never executed. Provider requests omit credentials
+stays worker-local until explicit Save and is never executed. Provider requests omit credentials
 and referrers. A repository cannot choose imports, worker paths, or parser URLs.
 
 Web Crypto requires a secure browser context. Localhost HTTP works; remote
@@ -19,9 +19,10 @@ hosting needs HTTPS, whose ingress is not provided by this milestone.
 GitHub Pages is not reactivated; the earlier script-free retirement notice and
 live verification remain historical evidence.
 
-== Later shared storage
+== Shared storage
 
-Only explicit Save will upload a complete client-created investigation. Shared
-links will reopen stored data without provider access or analysis. No account,
-login, private-source integration, persistence implementation, or Internet
-exposure is implied by the current local-analysis milestone.
+Only explicit Save uploads a complete client-created investigation. Shared
+links reopen stored data without provider access or analysis. Browser and
+server validate structure and hashes, not metric truth or claimed provenance.
+No account, login, private-source integration, or Internet exposure is added.
+See xref:requirements:saved-investigations.adoc[Saved Investigations].
