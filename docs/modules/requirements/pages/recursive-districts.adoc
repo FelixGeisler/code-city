@@ -1,0 +1,95 @@
+= Recursive Districts
+
+This is the accepted recursive city and inspection contract. Architecture choices
+are recorded in xref:architecture:adr/0018-recursive-district-presentation.adoc[ADR 0018].
+
+== Scope and identity
+
+The repository root `/` and every ancestor directory induced by successful files
+are separate districts. Use full canonical directory identities, not a two-segment
+prefix. Root and a literal `_root` directory differ. Every successful file has
+one building on its immediate containing district. Failed and excluded files do
+not produce buildings or contribute to district aggregates. Do not add empty
+unrelated directories, file aggregation, collapse, quality grades or new metrics.
+
+An all-files-failed result still has no city or district inspector.
+
+The inspector shows exact descendant successful-file count, summed SLOC, summed
+unit count and maximum unit complexity. Use exact integer sums. Its directory
+list contains immediate child directories, while its contained-file list covers
+the complete selected subtree. Each list uses 32-row pages. Default order is
+maximum unit complexity descending, with unsigned-UTF-8 canonical path ties;
+file sorting also supports the existing SLOC/unit-count choices. Lists identify
+which population they contain. A file button selects the existing file/unit/source
+inspector; root/parent controls and directory breadcrumbs permit navigation back
+without rebuilding the scene or moving the camera. Switching selection invalidates
+old callbacks and source dialogs just as it does today.
+
+== Deterministic recursive layout
+
+Preserve the current building-side, height and color functions from Source and
+Metrics. Do not re-scale footprints to fill a treemap. A building's displayed
+height is measured above its supporting platform, not above repository ground.
+
+The root has depth 0. A directory at depth d has platform top y = d/2 and a
+platform thickness of 0.5, reusing the current plate thickness. Buildings on it
+start at y = d/2. Every child platform therefore sits one plate thickness above
+its parent. Elevation encodes directory depth, separately from SLOC height.
+
+Compute rectangles bottom-up, processing arbitrarily deep supported trees
+iteratively. Items at each directory are child-directory rectangles and direct
+file footprints. Sort items by occupied rectangle area descending and then full
+unsigned-UTF-8 canonical path; if a synthetic tie still exists, directory precedes
+file. A directory contains all of each child's rectangle, with padding 3 on all
+sides. Items use gap 2, reusing the existing local-building gap and group padding.
+
+For child rectangles (w,h), shelf target width is the greater of maximum child
+width and ceil(sqrt(sum((w+2)*(h+2)))). Start at x=z=0. Before placing an item,
+start a new shelf if x is nonzero and x+w exceeds target; the next shelf starts
+at prior z plus maximum shelf depth plus 2. Advance x by w+2. Actual occupied
+width/depth, excluding trailing gaps, plus 6 define the enclosing directory
+rectangle. Translate all child positions by its padding. Do not sum descendant
+areas a second time. Resolve all world offsets in an iterative top-down pass.
+
+Normalize actual building minima to x=z=0 using one common translation for
+buildings and every platform, preserving the current normalization convention.
+Geometry bounds enclose buildings; scene bounds additionally enclose all platforms.
+Retain existing exact numeric/Float32/camera safety checks. Pin the new layout
+under a new geometry kind/version instead of replacing the legacy validator.
+No new lower acquisition/admission cap or hierarchy truncation is authorized.
+
+== Picking and selection
+
+Pick the nearest actual closed-box building or platform. A building wins an exact
+cross-kind tie. For an exact platform tie, choose the deeper directory, then its
+unsigned-UTF-8 canonical path. Empty space and Escape preserve existing clear rules.
+Highlight precisely the selected directory's descendant files, not all buildings
+inside an approximate rectangle. Root selection includes every successful file.
+Selecting a directory clears file/unit selection; selecting a file clears directory
+selection. Query and sort state remain independent. Selection and navigation do
+not automatically fit, reveal, pan, orbit or zoom. Explicit Reset
+retains its current meaning.
+
+== Snapshot format
+
+Recursive investigations use snapshot version 2 and an explicit recursive geometry
+identifier. Reopen restores the recorded layout without acquisition, parser
+initialization or metric recomputation. Old, unknown and corrupt formats fail
+explicitly. The user waived pre-production backward compatibility: there is no
+legacy reader, migration, old-layout mode or automatic re-layout.
+
+Existing stored files are not deleted or rewritten. Explicit Save, immutable IDs,
+filesystem publication and restart durability remain unchanged. Source syntax
+colors are derived presentation, not stored metric evidence.
+
+== Evidence required before delivery
+
+Qualify shuffled-input determinism; nesting/containment and non-overlap; root/direct
+and nested files; root versus `_root`; Unicode/ties; deep and wide hierarchies;
+unchanged metric dimensions; nearest building/platform picks; exact descendant
+highlighting; native keyboard navigation; stale results; no camera/geometry upload
+on drill-down; and responsive desktop/mobile views. Exercise the existing 4,000-file
+and 40 MiB envelope with representative deep and broad trees. Verify explicit rejection of old formats and version-2 saved snapshots through
+host restart and fresh browser contexts, without provider or parser requests.
+Hash existing saved files before/after local rollout to prove they were not modified. These
+checks are not a universal device-memory or timing guarantee.

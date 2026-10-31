@@ -13,6 +13,8 @@
 *** xref:adr/0014-standalone-server-owned-analysis-runtime.adoc[ADR 0014: Standalone server runtime and analysis execution boundary]
 *** xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015: Browser analysis and server-saved investigations]
 *** xref:adr/0016-immutable-investigation-file-store.adoc[ADR 0016: Immutable investigation file store]
+*** xref:adr/0017-offline-shiki-source-highlighting.adoc[ADR 0017: Offline Shiki source highlighting]
+*** xref:adr/0018-recursive-district-presentation.adoc[ADR 0018: Recursive district presentation]
 * xref:10-quality-requirements.adoc[10. Quality Requirements]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]
