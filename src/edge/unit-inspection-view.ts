@@ -22,6 +22,16 @@ export function unitKindLabel(path: string, kind: string): string {
   return typeof label === "string" ? label : "Executable unit";
 }
 
+export function contributionKindLabel(path: string, kind: string): string {
+  if (kind === "if") return /\.cs$/iu.test(path) ? "Branch condition (if / when / filter)" : "If statement";
+  const label = ({ loop: "Loop", case: "Switch branch", catch: "Catch handler", ternary: "Conditional expression", "logical-and": "Logical AND (&&)", "logical-or": "Logical OR (||)", nullish: "Null coalescing (??)", "logical-and-assign": "Logical AND assignment (&&=)", "logical-or-assign": "Logical OR assignment (||=)", "nullish-assign": "Null-coalescing assignment (??=)" } as Record<string, unknown>)[kind];
+  return typeof label === "string" ? label : "Branching decision";
+}
+export function contributionLocation(start: SourceLocation, end: SourceLocation): string {
+  const lines = start.line === end.line ? `Line ${start.line}` : `Lines ${start.line}–${end.line}`;
+  return `${lines} · starts at column ${start.column}, ends before column ${end.column}`;
+}
+
 /** One file owns its callbacks. Contribution scope is bound to the rendered source page. */
 export function attachUnitInspection(documentTarget: InspectionDocument, inspector: HTMLElement, path: string, inspect: InspectInvestigation): () => void {
   const element = <K extends keyof HTMLElementTagNameMap>(tag: K, text = ""): HTMLElementTagNameMap[K] => { const node = documentTarget.createElement(tag); node.textContent = text; return node; };
@@ -60,7 +70,8 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
   const previousContributions = button("Previous contributions", () => { if (!active || sourcePending || !shown || !dialog.open || contributionPending || contributionOffset === 0) return; contributionOffset = Math.max(0, contributionOffset - CONTRIBUTION_PAGE_SIZE); void loadContributions(); });
   const nextContributions = button("Next contributions", () => { if (!active || sourcePending || !shown || !dialog.open || contributionPending || contributionOffset + CONTRIBUTION_PAGE_SIZE >= contributionTotal) return; contributionOffset += CONTRIBUTION_PAGE_SIZE; void loadContributions(); });
   contributionPaging.append(previousContributions, contributionRange, nextContributions);
-  contributionSection.append(element("h3", "Owned contributions"), scopeLabel, contributionMessage, contributionPaging, contributions);
+  const contributionSort = element("p", "Added complexity: highest first. Each entry adds +1; ties use source order."); contributionSort.dataset.contributionSort = "";
+  contributionSection.append(element("h3", "Owned contributions"), scopeLabel, contributionSort, contributionMessage, contributionPaging, contributions);
   const body = element("div"); body.dataset.sourceBody = ""; body.append(sourceSection, contributionSection); dialog.append(titleBar, details, body);
   scope.addEventListener("change", () => { if (!active || sourcePending || !shown || !dialog.open || !["shown", "unit"].includes(scope.value)) return; wholeUnit = scope.value === "unit"; contributionOffset = 0; void loadContributions(); });
   dialog.addEventListener("keydown", event => event.stopPropagation());
@@ -93,7 +104,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
     if (!active) return;
     selected = unit; cursor = null; next = null; history.length = 0; wholeUnit = false; scope.value = "shown"; focusSource = false;
     details.textContent = `${unitKindLabel(path, unit.kind)} · Complexity ${unit.complexity} (whole unit) · ${point(unit.start)}–${point(unit.end)} (end exclusive)`;
-    code.replaceChildren(); contributions.replaceChildren(); sourcePaging.hidden = true; dialog.showModal(); void loadSource();
+    code.replaceChildren(); contributions.replaceChildren(); sourcePaging.hidden = true; dialog.showModal(); void loadSource(undefined, true);
   }
   function renderSource(result: SourcePage): void {
     const highlights = selectedHighlight(result, selectedContribution);
@@ -118,10 +129,10 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
     }
     sourceRange.textContent = `Shown source: ${point(result.start)}–${point(result.end)}`;
     sourceMessage.textContent = (result.syntaxUnavailable ? "Syntax coloring unavailable. " : "") + (selectedContribution
-      ? `Underlined: selected ${selectedContribution.kind} · ${point(selectedContribution.start)}–${point(selectedContribution.end)} (end exclusive).`
+      ? `Underlined: selected ${contributionKindLabel(path, selectedContribution.kind)} · +1 complexity. ${contributionLocation(selectedContribution.start, selectedContribution.end)}.`
       : result.complexity === 1 ? "No branching contributions in this unit." : "Select a contribution to highlight its source span.");
   }
-  async function loadSource(contribution?: ContributionRow): Promise<void> {
+  async function loadSource(contribution?: ContributionRow, preselect = false): Promise<void> {
     if (!active || !selected || !dialog.open) return;
     const epoch = ++sourceEpoch, unit = selected.id;
     selectedContribution = contribution;
@@ -137,10 +148,10 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
       sourcePaging.hidden = false; previousSource.hidden = nextSource.hidden = history.length === 0 && next === null;
       previousSource.disabled = history.length === 0; nextSource.disabled = next === null; scope.disabled = false;
       code.scrollTop = 0; code.scrollLeft = 0; if (focusSource) { focusSource = false; dialog.scrollTop = 0; code.focus?.({ preventScroll: true }); }
-      void loadContributions();
+      void loadContributions(preselect);
     } catch { if (active && epoch === sourceEpoch) { sourcePending = false; shown = undefined; selectedContribution = undefined; code.replaceChildren(); sourceMessage.textContent = "Source inspection unavailable."; contributionMessage.textContent = "No source page is shown."; } }
   }
-  async function loadContributions(): Promise<void> {
+  async function loadContributions(preselect = false): Promise<void> {
     if (!active || !selected || !shown || sourcePending || !dialog.open) return;
     const epoch = ++contributionEpoch, unit = selected.id, source = shown, expectedSourceEpoch = sourceEpoch, all = wholeUnit;
     const current = () => active && epoch === contributionEpoch && expectedSourceEpoch === sourceEpoch && shown === source && selected?.id === unit && dialog.open && wholeUnit === all;
@@ -151,14 +162,22 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
       if (!current()) return;
       if (result.type !== "contributions" || result.unitTotal !== selected!.complexity - 1) throw new Error("Invalid contributions");
       contributionPending = false; contributionTotal = result.total; contributions.start = contributionOffset + 1;
+      if (preselect && !selectedContribution && result.rows[0]) { selectedContribution = result.rows[0]; renderSource(source); }
       for (const row of result.rows) {
         const continued = !all && (compare(row.start, source.start) < 0 || compare(row.end, source.end) > 0);
-        const item = element("li"), open = button(`${row.kind} · ${point(row.start)}–${point(row.end)}${continued ? " · extends outside shown page" : ""}`, () => {
+        const label = contributionKindLabel(path, row.kind), location = contributionLocation(row.start, row.end);
+        const item = element("li"), open = button("", () => {
           if (!current()) return;
           wholeUnit = false; scope.value = "shown"; contributionOffset = 0; selectedContribution = row;
           if (cursor !== row.cursor) { if (cursor !== null) history.push(cursor); cursor = row.cursor; focusSource = true; void loadSource(row); }
           else { renderSource(source); code.scrollTop = 0; code.scrollLeft = 0; dialog.scrollTop = 0; code.focus?.({ preventScroll: true }); void loadContributions(); }
         });
+        const summary = element("span"); summary.dataset.contributionSummary = "";
+        const kind = element("span", label); kind.dataset.contributionLabel = "";
+        const added = element("span", "+1 complexity"); added.dataset.contributionComplexity = "1";
+        summary.append(kind, added);
+        const position = element("span", location + (continued ? " · extends outside shown page" : "")); position.dataset.contributionLocation = "";
+        open.append(summary, position); open.setAttribute("aria-label", `${label}. Adds 1 complexity. ${position.textContent}.`);
         open.dataset.contribution = String(row.id); open.setAttribute("aria-current", String(selectedContribution?.id === row.id)); item.append(open); contributions.append(item);
       }
       contributionMessage.textContent = result.unitTotal === 0 ? "No branching contributions in this unit."

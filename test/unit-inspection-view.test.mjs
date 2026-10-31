@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';import test from 'node:test';import{registerHooks}from'node:module';
 registerHooks({resolve(specifier,context,nextResolve){return nextResolve(/^\.\.?\//u.test(specifier)&&!/\.[a-z]+$/iu.test(specifier)?specifier+'.ts':specifier,context);}});
-const{attachUnitInspection,unitKindLabel}=await import('../src/edge/unit-inspection-view.ts');const{createFileInspection:makeInspection}=await import('../src/application/unit-inspection.ts');
+const{attachUnitInspection,unitKindLabel,contributionKindLabel,contributionLocation}=await import('../src/edge/unit-inspection-view.ts');const{createFileInspection:makeInspection}=await import('../src/application/unit-inspection.ts');
 const{createSourceColoring}=await import('../src/edge/shiki-source-highlighting.ts');
 const createFileInspection=(path,bytes,evidence,color=createSourceColoring)=>makeInspection(path,bytes,evidence,color);
 class Element extends EventTarget{
@@ -24,14 +24,14 @@ test('file selection lists units without opening source, then renders inert read
  assert.deepEqual(calls.map(row=>row.type),['units']);assert.equal(data(host,'unitSource').open,false);
  const open=all(host,node=>Object.hasOwn(node.dataset,'unit'))[0];open.click();await sourceReply.promise;await flush();
  assert.equal(data(host,'unitSource').open,true);assert.ok(data(host,'sourceCode').textContent.includes('<img src=x onerror=alert(1)>'));
- assert.equal(all(host,node=>node.tagName==='IMG'||node.tagName==='SCRIPT').length,0);assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,0);
+ assert.equal(all(host,node=>node.tagName==='IMG'||node.tagName==='SCRIPT').length,0);assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,1);assert.equal(all(host,node=>node.attributes['aria-current']==='true').length,1);
  all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0].click();await flush();assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,1);
  data(host,'unitSource').dispatchEvent(new Event('close'));assert.ok(data(host,'sourceCode').children.length>0,'a queued prior close event must not clear a reopened dialog');
  const colored=all(data(host,'sourceCode'),node=>Object.hasOwn(node.dataset,'syntaxColor'));
  assert.ok(colored.some(node=>node.dataset.syntaxColor==='5'&&node.textContent==='if'));
  assert.ok(colored.some(node=>node.dataset.syntaxColor==='6'&&node.textContent.includes('<img')));
  assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='CODE').map(node=>node.textContent).join('\n'),source);
- assert.match(data(host,'contributionRows').textContent,/if · 1:1–1:/u);assert.match(data(host,'unitDetails').textContent,/Complexity 2/u);
+ assert.match(data(host,'contributionRows').textContent,/If statement\+1 complexityLine 1/u);assert.match(data(host,'contributionRows').textContent,/starts at column 1, ends before column/u);assert.match(data(host,'unitDetails').textContent,/Complexity 2/u);
  button(host,'Close source').click();assert.equal(data(host,'unitSource').open,false);release();
 });
 test('bounded unit pages preserve all entries and source is still explicit',async()=>{
@@ -59,7 +59,7 @@ test('coloring failure renders exact inert plain source and ownership with a loc
  const read=createFileInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:2})},contributionCount:1,contributions:()=>[[0,'if',0,bytes.length-1]]},async()=>{throw Error('grammar failed');});
  const release=attachUnitInspection(documentTarget,host,'file.js',read);await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
  const code=data(host,'sourceCode');assert.equal(all(code,node=>node.tagName==='CODE').map(node=>node.textContent).join('\n'),source);
- assert.equal(all(code,node=>Object.hasOwn(node.dataset,'syntaxColor')).length,0);assert.equal(all(code,node=>node.tagName==='MARK').length,0);assert.equal(all(code,node=>node.tagName==='SCRIPT').length,0);
+ assert.equal(all(code,node=>Object.hasOwn(node.dataset,'syntaxColor')).length,0);assert.equal(all(code,node=>node.tagName==='MARK').length,1);assert.equal(all(code,node=>node.tagName==='SCRIPT').length,0);
  all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0].click();await flush();assert.equal(all(code,node=>node.tagName==='MARK').length,1);
  assert.match(data(host,'sourceBody').textContent,/Syntax coloring unavailable\. Underlined: selected/u);assert.equal(data(host,'unitSource').open,true);release();
 });
@@ -79,7 +79,7 @@ test('a long unit defaults to shown-source contributions and whole-unit entries 
  await action(()=>all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click());
  assert.equal(data(host,'contributionRows').children.length,0);assert.match(data(host,'contributionStatus').textContent,/0 of 27/u);assert.match(data(host,'sourceRange').textContent,/Shown source: 660:1/u);assert.match(data(host,'unitDetails').textContent,/Complexity 28 \(whole unit\).*660:1–1371:2/u);
  const scope=data(host,'contributionScope');await action(()=>{scope.value='unit';scope.dispatchEvent(new Event('change'));});
- assert.equal(data(host,'contributionRows').children.length,27);const target=all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0];assert.match(target.textContent,/975:2/u);
+ assert.equal(data(host,'contributionRows').children.length,27);const target=all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0];assert.match(target.textContent,/Line 975 · starts at column 2/u);
  data(host,'unitSource').scrollTop=500;
  await action(()=>target.click());assert.equal(data(host,'unitSource').scrollTop,0);assert.equal(scope.value,'shown');assert.equal(data(host,'sourceCode').children[0].children[0].textContent,'975');assert.match(data(host,'sourceRange').textContent,/Shown source: 975:2/u);assert.ok(data(host,'contributionRows').children.length>0&&data(host,'contributionRows').children.length<27);
  const before=calls.length;target.click();await flush();assert.equal(calls.length,before,'detached whole-unit row must not issue a stale jump');
@@ -89,16 +89,16 @@ test('late contribution replies cannot populate a different source page',async()
  const lines=Array(200).fill('x;');lines[0]='if(x) x;';lines[99]='if(y) y;';const source=lines.join('\n'),bytes=new TextEncoder().encode(source),second=source.indexOf('if(y)'),old=Promise.withResolvers(),ready=Promise.withResolvers();
  const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:3})},contributionCount:2,contributions:()=>[[0,'if',0,8],[0,'if',second,second+8]]},async()=>()=>[]);
  const host=new Element('section'),release=attachUnitInspection(documentTarget,host,'file.js',async query=>{if(query.type==='contributions'&&query.cursor===0)return old.promise;const result=await read(query);if(query.type==='contributions')ready.resolve();return result;});await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
- assert.equal(data(host,'contributionRows').children.length,0);button(host,'Next source').click();await ready.promise;await flush();assert.match(data(host,'sourceRange').textContent,/Shown source: 81:1/u);assert.match(data(host,'contributionRows').textContent,/100:1/u);
- old.resolve(await read({type:'contributions',path:'file.js',unit:0,offset:0,cursor:0}));await flush();assert.match(data(host,'contributionRows').textContent,/100:1/u);assert.doesNotMatch(data(host,'contributionRows').textContent,/if · 1:1/u);release();
+ assert.equal(data(host,'contributionRows').children.length,0);button(host,'Next source').click();await ready.promise;await flush();assert.match(data(host,'sourceRange').textContent,/Shown source: 81:1/u);assert.match(data(host,'contributionRows').textContent,/Line 100 · starts at column 1/u);
+ old.resolve(await read({type:'contributions',path:'file.js',unit:0,offset:0,cursor:0}));await flush();assert.match(data(host,'contributionRows').textContent,/Line 100 · starts at column 1/u);assert.doesNotMatch(data(host,'contributionRows').textContent,/Line 1 · starts/u);assert.equal(all(host,node=>node.attributes['aria-current']==='true').length,0);release();
 });
 test('only the selected overlapping contribution is marked using scalar columns; same-start replacement needs no source read',async()=>{
  const source='\t😀a&&b&&c;\nif(x) y;\n'+'x;\n'.repeat(100),bytes=new TextEncoder().encode(source),byte=index=>new TextEncoder().encode(source.slice(0,index)).length,branch=source.indexOf('if('),host=new Element('section'),calls=[];
  const read=makeInspection('file.js',bytes,{units:{length:2,at:id=>({kind:id?'function':'top-level',startByte:id?byte(branch):0,endByte:id?byte(branch+8):bytes.length,complexity:id?1:4})},contributionCount:3,contributions:()=>[[0,'logical-and',byte(1),byte(10)],[0,'logical-and',byte(1),byte(7)],[0,'if',byte(branch),byte(branch+8)]]},async()=>()=>[]);
  const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);return read(query);});await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
  const marks=()=>all(data(host,'sourceCode'),node=>node.tagName==='MARK').map(node=>node.textContent).join('\n'),entry=id=>all(host,node=>node.dataset.contribution===String(id))[0];
- assert.equal(marks(),'');entry(0).click();await flush();assert.equal(marks(),'😀a&&b&&c');assert.equal(entry(0).attributes['aria-current'],'true');
- const sourceReads=calls.filter(query=>query.type==='source').length;entry(1).click();await flush();assert.equal(marks(),'😀a&&b');assert.equal(calls.filter(query=>query.type==='source').length,sourceReads);assert.equal(entry(0).attributes['aria-current'],'false');assert.equal(entry(1).attributes['aria-current'],'true');assert.equal(entry(2).attributes['aria-current'],'false');assert.match(data(host,'sourceBody').textContent,/selected logical-and · 1:2–1:7/u);
+ assert.equal(marks(),'😀a&&b&&c');entry(0).click();await flush();assert.equal(marks(),'😀a&&b&&c');assert.equal(entry(0).attributes['aria-current'],'true');
+ const sourceReads=calls.filter(query=>query.type==='source').length;entry(1).click();await flush();assert.equal(marks(),'😀a&&b');assert.equal(calls.filter(query=>query.type==='source').length,sourceReads);assert.equal(entry(0).attributes['aria-current'],'false');assert.equal(entry(1).attributes['aria-current'],'true');assert.equal(entry(2).attributes['aria-current'],'false');assert.match(data(host,'sourceBody').textContent,/selected Logical AND \(&&\) · \+1 complexity\. Line 1 · starts at column 2, ends before column 7/u);
  button(host,'Next source').click();await flush();assert.equal(marks(),'');assert.equal(all(host,node=>node.attributes['aria-current']==='true').length,0);
  button(host,'Previous source').click();await flush();assert.equal(marks(),'');button(host,'Close source').click();all(host,node=>node.dataset.unit==='1')[0].click();await flush();assert.equal(marks(),'');release();
 });
@@ -106,7 +106,7 @@ test('selected spans clip to a scalar-aligned bounded source window, not the uni
  const source='😀'.repeat(3000)+';',bytes=new TextEncoder().encode(source),host=new Element('section');
  const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:3})},contributionCount:2,contributions:()=>[[0,'logical-and',0,bytes.length],[0,'logical-and',0,4]]},async()=>()=>[]);
  const release=attachUnitInspection(documentTarget,host,'file.js',read);await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();const mark=()=>all(data(host,'sourceCode'),node=>node.tagName==='MARK').map(node=>node.textContent).join('');
- assert.equal(mark(),'');all(host,node=>node.dataset.contribution==='0')[0].click();await flush();assert.equal(mark(),'😀'.repeat(2048));
+ assert.equal(mark(),'😀'.repeat(2048));all(host,node=>node.dataset.contribution==='0')[0].click();await flush();assert.equal(mark(),'😀'.repeat(2048));
  all(host,node=>node.dataset.contribution==='1')[0].click();await flush();assert.equal(mark(),'😀');button(host,'Next source').click();await flush();assert.equal(mark(),'');release();
 });
 test('a late selected-contribution source reply cannot restore a highlight after the dialog reopens',async()=>{
@@ -114,5 +114,19 @@ test('a late selected-contribution source reply cannot restore a highlight after
  const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:3})},contributionCount:2,contributions:()=>[[0,'logical-and',0,4],[0,'logical-and',6,10]]},async()=>()=>[]);
  const release=attachUnitInspection(documentTarget,host,'file.js',query=>query.type==='source'&&query.cursor===6?pending.promise:read(query));await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();all(host,node=>node.dataset.contribution==='1')[0].click();
  button(host,'Close source').click();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();pending.resolve(await read({type:'source',path:'file.js',unit:0,cursor:6}));await flush();
- assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,0);assert.equal(all(host,node=>node.attributes['aria-current']==='true').length,0);assert.match(data(host,'sourceRange').textContent,/Shown source: 1:1/u);release();
+ assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').map(node=>node.textContent).join(''),'a&&b');assert.equal(all(host,node=>node.attributes['aria-current']==='true')[0].dataset.contribution,'0');assert.match(data(host,'sourceRange').textContent,/Shown source: 1:1/u);release();
+});
+test('contribution labels describe every kind and explicit scalar-column ranges without mislabelling C# guards',()=>{
+ const labels={if:'If statement',loop:'Loop',case:'Switch branch',catch:'Catch handler',ternary:'Conditional expression','logical-and':'Logical AND (&&)','logical-or':'Logical OR (||)',nullish:'Null coalescing (??)','logical-and-assign':'Logical AND assignment (&&=)','logical-or-assign':'Logical OR assignment (||=)','nullish-assign':'Null-coalescing assignment (??=)'};
+ for(const[kind,label]of Object.entries(labels))assert.equal(contributionKindLabel('file.ts',kind),label);
+ assert.equal(contributionKindLabel('FILE.CS','if'),'Branch condition (if / when / filter)');assert.equal(contributionKindLabel('file.js','__proto__'),'Branching decision');
+ assert.equal(contributionLocation({line:79,column:3},{line:85,column:4}),'Lines 79–85 · starts at column 3, ends before column 4');assert.equal(contributionLocation({line:79,column:3},{line:79,column:18}),'Line 79 · starts at column 3, ends before column 18');
+});
+test('opening a unit preselects its first shown contribution without source navigation, focus movement or another source read',async()=>{
+ const source='const x=1;\nif(x) x++;\n',bytes=new TextEncoder().encode(source),start=source.indexOf('if('),host=new Element('section'),calls=[];let focuses=0;
+ const read=makeInspection('file.js',bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:bytes.length,complexity:2})},contributionCount:1,contributions:()=>[[0,'if',start,bytes.length-1]]},async()=>()=>[]);
+ const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);return read(query);});data(host,'sourceCode').focus=()=>focuses++;await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
+ assert.equal(focuses,0);assert.equal(calls.filter(query=>query.type==='source').length,1);assert.equal(calls.find(query=>query.type==='source').cursor,null);assert.match(data(host,'sourceRange').textContent,/Shown source: 1:1/u);
+ assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').map(node=>node.textContent).join(''),'if(x) x++;');assert.equal(all(host,node=>node.attributes['aria-current']==='true')[0].dataset.contribution,'0');
+ assert.equal(data(host,'contributionComplexity').dataset.contributionComplexity,'1');assert.equal(data(host,'contributionComplexity').textContent,'+1 complexity');assert.match(data(host,'contributionSort').textContent,/highest first.*ties use source order/u);assert.match(all(host,node=>node.dataset.contribution==='0')[0].attributes['aria-label'],/If statement\. Adds 1 complexity\. Line 2/u);release();
 });

@@ -30,7 +30,9 @@ strings. It is a reading aid, not semantic validation or type checking. No langu
 detection, repository-controlled grammar or theme, CDN or runtime asset fetch is
 used. The existing WASM permission also covers the highlighting engine. See xref:architecture:adr/0017-offline-shiki-source-highlighting.adoc[ADR 0017].
 
-Opening source shows syntax coloring without ownership highlights. Selecting a
+Opening a unit preselects the first contribution in its initial shown-source list
+and underlines only that record's span, without jumping, scrolling or moving focus.
+An empty initial list leaves no selected contribution. Selecting another
 contribution from the list underlines only that record's exact span within the
 shown page, with a distinct background that preserves syntax colors. Other owned
 spans, including overlapping records, are not added to the highlight. The source
@@ -38,7 +40,23 @@ status names the selected kind and full end-exclusive range; the current list ro
 is visually and accessibly identified. Selecting another contribution replaces
 this highlight. Manual Previous/Next source navigation, changing units, closing
 or disposing the view clears it. List scope and pagination do not select a new
-contribution or change the current highlight.
+contribution or change the current highlight. Manual source paging does not
+preselect another record.
+
+Contribution rows use readable kind labels, such as `If statement`, `Loop`, and
+`Logical AND (&&)`, plus explicit line and column wording rather than internal
+kind identifiers or colon-separated coordinates. C#'s shared `if` evidence kind
+also covers `when` guards and catch filters, so it is labelled `Branch condition
+(if / when / filter)` rather than guessed to be an if statement.
+
+Each recorded contribution adds *+1 complexity* to its owner under the
+xref:source-and-metrics.adoc[existing metric rules]. Show this added amount on
+every row. Order by added complexity descending; because all records add one,
+all entries tie. Resolve ties globally before filtering and paging by source start
+ascending, source end descending, then canonical decision-kind order. Explain the
+tie in the UI. Do not count nested records as additional weight on an enclosing
+span or change the metric to manufacture differences.
+
 The contribution list defaults to `Shown source`: include only this unit's recorded
 spans intersecting the rendered source window, using half-open normalized byte
 ranges. Show the visible-scope total separately from the whole-unit total. A record
