@@ -186,7 +186,7 @@ export async function checkStandaloneBrowser() {
     assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-source-line] code')].map(row=>row.textContent).join('\\n')`), 'function choose(v) { return v ? 1 : 0; }');
     assert.ok(await p.evaluate(`document.querySelector('[data-contribution-rows]').textContent.includes('ternary')`));
     assert.equal(await p.evaluate(`document.querySelector('[data-unit-details]').textContent.startsWith('Function ·')`),true);
-    assert.equal(await p.evaluate(`(()=>{const code=document.querySelector('[data-source-code]'),keyword=code.querySelector('[data-syntax="keyword"]'),number=code.querySelector('[data-syntax="number"]'),owned=code.querySelector('mark [data-syntax="operator"]');return keyword.textContent==='function'&&getComputedStyle(keyword).color!==getComputedStyle(number).color&&!!owned&&getComputedStyle(owned.closest('mark')).textDecorationLine.includes('underline');})()`),true);
+    assert.equal(await p.evaluate(`(()=>{const code=document.querySelector('[data-source-code]'),keyword=code.querySelector('[data-syntax-color="5"]'),number=code.querySelector('[data-syntax-color="2"]'),owned=code.querySelector('mark [data-syntax-color]');return keyword.textContent==='function'&&getComputedStyle(keyword).color!==getComputedStyle(number).color&&!!owned&&getComputedStyle(owned.closest('mark')).textDecorationLine.includes('underline');})()`),true);
     await p.evaluate(`document.querySelector('[data-source-code]').focus();true`); await key('ArrowRight','ArrowRight',39);
     assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`), initial, 'source inspection moved the camera');
     await key('Escape','Escape',27); await p.wait(s=>!s.sourceOpen);
@@ -272,6 +272,22 @@ export async function checkStandaloneBrowser() {
     assert.equal(afterDistrict.matrix, beforeDistrict.matrix); assert.equal(afterDistrict.uploads, beforeDistrict.uploads);
     assert.equal(afterDistrict.selected, -wantedDistrict - 2);
     assert.notEqual(afterDistrict.hash, beforeDistrict.hash, "district did not change actual rendered pixels");
+    const hierarchyRequests = harness.requests.length;
+    await p.evaluate(`(()=>{const input=document.querySelector('[data-analyzed-query]');input.value='not-a-file';input.dispatchEvent(new Event('input'));document.querySelector('[data-district-rows="directories"] button').focus();return true;})()`);
+    await key('Enter','Enter',13); await p.wait(s=>s.district==='src/edge/deep');
+    assert.equal(await p.evaluate(`document.querySelector('[data-file-count]').textContent`),'1');
+    await p.evaluate(`document.querySelector('[data-district-rows="files"] button').focus();true`); await key('Enter','Enter',13);
+    await p.wait(s=>s.selectedFile==='src/edge/deep/b.ts');
+    assert.equal((await p.snapshot()).sourceOpen,false,'hierarchy file activation opened source automatically');
+    await p.click('[data-browse-directories]'); await p.wait(s=>s.district==='/');
+    assert.equal(await p.evaluate(`document.querySelector('[data-file-count]').textContent`),'5');
+    for (const path of ['src','src/edge']) {
+      await p.evaluate(`[...document.querySelectorAll('[data-district-rows="directories"] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();true`);
+      assert.equal((await p.snapshot()).district,path);
+    }
+    await p.evaluate(`(()=>{const input=document.querySelector('[data-analyzed-query]');input.value='';input.dispatchEvent(new Event('input'));return true;})()`);
+    assert.equal(harness.requests.length,hierarchyRequests,'directory drill-down made a request');
+    assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`),{matrix:beforeDistrict.matrix,uploads:beforeDistrict.uploads},'directory drill-down changed camera or geometry');
     await p.evaluate(`document.querySelector('[data-city] canvas').focus();true`); await key("Escape", "Escape", 27);
     assert.equal((await p.snapshot()).district, null);
     assert.equal(await p.evaluate(`window.__render.frames.at(-1).hash`), beforeDistrict.hash, "clear did not restore the scene");
@@ -315,7 +331,7 @@ export async function checkStandaloneBrowser() {
     await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent==='src/edge/a.js').click();true`);
     await p.wait(s=>s.units===2); await p.click('[data-unit-rows] button'); await p.wait(s=>s.sourceReady&&s.contributions===1);
     assert.ok(await p.evaluate(`document.querySelector('[data-source-code]').textContent.includes('function choose')`));
-    assert.equal(await p.evaluate(`document.querySelector('[data-source-code] [data-syntax="keyword"]').textContent`),'function');
+    assert.equal(await p.evaluate(`document.querySelector('[data-source-code] [data-syntax-color="5"]').textContent`),'function');
     await p.closeSource(); assert.equal(harness.requests.length,beforeSavedInspection,'saved inspection reacquired source');
 
     await run("mixed", s => s.canvases === 1 && s.analyzed === 5 && s.failed === 2);
@@ -451,7 +467,10 @@ export async function checkStandaloneBrowser() {
     const maximumFrame = await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`);
     await p.evaluate(`document.querySelector('[data-city] canvas').focus();true`); await key("Home", "Home", 36);
     await p.evaluate(`document.querySelector('[data-select-district]').focus();true`); await key("Enter", "Enter", 13);
-    assert.equal((await p.snapshot()).district, "matrix");
+    assert.equal((await p.snapshot()).district, "matrix-0000/src");
+    assert.equal(final.city.presentation.plates.length, 8001, 'full recursive hierarchy was not retained');
+    assert.deepEqual(await p.evaluate(`['data-file-count','data-source-lines','data-executable-units','data-maximum-complexity'].map(name=>document.querySelector('['+name+']').textContent)`), ["1", "0", "0", "0"]);
+    await p.click('[data-district-navigation] > button:first-child'); await p.wait(s=>s.district==='/');
     assert.notEqual(await p.evaluate(`window.__render.frames.at(-1).hash`), maximumPixels, "maximum-envelope district did not highlight");
     await p.evaluate(`window.__render.capturePixels=false;true`);
     assert.deepEqual(await p.evaluate(`['data-file-count','data-source-lines','data-executable-units','data-maximum-complexity'].map(name=>document.querySelector('['+name+']').textContent)`), ["4000", "0", "0", "0"]);

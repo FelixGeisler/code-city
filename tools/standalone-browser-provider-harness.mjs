@@ -15,9 +15,9 @@ function fixture(mode) {
   if (mode === "unit-evidence") rows = [
     ["a.js", `const banner = '<img src=x onerror=globalThis.__sourceExecuted=true>😀';\nfunction outer(x) {\n if(x) { const inner = y => y ? 1 : 0; }\n return x && 1;\n}\n`],
     ["b.js", Array.from({ length: 40 }, (_, index) => `const f${index} = x => x;`).join("\n")],
-    ["dense.js", "x&&x;".repeat(5000)],
+    ["dense.js", "x&&x;".repeat(5000) + "/*" + "x".repeat(2_097_152 - 25_000 - 4) + "*/"],
   ];
-  if (mode === "districts") rows = rows.map(([name, text], index) => [index < 3 ? `src/edge/${name}` : index === 3 ? `other/${name}` : name, text]);
+  if (mode === "districts") rows = rows.map(([name, text], index) => [index < 3 ? `src/edge/${index === 1 ? "deep/" : ""}${name}` : index === 3 ? `other/${name}` : name, text]);
   if (mode === "mixed") rows.push(["bad.js", "export const = ;"], ["nul.js", Buffer.from([0])]);
   if (mode === "all-failed") rows = [["invalid.js", Buffer.from([0xc3, 0x28])], ["nul.js", Buffer.from([0])]];
   if (mode === "progress") rows = [["a.js", rows[0][1]], ["b.js", "const b = 1;"], ["nul.js", Buffer.from([0])]];
@@ -25,7 +25,7 @@ function fixture(mode) {
   if (mode === "window") rows = Array.from({ length: 12 }, (_, i) => [`${String(i).padStart(4, "0")}.js`, "export const value = 1;\n"]);
   if (mode === "maximum") {
     const maximum = "//" + "x".repeat(2_097_150);
-    rows = Array.from({ length: 4000 }, (_, i) => [`matrix/${String(i).padStart(4, "0")}.js`, i < 20 ? maximum : ""]);
+    rows = Array.from({ length: 4000 }, (_, i) => [`matrix-${String(i).padStart(4, "0")}/src/file.js`, i < 20 ? maximum : ""]);
   }
   if (mode === "too-many") rows = Array.from({ length: 4001 }, (_, i) => [`${i}.js`, ""]);
   if (mode === "file-limit") rows = [["large.js", "//" + "x".repeat(2_097_151)]];

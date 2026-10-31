@@ -519,7 +519,7 @@ test("both exact-2-MiB candidate modules validate, project, and derive exact met
   }
 });
 
-test("production admission selects the exact qualified C# package asset without dependency changes", async () => {
+test("production admission selects the exact qualified C# package asset with unchanged parser pins and the approved Shiki dependency", async () => {
   const { SUPPORTED_SUFFIXES, hasSupportedSuffix } = await import("../src/domain/source-admission.ts");
   const { selectGrammarFamily } = await import("../src/domain/base-metrics.ts");
   assert.deepEqual(SUPPORTED_SUFFIXES, [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".cs"]);
@@ -528,8 +528,8 @@ test("production admission selects the exact qualified C# package asset without 
     assert.equal(selectGrammarFamily(pathValue), "csharp", pathValue);
   }
   const pins = {
-    "package.json": "2e100cf238617ec17a67807b3166148a4bca96cfdbdd514d18fd4c8ded09f946",
-    "package-lock.json": "5a115d17e45aea2cdf70de0b16f3a9bd863c18407485612545b0a9a41c13c612",
+    "package.json": "67de048ab33477cc8966acecdace569b3e187f788521cd5363bb87e8baa0bc71",
+    "package-lock.json": "2bfd60516adbf33268895765edf07887ebb2af386b55e9d9a5adba6c4cf0c800",
     "src/domain/base-metrics.ts": "72503f7b527a5fc443edf5986ee447f365827ecccad7eeacabcaaf3684d9286a",
   };
   for (const [relativePath, expected] of Object.entries(pins)) assert.equal(sha256(await readFile(path.join(projectRoot, ...relativePath.split("/")))), expected, relativePath);

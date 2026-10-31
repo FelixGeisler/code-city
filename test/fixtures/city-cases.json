@@ -529,21 +529,21 @@
     "concentrated": {
       "expectedBounds": [
         0,
-        0,
+        0.5,
         0,
         328,
-        40,
+        40.5,
         338
       ]
     },
     "manyGroups": {
       "expectedBounds": [
         0,
+        1,
         0,
-        0,
-        1074,
-        40,
-        1072
+        1068,
+        41,
+        1089
       ]
     }
   }

@@ -1,0 +1,56 @@
+= ADR 0018: Recursive district presentation
+
+Status:: Accepted
+Human direction:: The user requested hierarchical inspection and recursive 3D districts, reviewed the nested-platform proposal, then explicitly rejected the proposed compatibility layer: “Its not in production. We dont have to care about existing saves.”
+
+== Context
+
+CC-CORE-CITY-01 requires every successful file's ancestor directory to become a
+recursive subdivision. Production currently groups only two directory segments.
+Building height represents SLOC, footprint represents units, and color represents
+maximum unit complexity. Navigation must preserve these meanings and the camera.
+
+A recursive layout changes the fixed presentation contract retained by saved
+investigations. The user explicitly directed that this pre-production change
+need not support existing saves. No deletion of stored user files was requested.
+
+== Alternatives
+
+* Directory navigation alone does not deliver the requested recursive geometry.
+* Scaled treemap cells change the fixed building-footprint metric mapping.
+* Dual geometry/snapshot readers preserve old layouts but add compatibility work
+  explicitly rejected by the user.
+* Nested raised platforms with one new format deliver the requested hierarchy
+  without metric remapping or legacy readers.
+
+== Decision
+
+Represent root and every successful file's ancestor directory as nested raised
+platforms. Place each file's one building on its immediate platform. Preserve
+building dimension/color functions; platform elevation separately encodes depth.
+Use deterministic bottom-up shelf packing, with ordering, spacing, elevation and
+numeric rules defined once in the recursive-district requirements. Traverse and
+index deep trees iteratively, without truncating hierarchy or lowering admission.
+
+Use the full successful-file directory index for exact descendant aggregates,
+root/parent navigation, child directories, ranked contained files and existing
+unit/source drill-down. Root differs from a literal _root directory. Selection
+uses exact descendants. Picking retains nearest geometry and building-wins ties.
+Inspection does not move the camera or rebuild/upload geometry.
+
+Change the geometry identifier and snapshot format version explicitly. Support
+only the new format, rejecting old or unknown versions rather than reinterpreting
+them. Do not add a legacy reader or migration, rewrite old saves, or delete files.
+New snapshots retain the recursive fixed layout and evidence and reopen without
+provider acquisition or parser/metric work. ADR 0016's filesystem, atomic storage,
+explicit Save, integrity and operational policies otherwise remain unchanged.
+
+== Consequences
+
+Updates geometry validation, snapshot validation/restoration, hierarchy selection,
+picking and presentation together. Old saved URLs can fail explicitly; files stay
+untouched. Qualify determinism, containment, deep/wide trees, root identities,
+exact aggregates, keyboard/pixel/resize behavior and the existing 4,000-file
+processing envelope. New-format Save/restart/reopen must restore the same city
+without provider/parser requests. No new metric, account or server analysis is
+introduced; physical browser resources remain device-dependent.

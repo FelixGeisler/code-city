@@ -14,8 +14,9 @@ assert.deepEqual(manifest.files.filter(f => f.role === "public").map(f => f.path
   "public/parser/web-tree-sitter.js", "public/parser/web-tree-sitter.wasm",
 ]);
 assert.deepEqual(manifest.files.filter(f => f.role === "private").map(f => f.path), [
+  "server/licenses.json",
   "server/src/application/city-payload.js", "server/src/application/saved-investigation.js",
-  "server/src/domain/city-model.js", "server/src/domain/repository-reference.js", "server/src/domain/source-admission.js",
+  "server/src/domain/city-model.js", "server/src/domain/district-layout.js", "server/src/domain/repository-reference.js", "server/src/domain/source-admission.js",
   "server/src/edge/node/body-reader.js", "server/src/edge/node/config.js", "server/src/edge/node/fixture-manifest.js",
   "server/src/edge/node/http-perimeter.js", "server/src/edge/node/investigation-store.js", "server/src/edge/node/snapshot-validation-worker.js",
   "server/src/edge/node/standalone-cli.js", "server/src/edge/node/wire-observer.js", "server/standalone.mjs",
@@ -28,6 +29,9 @@ for (const [source, name] of [
   ["vendor/tree-sitter-typescript/wasm/tree-sitter-tsx.wasm", "tree-sitter-tsx.wasm"],
   ["node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-c-sharp.wasm", "tree-sitter-c-sharp.wasm"],
 ]) assert.ok((await readFile(path.join(projectRoot, source))).equals(await readFile(path.join(canonicalStandaloneRoot, "public/parser", name))), `Parser bytes changed: ${name}`);
+const notices = JSON.parse(await readFile(path.join(canonicalStandaloneRoot, "server/licenses.json"), "utf8"));
+assert.equal(notices.length, 7);
+assert.ok(notices.every(notice => typeof notice.package === "string" && notice.notice.includes("Permission is hereby granted") && notice.notice.includes("Copyright")));
 const main = await readFile(path.join(canonicalStandaloneRoot, "public/browser.js"), "utf8");
 const worker = await readFile(path.join(canonicalStandaloneRoot, "public/analysis-worker.js"), "utf8");
 assert.match(main, /new Worker\(/u);

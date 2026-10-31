@@ -1,3 +1,4 @@
+import { attachDistrictInspection, createDistrictInspectionIndex } from "./district-inspection-view";
 import { attachUnitInspection, type InspectInvestigation } from "./unit-inspection-view";
 import type { DistrictDescriptor, InspectionFact, ValidatedCity } from "../application/city-payload";
 import { compareUnsignedUtf8 } from "../domain/source-admission";
@@ -19,7 +20,7 @@ export type InventoryProjection = Readonly<{
 
 export type InventoryPublicationIdentity = Readonly<Record<never, never>>;
 
-type PresentationDocument = Pick<Document, "createElement">;
+type PresentationDocument = Pick<Document, "createElement"> & Partial<Pick<Document, "activeElement">>;
 type PresentationRoot = Pick<HTMLElement, "hidden" | "replaceChildren">;
 type VisualResult = PresenterVisualResult;
 
@@ -27,11 +28,6 @@ const SORTS = new Set<InventorySort>(["S", "U", "M"]);
 
 function validIndex(inspection: readonly InspectionFact[], index: number | null): boolean {
   return index === null || (Number.isSafeInteger(index) && index >= 0 && index < inspection.length);
-}
-
-function districtFor(canonicalPath: string): string {
-  const directories = canonicalPath.split("/").slice(0, -1);
-  return directories.length === 0 ? "/" : directories.slice(0, 2).join("/");
 }
 
 export function projectAnalyzedFiles(
@@ -75,6 +71,7 @@ export type InventoryState = Readonly<{
     sort: InventorySort,
     index: number,
   ): void;
+  hierarchyFileActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
   cityHover(generation: number, identity: InventoryPublicationIdentity, index: number | null): void;
   cityActivated(generation: number, identity: InventoryPublicationIdentity, index: number | null): void;
   districtActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
@@ -165,6 +162,11 @@ export function createInventoryState(options: Readonly<{
       if (!validIndex(inspection, index) || !indices.includes(index)) { fail(); return; }
       setVisual(hover, index);
     },
+    hierarchyFileActivated(callbackGeneration, callbackIdentity, index) {
+      if (!current(callbackGeneration, callbackIdentity)) return;
+      if (!validIndex(inspection, index)) { fail(); return; }
+      setVisual(hover, index);
+    },
     cityHover(callbackGeneration, callbackIdentity, index) {
       if (!current(callbackGeneration, callbackIdentity)) return;
       if (!validIndex(inspection, index)) { fail(); return; }
@@ -197,6 +199,7 @@ export function createInventoryState(options: Readonly<{
 }
 
 type InventoryPublicationSink = Readonly<{
+  hierarchyFileActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
   districtActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
   queryChanged(
     generation: number,
@@ -256,6 +259,7 @@ export function stageStandaloneInventoryPublication(
   inspect?: InspectInvestigation,
 ): StandaloneInventoryPublication {
   const identity: InventoryPublicationIdentity = Object.freeze({});
+  const hierarchy = createDistrictInspectionIndex(inspection, districts);
   const analyzed = documentTarget.createElement("details");
   analyzed.dataset.analyzed = "";
   analyzed.open = false;
@@ -309,7 +313,13 @@ export function stageStandaloneInventoryPublication(
   resetControl.textContent = "Reset view";
   const tools = documentTarget.createElement("div");
   tools.dataset.cityTools = "";
-  tools.append(analyzed, resetControl);
+  const browseDirectories = documentTarget.createElement("button");
+  browseDirectories.type = "button";
+  browseDirectories.dataset.browseDirectories = "";
+  browseDirectories.textContent = "Browse directories";
+  const browseListener = (): void => { if (!rolledBack) sink.districtActivated(generation, identity, hierarchy.root); };
+  browseDirectories.addEventListener("click", browseListener);
+  tools.append(analyzed, resetControl, browseDirectories);
   const inspector = createInspector(documentTarget);
 
   let query = "";
@@ -328,8 +338,10 @@ export function stageStandaloneInventoryPublication(
     for (const entry of rowListeners) entry.button.setAttribute("aria-pressed", String(entry.index === selected));
   };
 
-  const setSelection = (selection: number | null): void => {
+  const hasInspectorFocus = (): boolean => !!documentTarget.activeElement && inspector.contains(documentTarget.activeElement);
+  const setSelection = (selection: number | null, restoreFocus = true): void => {
     if (!validIndex(inspection, selection)) throw new Error("Invalid inventory selection");
+    const hadFocus = restoreFocus && hasInspectorFocus();
     releaseInspector();
     releaseInspector = (): void => {};
     selected = selection;
@@ -337,17 +349,19 @@ export function stageStandaloneInventoryPublication(
     if (selection === null) {
       inspector.replaceChildren();
       inspector.hidden = true;
+      if (hadFocus) browseDirectories.focus({ preventScroll: true });
       return;
     }
     const fact = inspection[selection]!;
-    const district = districtFor(fact.canonicalPath);
-    const districtIndex = districts.findIndex(value => (value.root ? "/" : value.identity) === district);
-    if (districtIndex < 0) throw new Error("Selected file has no district");
+    const districtIndex = hierarchy.directoryOf(fact.canonicalPath);
+    const descriptor = districts[districtIndex]!;
+    const district = descriptor.root ? "/" : descriptor.identity;
     const releaseMetrics = replaceMetricInspectorContent(documentTarget, inspector, fact, district,
       () => sink.districtActivated(generation, identity, districtIndex));
     const releaseUnits = inspect ? attachUnitInspection(documentTarget, inspector, fact.canonicalPath, inspect) : () => {};
     releaseInspector = () => { releaseMetrics(); releaseUnits(); };
     inspector.hidden = false;
+    if (hadFocus) inspector.focus({ preventScroll: true });
   };
 
   const setProjection = (projection: InventoryProjection, selection: number | null): void => {
@@ -410,16 +424,22 @@ export function stageStandaloneInventoryPublication(
     setDistrict(index) {
       const descriptor = districts[index];
       if (!descriptor) throw new Error("Invalid selected district");
-      setSelection(null);
+      const hadFocus = hasInspectorFocus();
+      setSelection(null, false);
       const district = descriptor.root ? "/" : descriptor.identity;
-      replaceDistrictInspectorContent(documentTarget, inspector, district,
-        inspection.filter(fact => districtFor(fact.canonicalPath) === district));
+      const members = hierarchy.members(index);
+      replaceDistrictInspectorContent(documentTarget, inspector, district, members.map(file => inspection[file]!));
+      releaseInspector = attachDistrictInspection(documentTarget, inspector, inspection, districts, hierarchy, index, members,
+        next => sink.districtActivated(generation, identity, next),
+        file => sink.hierarchyFileActivated(generation, identity, file));
       inspector.hidden = false;
+      if (hadFocus) inspector.focus({ preventScroll: true });
     },
     commitCanvas(canvas) { cityHost.replaceChildren(canvas as unknown as Node, inspector); },
     rollback() {
       if (rolledBack) return;
       rolledBack = true;
+      try { browseDirectories.removeEventListener("click", browseListener); } catch {}
       try { queryInput.removeEventListener("input", queryListener); } catch {}
       try { sortSelect.removeEventListener("change", sortListener); } catch {}
       try { clearRowListeners(); } catch {}
@@ -502,7 +522,9 @@ export function createStandalonePresentationCoordinator(options: Readonly<{
     let state: InventoryState | undefined;
     try {
       const sink: InventoryPublicationSink = Object.freeze({
-        districtActivated: (...args) => state?.districtActivated(...args),        queryChanged: (...args) => state?.queryChanged(...args),
+        hierarchyFileActivated: (...args) => state?.hierarchyFileActivated(...args),
+        districtActivated: (...args) => state?.districtActivated(...args),
+        queryChanged: (...args) => state?.queryChanged(...args),
         sortChanged: (...args) => state?.sortChanged(...args),
         rowActivated: (...args) => state?.rowActivated(...args),
       });

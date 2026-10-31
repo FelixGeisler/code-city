@@ -614,8 +614,8 @@ test("native picking misses both intra-group and inter-group whitespace in group
     { canonicalPath: "a/x/two.ts", S: 1, U: 0, M: 0 },
     { canonicalPath: "b/x/one.ts", S: 1, U: 0, M: 0 },
   ]));
-  assert.deepEqual([...city.geometry.origins], [0, 0, 0, 5, 0, 0, 0, 0, 17]);
-  assert.deepEqual(city.presentation.sceneBounds, [-3, -0.5, -3, 11, 5, 23]);
+  assert.deepEqual([...city.geometry.origins], [0, 1, 0, 5, 1, 0, 0, 1, 17]);
+  assert.deepEqual(city.presentation.sceneBounds, [-9, -0.5, -9, 17, 6, 29]);
   const dimensions = { width: 1000, height: 800 };
   const view = success(resetCamera(city.presentation.sceneBounds, dimensions)).view;
   const projectGround = (x, z) => {
@@ -669,11 +669,11 @@ test("both full 4,000-city envelopes keep immutable origin-C endpoints and stric
     const city = validateCityPayload(buildCity(facts));
     assert.deepEqual([...city.geometry.bounds], envelope[id].expectedBounds, id);
     const expectedScene = id === "concentrated"
-      ? [-3, -0.5, -3, 331, 40, 341]
-      : [-3, -0.5, -3, 1077, 40, 1075];
+      ? [-6, -0.5, -6, 334, 40.5, 344]
+      : [-9, -0.5, -9, 1077, 41, 1098];
     assert.deepEqual(city.presentation.sceneBounds, expectedScene, `${id}: scene bounds`);
-    assert.deepEqual(city.presentation.centre, id === "concentrated" ? [164, 19.75, 169] : [537, 19.75, 536]);
-    assert.equal(city.presentation.plates.length, id === "concentrated" ? 1 : 4000);
+    assert.deepEqual(city.presentation.centre, id === "concentrated" ? [164, 20, 169] : [534, 20.25, 544.5]);
+    assert.equal(city.presentation.plates.length, id === "concentrated" ? 2 : 8001);
     const originalOrigins = Buffer.from(bytes(city.geometry.origins));
     const originalSizes = Buffer.from(bytes(city.geometry.sizes));
     const centre = city.presentation.centre;

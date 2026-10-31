@@ -3,10 +3,13 @@
 Record consequential boundary and technology choices, not routine implementation
 details. Historical numbering does not count active decisions.
 
-== Current ownership decision
+== Current decisions
 
 * xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015: Browser analysis and server-saved investigations]
 * xref:adr/0016-immutable-investigation-file-store.adoc[ADR 0016: Immutable investigation file store]
+
+* xref:adr/0017-offline-shiki-source-highlighting.adoc[ADR 0017: Offline Shiki source highlighting]
+* xref:adr/0018-recursive-district-presentation.adoc[ADR 0018: Recursive district presentation]
 
 == Earlier decisions
 

@@ -62,8 +62,10 @@ File selection asks the completed worker for a bounded unit page. The worker
 indexes only the selected file's retained facts and normalized byte/line mapping.
 Explicit unit activation requests a source window and a page of recorded owned
 contributions. This does not initialize a parser, reacquire source, recompute
-metrics or send HTTP requests. Saved investigations adapt their version-1
-stored tuples to the same reader.
+metrics or send HTTP requests. Saved investigations adapt their version-2
+stored tuples to the same reader. Explicit source opening also lazily initializes
+Shiki's bundled Oniguruma highlighting engine in this worker; it emits validated
+palette-indexed text spans, not HTML. This is distinct from the analysis parser.
 
 The transport retains at most one pending read per operation kind and validates
 result shape, revision, path and request identity. The view additionally gates

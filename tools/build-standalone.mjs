@@ -74,7 +74,7 @@ async function buildBrowser(artifactRoot) {
   await viteBuild({
     root: projectRoot,
     configFile: false,
-    define: { __CODE_CITY_ANALYZER__: JSON.stringify(await analyzerIdentity()) },
+    define: { __CODE_CITY_ANALYZER__: JSON.stringify(await analyzerIdentity()), "process.env.VSCODE_TEXTMATE_DEBUG": "undefined" },
     publicDir: false,
     logLevel: "silent",
     base: "/",
@@ -97,7 +97,7 @@ async function buildBrowser(artifactRoot) {
   await writeFile(path.join(publicRoot, "index.html"), packageStandaloneBrowserHtml(template), "utf8");
   await writeFile(
     path.join(publicRoot, "browser.css"),
-    (await readFile(path.join(projectRoot, "src", "edge", "standalone-browser-shell.css"), "utf8")).replaceAll("\r\n", "\n"),
+    (await readFile(path.join(projectRoot, "src", "edge", "standalone-browser-shell.css"), "utf8") + "\n" + await readFile(path.join(projectRoot, "src", "edge", "source-theme.css"), "utf8")).replaceAll("\r\n", "\n"),
     "utf8",
   );
 }
@@ -172,6 +172,11 @@ export async function buildStandaloneArtifact(outputRoot = canonicalStandaloneRo
   await mkdir(path.join(artifactRoot, "public", "parser"), { recursive: true });
   for (const [source, name] of PARSER_FILES) await cp(path.join(projectRoot, ...source.split("/")), path.join(artifactRoot, "public", "parser", name));
   await compileSources(artifactRoot);
+  const licenses = [];
+  for (const [name, file] of [["shiki", "LICENSE"], ["@shikijs/core", "LICENSE"], ["@shikijs/primitive", "LICENSE"], ["@shikijs/langs", "LICENSE"], ["@shikijs/themes", "LICENSE"], ["@shikijs/engine-oniguruma", "LICENSE"], ["@shikijs/vscode-textmate", "LICENSE.md"]]) {
+    licenses.push({ package: name, notice: (await readFile(path.join(projectRoot, "node_modules", name, file), "utf8")).replaceAll("\r\n", "\n") });
+  }
+  await writeFile(path.join(artifactRoot, "server", "licenses.json"), JSON.stringify(licenses, null, 2) + "\n", "utf8");
   const manifest = await writeStandaloneManifest(artifactRoot);
   return { artifactRoot, manifest };
 }

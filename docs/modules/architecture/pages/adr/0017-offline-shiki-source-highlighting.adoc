@@ -1,0 +1,53 @@
+= ADR 0017: Offline Shiki source highlighting
+
+Status:: Accepted
+Human direction:: The user selected Shiki with “Shiki looks good. go.”, then confirmed proceeding without legacy saved-data compatibility after reviewing the proposed presentation design.
+
+== Context
+
+The bounded source reader currently uses a custom lexical scanner. The user
+selected Shiki for mature language grammars. ADR 0015's browser ownership and
+explicit source opening remain in force. Source must remain inert, with owned
+complexity contributions distinct from syntax colors.
+
+== Alternatives
+
+* Extend the custom scanner: small dependency footprint, but incomplete grammar
+  coverage and ongoing language-maintenance work.
+* highlight.js or Prism: viable alternatives, but not the user's selected library.
+* Shiki's JavaScript regex engine avoids another WASM engine, but qualification
+  stalled on valid large single-line comments. It is not selected.
+* Shiki with bundled Oniguruma WASM uses the standard grammar engine under the
+  application's existing WASM permission, without fetching another runtime URL.
+
+== Decision
+
+Use pinned Shiki with its standard Oniguruma regex engine in the existing browser
+worker. Bundle its WASM bytes in that worker, instantiated lazily on source opening;
+do not fetch a WASM URL or change CSP permissions.
+Bundle JS, JSX, TS, TSX and C# grammars, required embedded-language dependencies,
+and one dark theme. Select the language from the admitted suffix; do not detect
+languages automatically or load repository-controlled grammars, URLs or themes.
+Do not initialize the analysis parser for highlighting.
+
+Initialize coloring on explicit source opening, retaining whole-file lexical
+context across unit and page boundaries. Send bounded, identity-bound,
+scalar-aligned token spans with source pages. Render inert text nodes and a fixed
+validated theme palette, not generated HTML. Reserve the ownership underline for
+recorded complexity contributions. Coloring is presentation, not saved evidence.
+
+A highlighting error leaves full source and ownership marks available with a
+local syntax-coloring failure message. Do not retry automatically or discard the
+city. Preserve generation, replacement and cancellation ownership. Device memory
+and latency are not universally guaranteed.
+
+== Consequences
+
+Adds pinned runtime dependencies and a larger worker, including inline Oniguruma
+WASM. The JavaScript engine's valid-comment stalls motivated the standard engine;
+local controlled 100,000- and near-2-MiB-comment checks completed with exact text
+using Oniguruma. This is evidence for the engine choice, not a universal timing
+promise. Qualify grammar/engine
+compatibility, long and adversarial text, context continuity, source safety,
+reproducibility, CSP and packaged asset closure. No provider call, metric
+recomputation, account, source execution or server analysis route is introduced.

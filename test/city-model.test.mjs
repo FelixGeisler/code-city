@@ -149,8 +149,8 @@ test("the literal city fixture is closed and covers mapping, layout, permutation
     exactKeys(entry, ["id", "target", "mutation", "literal", "expected"]);
     assert.equal(entry.expected, "M1-CITY-1");
   }
-  assert.deepEqual(fixture.fullEnvelope.concentrated.expectedBounds, [0, 0, 0, 328, 40, 338]);
-  assert.deepEqual(fixture.fullEnvelope.manyGroups.expectedBounds, [0, 0, 0, 1074, 40, 1072]);
+  assert.deepEqual(fixture.fullEnvelope.concentrated.expectedBounds, [0, 0.5, 0, 328, 40.5, 338]);
+  assert.deepEqual(fixture.fullEnvelope.manyGroups.expectedBounds, [0, 1, 0, 1068, 41, 1089]);
   for (const entry of fixture.cityCases) {
     exactKeys(entry, ["id", "facts", "expected"]);
     exactKeys(entry.expected, ["identities", "count", "origins", "sizes", "rgba", "bounds"]);
@@ -209,7 +209,7 @@ test("literal N=1,2,4,5 mapping, palette, layout, and bounds match exact owned t
     assert.equal(JSON.stringify(immutableFacts), before, `${entry.id}: input changed`);
     assert.deepEqual(Object.keys(city), ["geometry", "inspection"]);
     assert.deepEqual(Object.keys(city.geometry), ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
-    assert.equal(city.geometry.kind, "CODE_CITY_PRESENTATION");
+    assert.equal(city.geometry.kind, "CODE_CITY_RECURSIVE_PRESENTATION_1");
     assert.equal(Object.isFrozen(city), true);
     assert.equal(Object.isFrozen(city.inspection), true);
     assert.equal(Object.isFrozen(city.geometry), true);
@@ -217,7 +217,7 @@ test("literal N=1,2,4,5 mapping, palette, layout, and bounds match exact owned t
   }
 });
 
-test("the approved 18-building synthetic fixture has exact bytes, three groups, projected dimensions, canonical alignment, and actual-only bounds", async () => {
+test("the approved 18-building fixture retains exact bytes and metric dimensions on all 17 recursive districts", async () => {
   const fixtureBytes = await readFile(path.join(projectRoot, "test", "fixtures", "interactive", "fixture.json"));
   assert.equal(createHash("sha256").update(fixtureBytes).digest("hex"), "12ca139180e3893d19a85271f469c3a6ee2badb3c5ed440bde2b34bcfb94375f");
   const records = JSON.parse(fixtureBytes);
@@ -237,9 +237,20 @@ test("the approved 18-building synthetic fixture has exact bytes, three groups, 
   const city = buildCity(expected.map(([canonicalPath, S, U, M]) => ({ canonicalPath, S, U, M })));
   assert.deepEqual(city.inspection.map(({ canonicalPath }) => canonicalPath), expected.map(([canonicalPath]) => canonicalPath));
   assert.deepEqual(Array.from({ length: 18 }, (_, index) => [city.geometry.sizes[index * 3 + 1], city.geometry.sizes[index * 3]]), expected.map((entry) => entry.slice(4)));
-  assert.deepEqual([...city.geometry.bounds], [0, 0, 0, 40, 40, 51]);
-  assert.deepEqual([...city.geometry.origins], [0,0,15,8,0,0,0,0,8,7,0,8,6,0,15,0,0,0,33,0,15,35,0,0,27,0,8,27,0,15,27,0,0,34,0,8,0,0,33,7,0,33,0,0,40,7,0,40,0,0,47,6,0,47]);
-  assert.equal(validateCityPayload(city).geometry.count, 18);
+  // Recursive rectangles replace the former three flat two-segment groups.
+  // packages (42×85) precedes apps (43×49) by area at root; target 79
+  // wraps apps onto z=87. Common building-minimum translation is (-12,-15).
+  // Direct src files stand at 1.5; files in its child directories stand at 2.
+  assert.deepEqual([...city.geometry.bounds], [0, 1.5, 0, 24, 42, 112]);
+  assert.deepEqual([...city.geometry.origins], [13,1.5,104,17,2,87,17,2,94,3,2,107,3,2,95,3,2,87,3,2,13,3,2,0,19,1.5,10,16,2,0,11,1.5,10,0,1.5,21,3,2,43,3,2,50,16,2,43,16,2,50,0,1.5,60,6,1.5,60]);
+  assert.deepEqual([...city.geometry.rgba], [132,204,22,255,250,204,21,255,245,158,11,255,249,115,22,255,34,197,94,255,132,204,22,255,34,197,94,255,249,115,22,255,250,204,21,255,132,204,22,255,245,158,11,255,239,68,68,255,250,204,21,255,245,158,11,255,249,115,22,255,239,68,68,255,132,204,22,255,34,197,94,255]);
+  const validated = validateCityPayload(city);
+  assert.equal(validated.geometry.count, 18);
+  assert.deepEqual(validated.districts, [
+    { root: true, identity: "_root" },
+    ...["apps", "apps/console", "apps/console/src", "apps/console/src/commands", "apps/console/src/state", "apps/console/src/view", "packages", "packages/engine", "packages/engine/src", "packages/engine/src/contracts", "packages/engine/src/graph", "packages/engine/src/report", "packages/ui", "packages/ui/src", "packages/ui/src/components", "packages/ui/src/interaction"].map((identity) => ({ root: false, identity })),
+  ]);
+  assert.deepEqual(validated.presentation.sceneBounds, [-12, -0.5, -15, 37, 42, 127]);
 });
 
 test("every palette boundary maps to its literal bytes independently", () => {
@@ -387,12 +398,14 @@ test("the concentrated and G=4,000 full envelopes have literal bounds and renewe
     assert.equal(city.geometry.count, 4000);
     assert.deepEqual([...city.geometry.bounds], envelope[id].expectedBounds, id);
     assert(city.geometry.bounds.every((coordinate) => coordinate < envelope.coordinateLimitExclusive));
-    const target = [city.geometry.bounds[3] / 2, city.geometry.bounds[4] / 2, city.geometry.bounds[5] / 2];
+    const target = validateCityPayload(city).presentation.centre;
     for (let index = 0; index < city.geometry.count; index += 1) {
       const offset = index * 3;
       for (let axis = 0; axis < 3; axis += 1) {
         const origin = city.geometry.origins[offset + axis];
         const endpoint = origin + city.geometry.sizes[offset + axis];
+        assert.equal(Number.isInteger(origin * (axis === 1 ? 2 : 1)), true);
+        assert.equal(Number.isInteger(endpoint * (axis === 1 ? 2 : 1)), true);
         assert.equal(Math.fround(origin), origin);
         assert.equal(Math.fround(endpoint), endpoint);
         assert(Math.abs(origin - target[axis]) < envelope.targetRelativeLimitExclusive);

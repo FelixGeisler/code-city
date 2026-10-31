@@ -69,7 +69,7 @@ function cloneCity(city = buildCity(FACTS)) {
 function literalPaletteCity(M, rgba) {
   return {
     geometry: {
-      kind: "CODE_CITY_PRESENTATION",
+      kind: "CODE_CITY_RECURSIVE_PRESENTATION_1",
       count: 1,
       origins: new Float32Array([0, 0, 0]),
       sizes: new Float32Array([3, 4, 3]),
@@ -117,11 +117,11 @@ test("validateCityPayload creates immutable controller-owned non-aliasing city s
   assert.equal(Object.isFrozen(validated.presentation.centre), true);
   assert.deepEqual(validated.presentation, {
     plates: [
-      { minimum: [-3, -0.5, -3], dimensions: [11, 0.5, 11] },
-      { minimum: [-3, -0.5, 16], dimensions: [11, 0.5, 11] },
+      { minimum: [-3, -0.5, -6], dimensions: [17, 0.5, 24] },
+      { minimum: [0, 0, -3], dimensions: [11, 0.5, 11] },
     ],
-    sceneBounds: [-3, -0.5, -3, 8, 6, 27],
-    centre: [2.5, 2.75, 12],
+    sceneBounds: [-3, -0.5, -6, 14, 6.5, 18],
+    centre: [5.5, 3, 6],
   });
   assert.deepEqual(Reflect.ownKeys(validated.presentation).sort(), ["centre", "plates", "sceneBounds"]);
   assert.equal(JSON.stringify(validated.presentation).includes("src/"), false);
@@ -253,7 +253,8 @@ test("validator enforces exact and one-over aggregate source-line bounds with ma
   }));
   const exact = validateCityPayload(cloneCity(buildCity(exactFacts)));
   assert.equal(exact.inspection.reduce((total, fact) => total + fact.S, 0), MAX_TOTAL_BYTES);
-  assert.equal(exact.geometry.bounds[4], 40);
+  assert.equal(exact.geometry.bounds[4], 40.5);
+  assert.equal(exact.geometry.sizes[1], 40); // elevation is separate from SLOC height
 
   const oneOverFacts = [...exactFacts, { canonicalPath: "source-total/20.ts", S: 1, U: 0, M: 0 }];
   fails(cloneCity(buildCity(oneOverFacts)), "S aggregate one over");
@@ -277,25 +278,25 @@ test("validator enforces exact and one-over aggregate executable-unit bounds wit
   fails(cloneCity(buildCity(oneOverFacts)), "U aggregate one over");
 });
 
-test("concentrated and N=G=4,000 reconstruction yields exact plate cells, scene bounds, centres, and quarter-integer endpoints", () => {
+test("concentrated and 4,000 sibling districts reconstruct root/child plates, exact scene bounds and quarter-integer endpoints", () => {
   const cases = [
     {
       id: "concentrated",
       path: (index) => `all/${String(index).padStart(4, "0")}.ts`,
-      plates: 1,
-      bounds: [-3, -0.5, -3, 316, 4, 321],
-      centre: [156.5, 1.75, 159],
-      first: { minimum: [-3, -0.5, -3], dimensions: [319, 0.5, 324] },
-      last: { minimum: [-3, -0.5, -3], dimensions: [319, 0.5, 324] },
+      plates: 2,
+      bounds: [-6, -0.5, -6, 319, 4.5, 324],
+      centre: [156.5, 2, 159],
+      first: { minimum: [-6, -0.5, -6], dimensions: [325, 0.5, 330] },
+      last: { minimum: [-3, 0, -3], dimensions: [319, 0.5, 324] },
     },
     {
       id: "many groups",
       path: (index) => `g${String(index).padStart(4, "0")}/m.ts`,
-      plates: 4000,
-      bounds: [-3, -0.5, -3, 1060, 4, 1077],
-      centre: [528.5, 1.75, 537],
-      first: { minimum: [-3, -0.5, -3], dimensions: [9, 0.5, 9] },
-      last: { minimum: [507, -0.5, 1068], dimensions: [9, 0.5, 9] },
+      plates: 4001,
+      bounds: [-6, -0.5, -6, 691, 4.5, 702],
+      centre: [342.5, 2, 348],
+      first: { minimum: [-6, -0.5, -6], dimensions: [697, 0.5, 708] },
+      last: { minimum: [327, 0, 690], dimensions: [9, 0.5, 9] },
     },
   ];
   for (const entry of cases) {
@@ -304,8 +305,8 @@ test("concentrated and N=G=4,000 reconstruction yields exact plate cells, scene 
     }))));
     assert.equal(city.presentation.plates.length, entry.plates, entry.id);
     assert.equal(city.districts.length, entry.plates, entry.id);
-    assert.equal(city.districts[0].root, false, entry.id);
-    assert.equal(city.districts[0].identity, entry.id === "concentrated" ? "all" : "g0000", entry.id);
+    assert.deepEqual(city.districts[0], { root: true, identity: "_root" }, entry.id);
+    assert.deepEqual(city.districts[1], { root: false, identity: entry.id === "concentrated" ? "all" : "g0000" }, entry.id);
     assert.equal(city.districts.at(-1).identity, entry.id === "concentrated" ? "all" : "g3999", entry.id);
     assert.deepEqual(city.presentation.sceneBounds, entry.bounds, entry.id);
     assert.deepEqual(city.presentation.centre, entry.centre, entry.id);
@@ -333,13 +334,61 @@ test("root and literal directory identities stay structurally distinct and align
   ];
   const city = validateCityPayload(buildCity(facts));
   assert.deepEqual(city.districts, [
-    { root: false, identity: "Repository root" },
     { root: true, identity: "_root" },
+    { root: false, identity: "Repository root" },
     { root: false, identity: "_root" },
   ]);
   assert.equal(city.districts.length, city.presentation.plates.length);
   assert.deepEqual(Reflect.ownKeys(city.districts[0]), ["root", "identity"]);
   assert.equal(JSON.stringify(city.presentation).includes("Repository root"), false);
+});
+
+test("only the explicit recursive geometry kind is accepted, even when root-only bytes match the old layout", () => {
+  const city = literalPaletteCity(0, LITERAL_PALETTE_COLOURS[0]);
+  assert.equal(validateCityPayload(city).geometry.kind, "CODE_CITY_RECURSIVE_PRESENTATION_1");
+  for (const kind of ["CODE_CITY_PRESENTATION", "CODE_CITY_RECURSIVE_PRESENTATION_0", "CODE_CITY_RECURSIVE_PRESENTATION_2", "OTHER", null]) {
+    fails({ ...city, geometry: { ...city.geometry, kind } }, String(kind));
+  }
+  fails({ ...city, geometry: { ...city.geometry, count: 4001 } }, "one over admitted count");
+});
+
+test("literal half-unit Y is valid only at the exact immediate-parent elevation; fractional XZ, heights and unsafe floats still fail", () => {
+  const literal = {
+    geometry: {
+      kind: "CODE_CITY_RECURSIVE_PRESENTATION_1", count: 1,
+      origins: new Float32Array([0, 0.5, 0]), sizes: new Float32Array([3, 4, 3]),
+      rgba: new Uint8Array([34, 197, 94, 255]), bounds: new Float32Array([0, 0.5, 0, 3, 4.5, 3]),
+    },
+    inspection: [{ canonicalPath: "a/b.ts", S: 0, U: 0, M: 0 }],
+  };
+  assert.equal(validateCityPayload(literal).geometry.origins[1], 0.5);
+  for (const [field, index, values] of [
+    ["origins", 1, [0, -0, 0.25, 0.75, 1, -0.5, NaN, Infinity, 2 ** 24]],
+    ["origins", 0, [0.5, -0, -1, 2 ** 24]],
+    ["origins", 2, [0.5, -0, -1, 2 ** 24]],
+    ["sizes", 1, [4.5, 0, 41, NaN, Infinity]],
+    ["bounds", 1, [0, -0, 0.25, 1, NaN, Infinity, 2 ** 24]],
+    ["bounds", 4, [4, 4.25, 4.75, 5, NaN, Infinity, 2 ** 24]],
+  ]) {
+    for (const value of values) {
+      const changed = cloneCity(literal);
+      changed.geometry[field][index] = value;
+      fails(changed, `${field}[${index}]=${String(value)}`);
+    }
+  }
+});
+
+test("rejected city, geometry and fact accessors never execute attacker getters", () => {
+  for (const [target, keys] of [["city", ["geometry", "inspection"]], ["geometry", ["kind", "count", "origins", "sizes", "rgba", "bounds"]], ["fact", ["canonicalPath", "S", "U", "M"]]]) {
+    for (const key of keys) {
+      const city = cloneCity();
+      const record = target === "city" ? city : target === "geometry" ? city.geometry : city.inspection[0];
+      let reads = 0;
+      Object.defineProperty(record, key, { enumerable: true, get() { reads++; throw new Error("attacker getter"); } });
+      fails(city, `${target}.${key}`);
+      assert.equal(reads, 0, `${target}.${key}: getter executed`);
+    }
+  }
 });
 
 test("validated geometry preserves exact bytes while inspection contributes no geometry bytes", () => {

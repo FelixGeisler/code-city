@@ -8,7 +8,7 @@ import path from 'node:path';import os from 'node:os';
 import test,{after} from 'node:test';
 import {buildStandaloneArtifact} from '../tools/build-standalone.mjs';
 import {launchStandalone,readyOrigin,writeSignalPreload,sendGracefulSignal,expectCleanExit,terminateForCleanup,request} from '../tools/standalone-check-support.mjs';
-registerHooks({resolve(specifier,context,nextResolve){return nextResolve(/^\.\.?\//u.test(specifier)&&!/\.[a-z]+$/iu.test(specifier)?`${specifier}.ts`:specifier,context);}});
+registerHooks({resolve(specifier,context,nextResolve){return nextResolve(context.parentURL?.endsWith('.ts')&&/^\.\.?\//u.test(specifier)&&!/\.[a-z]+$/iu.test(specifier)?`${specifier}.ts`:specifier,context);}});
 const {createInvestigationCapture}=await import('../src/application/investigation-capture.ts');
 const {acquireProjectSources}=await import('../src/application/source-retrieval.ts');
 const {analyzeProjectSources}=await import('../src/application/project-analysis.ts');
@@ -71,10 +71,21 @@ test('snapshot format rejects damaged source, truncation, unknown versions, extr
  const damaged=Buffer.from(bytes);damaged[damaged.length-1]^=1;await assert.rejects(()=>decodeSnapshot(damaged));
  await assert.rejects(()=>decodeSnapshot(bytes.subarray(0,-1)));
  const decoded=await decodeSnapshot(bytes);
- for(const change of [header=>{header.version=2;},header=>{header.extra=true;},header=>{header.files[0].path='../invalid.js';},header=>{header.files[1].contributions[0][0]=999;},header=>{header.hierarchy=[];},header=>{header.fixedExcludedSegments=[];}]){
+ for(const change of [header=>{header.version=1;},header=>{header.version=999;},header=>{header.extra=true;},header=>{header.files[0].path='../invalid.js';},header=>{header.files[1].contributions[0][0]=999;},header=>{header.hierarchy=[];},header=>{header.fixedExcludedSegments=[];}]){
   const header=structuredClone(decoded.header);change(header);assert.throws(()=>validateSavedHeader(header));
  }
  assert.throws(()=>snapshotPrefix(new Uint8Array(SAVE_LIMITS.header+1)));
+});
+
+test('deep supported hierarchy saves and reopens within existing byte budgets without a lower path-length cap',async(t)=>{
+ const directory='d/'.repeat(2049),filePath=directory+'leaf.ts',raw=Buffer.from('export const x=1;\n'),capture=createInvestigationCapture();
+ const gateway=capture.wrap({async loadInventory(){return{kind:'inventory',entries:[...Array.from({length:2049},(_,i)=>({path:directory.slice(0,(i+1)*2-1),mode:'040000',type:'tree'})),{path:filePath,mode:'100644',type:'blob',sha:createHash('sha1').update(`blob ${raw.length}\0`).update(raw).digest('hex')}]};},async readRawSource(){return{kind:'source',rawBytes:Uint8Array.from(raw)};}});
+ const url='https://github.com/owner/deep',acquired=await acquireProjectSources(parseRepositoryReference(url),SHA,new AbortController().signal,gateway);assert.equal(acquired.kind,'acquired');
+ const analyzed=await analyzeProjectSources(acquired,createNodeTreeSitterAdapter(),undefined,capture);assert.equal(analyzed.kind,'analyzed');
+ const body=Buffer.from(await(await capture.snapshot(url,SHA,[],analyzed.result,'f'.repeat(64))).arrayBuffer());
+ const decoded=await decodeSnapshot(body);assert.equal(decoded.header.version,2);assert.equal(decoded.header.hierarchy.length,2049);assert.ok(decoded.header.hierarchy.at(-1).length>4096);assert.equal(decoded.header.files[0].path,filePath);assert.ok(new TextEncoder().encode(JSON.stringify(decoded.header)).length<SAVE_LIMITS.header);
+ const data=path.join(temporary,'deep-store');let running=await host(data);t.after(()=>terminateForCleanup(running.server));const response=await post(running.origin,body);assert.equal(response.status,201,response.body.toString());const record=JSON.parse(response.body);
+ await stop(running.server);running=await host(data);const reopened=await request(running.origin,'/api/investigations/'+record.id);assert.equal(reopened.status,200);assert.deepEqual(reopened.body,body);assert.equal((await decodeSnapshot(reopened.body)).header.files[0].path,filePath);
 });
 
 test('multiple projects, branches, releases and commits save independently and survive an actual host process restart',async(t)=>{

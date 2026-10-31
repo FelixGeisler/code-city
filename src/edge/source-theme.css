@@ -1,0 +1,16 @@
+/* Pinned Shiki github-dark foreground palette. No generated or source-controlled CSS.
+   Font styles are deliberately omitted: underlines belong only to owned contributions. */
+[data-source-code] { color: #e1e4e8; background: #24292e; }
+[data-source-code] [data-syntax-color="0"] { color: #e1e4e8; }
+[data-source-code] [data-syntax-color="1"] { color: #6a737d; }
+[data-source-code] [data-syntax-color="2"] { color: #79b8ff; }
+[data-source-code] [data-syntax-color="3"] { color: #b392f0; }
+[data-source-code] [data-syntax-color="4"] { color: #85e89d; }
+[data-source-code] [data-syntax-color="5"] { color: #f97583; }
+[data-source-code] [data-syntax-color="6"] { color: #9ecbff; }
+[data-source-code] [data-syntax-color="7"] { color: #ffab70; }
+[data-source-code] [data-syntax-color="8"] { color: #fdaeb7; }
+[data-source-code] [data-syntax-color="9"] { color: #24292e; }
+[data-source-code] [data-syntax-color="10"] { color: #dbedff; }
+[data-source-code] [data-syntax-color="11"] { color: #2f363d; }
+[data-source-code] [data-syntax-color="12"] { color: #d1d5da; }

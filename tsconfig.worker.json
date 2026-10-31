@@ -1,7 +1,7 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2024", "WebWorker"],
+    "lib": ["ES2024", "ESNext.Disposable", "WebWorker"],
     "types": []
   },
   "include": ["src/edge/processing-worker.ts", "src/edge/browser-analysis-worker.ts"]

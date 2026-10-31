@@ -2,18 +2,17 @@
 
 == Approved whole-core city target
 
-The requirements in this section describe the approved whole-core target, not
-the current browser-analysis presentation described later on this page.
-The current implementation retains two-segment grouping. Recursive geometry, ordering,
-spacing, labels, and picking remain unresolved.
+The recursive city target is implemented by the deterministic layout and district
+inspection contract in xref:recursive-districts.adoc[Recursive Districts]. This
+page retains metric mapping, shared selection, camera and renderer rules.
 
 [[CC-CORE-CITY-01]]
 === Recursive repository city
 
 The selected repository root is the city. Every ancestor directory induced by
 a successfully analyzed file is represented recursively as a subdivision. The
-target does not yet select recursive geometry, ordering, spacing, labels, or
-picking behavior.
+recursive layout, ordering, spacing, navigation and picking rules are defined in
+xref:recursive-districts.adoc[Recursive Districts].
 
 [[CC-CORE-CITY-02]]
 === One building per successful source file
@@ -212,79 +211,23 @@ Reset control, and raw file-metric inspector. It does not mount the legacy
 contextual district row or persistent legend, and inventory interaction does
 not invoke the legacy search-triggered camera reveal or canvas focus. The
 presenter retains its existing camera navigation and numeric projection
-internals. Two-segment grouping remains shallower than the approved whole-core
-target. xref:unit-inspection.adoc[Unit Source Inspection] extends the file
+internals. xref:recursive-districts.adoc[Recursive Districts] defines the full
+hierarchy. xref:unit-inspection.adoc[Unit Source Inspection] extends the file
 inspector with recorded units and explicit read-only source.
 
 Current city construction and payload evidence is in `test/city-model.test.mjs`
 and `test/city-payload.test.mjs`. Current camera and presentation evidence is in
 `test/camera-picking-policy.test.mjs` and `test/city-presenter.test.mjs`. These
 presentation tests do not by themselves cover the actual packaged browser
-worker runtime or future recursive and saved-investigation behavior.
+worker runtime or saved-investigation restart behavior.
 
 == Layout
 
-Derive one tagged group identity from each canonical path after removing its
-filename. Two or more remaining segments form a directory identity whose
-identifier is the first two segments joined with `/`; one remaining segment
-forms a directory identity for that segment; no remaining segment forms the
-root identity. The root identity is distinct from every directory identity.
-Canonical paths and directory identifiers compare by unsigned UTF-8 bytes.
-For group ordering, the root identity compares using the bytes of `_root` and
-precedes a directory identity named `_root` on an exact tie.
-
-Within each group, sort buildings by descending `side(U)`, then canonical path.
-Let building gap be `2`, virtual padding be `3`, and:
-
-[source,text]
-----
-innerTarget = max(maxSide, ceil(sqrt(sum((side + 2)^2))))
-----
-
-Pack in unpadded inner coordinates. Start an empty row with cursor `(0,0)` and
-row depth `0`. Before placing a building, open a new row exactly when the
-current row is nonempty and `cursorX + side > innerTarget`; set `cursorX=0`,
-advance `cursorZ` by the completed row depth plus `2`, and reset row depth.
-Place the building minimum at `(cursorX,0,cursorZ)`, advance `cursorX` by
-`side+2`, and set row depth to the maximum side in that row. Occupied width and
-depth are the maxima of actual building endpoints, with no trailing gap. The
-virtual group cell is the occupied rectangle plus padding `3` on every edge;
-therefore its width is `occupiedWidth+6`, its depth is `occupiedDepth+6`, and
-actual local building `x,z` origins are offset by `3`.
-
-Sort virtual group cells by descending `cellWidth*cellDepth`, then tagged group
-identity. Let group gap be `8` and:
-
-[source,text]
-----
-outerTarget = max(maxCellWidth,
-                  ceil(sqrt(sum((cellWidth + 8) * (cellDepth + 8)))))
-----
-
-Pack cells with the same row algorithm from `(0,0)`, substituting cell width,
-cell depth, `outerTarget`, and gap `8`. A row opens only when nonempty and
-`cursorX + nextCellWidth > outerTarget`; row depth is the maximum cell depth.
-The world origin of each building is its cell origin plus its padded local
-origin.
-
-After packing, translate all actual building minima and every virtual cell by
-the same horizontal vector so the minimum actual building `x` and `z` are
-exactly `0`. Geometry payload bounds remain computed from actual building boxes
-only. Independently retain each translated virtual cell, in outer-pack order,
-as one numeric district plate with minimum `(cellMinX,-0.5,cellMinZ)` and
-dimensions `(cellWidth,0.5,cellDepth)`. The plate top is exactly `y=0`; group
-gap `8` is excluded. `sceneBounds` is the union of all plates and real building
-AABBs, and its immutable centre is shared by camera and instance uploads.
-Plates are presentation-only and are not payload geometry or pick targets.
-Each plate has one aligned controller-only descriptor `{root,identity}`. The root
-is `{true,"_root"}`; a real `_root` directory is `{false,"_root"}`. Other
-identities are the existing one- or two-segment grouping result. These
-descriptors do not enter the numeric presentation, worker, WebGL, hash, or
-evidence contracts.
-
-Payload arrays remain in increasing canonical-path index order. Packing writes
-one computed position back to that index; it does not reorder identity,
-keyboard traversal, selection, inspection, or exact-tie ownership.
+xref:recursive-districts.adoc[Recursive Districts] is authoritative for nested
+platforms, numeric layout, descriptor order, elevation, bounds and picking ties.
+The former two-segment layout is superseded, not a supported alternate mode.
+Payload arrays remain in increasing canonical-path index order; packing writes
+positions back to those indices without changing keyboard traversal or identity.
 
 == Legacy contextual district row and retained presenter projection
 
@@ -502,9 +445,9 @@ Arrow/Home/End file traversal remains canonical and switches back to a file.
 Selecting a district highlights its platform and retains ordinary colours for
 its buildings while dimming other buildings. It shows the district path,
 analyzed-file count, summed source lines, summed executable units, and maximum
-unit complexity among successful members. Membership uses the existing one-/two-
-segment grouping, not a new hierarchy. Repository root `/` is distinct from a
-real `_root` directory. Integer totals remain exact even above the safe Number
+unit complexity among successful descendants. Membership and drill-down follow
+xref:recursive-districts.adoc[the complete directory hierarchy]. Repository root
+`/` is distinct from a real `_root` directory. Integer totals remain exact even above the safe Number
 sum range. Failed/excluded files do not enter these aggregates.
 
 Hover, query, sorting, Reset, and resize preserve district selection.
@@ -1098,9 +1041,9 @@ current standalone behavior.
 
 The current milestone implements read-only unit source and owned contribution
 inspection for fresh and saved investigations. It has no source editing,
-portable interchange, or recursive hierarchy.
-Two-segment geometry and camera navigation remain unchanged; picking also
-supports district platforms. The inventory changes no admission, syntax, metric formula, source
+or portable interchange. Recursive platforms and hierarchical inspection are
+defined in xref:recursive-districts.adoc[Recursive Districts]. Camera navigation
+remains unchanged; picking supports nested district platforms. The inventory changes no admission, syntax, metric formula, source
 limit, provider, privacy, failure-category, retry, fallback, or canonical city
 keyboard traversal policy and adds no GPU readback, BVH, alternate publication
 path, projection toggle, or camera-collision policy.
