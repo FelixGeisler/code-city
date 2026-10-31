@@ -124,6 +124,7 @@ export function createFileInspection(path: string, bytes: Uint8Array, evidence: 
   for (let index = 0; index < count; index++) { requireValue(offsets[index + 1] === complexities[index]! - 1); offsets[index + 1] = offsets[index + 1]! + offsets[index]!; }
   const positions = offsets.slice(), byOwner = new Uint32Array(position);
   for (let index = 0; index < position; index++) { const owner = owners[index]!; byOwner[positions[owner]!] = index; positions[owner] = positions[owner]! + 1; }
+  // Each retained decision adds one point: descending added-complexity ties use this global source order, before filtering/paging.
   for (let owner = 0; owner < count; owner++) byOwner.subarray(offsets[owner], offsets[owner + 1]).sort((a, b) => contributionStarts[a]! - contributionStarts[b]! || contributionEnds[b]! - contributionEnds[a]! || contributionKinds[a]! - contributionKinds[b]!);
   let unionUnit = -1, union: Array<{ start: number; end: number }> = [];
   let contributionScope: { unit: number; cursor: number; indices: Uint32Array } | undefined;

@@ -130,3 +130,9 @@ test('visible contribution membership uses half-open byte spans, retains crossin
  await assert.rejects(()=>read({...query,offset:3}));await assert.rejects(()=>read({...query,cursor:17001}));
  const unicode=createFileInspection('unicode.js',encoder.encode('😀'),{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:4,complexity:1})},contributionCount:0,contributions:()=>[]});await assert.rejects(()=>unicode({type:'contributions',path:'unicode.js',unit:0,offset:0,cursor:1}));
 });
+test('equal one-point contributions use global source-position ties before bounded paging, not capture order',async()=>{
+ const path='order.js',bytes=encoder.encode('x'.repeat(100)),records=Array.from({length:70},(_,index)=>[0,'if',69-index,70-index]);
+ const read=createFileInspection(path,bytes,{units:{length:1,at:()=>({kind:'top-level',startByte:0,endByte:100,complexity:71})},contributionCount:70,contributions:()=>records});
+ const rows=[];for(const offset of[0,32,64]){const page=await read({type:'contributions',path,unit:0,offset,cursor:null});assert.equal(page.unitTotal,70);rows.push(...page.rows);}
+ assert.deepEqual(rows.map(row=>row.cursor),Array.from({length:70},(_,index)=>index));assert.deepEqual(rows.map(row=>row.id),Array.from({length:70},(_,index)=>index));assert.equal((await read({type:'units',path,offset:0})).rows[0].complexity,1+rows.length);
+});
