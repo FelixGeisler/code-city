@@ -1,0 +1,117 @@
+= Saved Investigations
+
+Status:: Implemented
+Decision:: xref:architecture:adr/0016-immutable-investigation-file-store.adoc[Immutable file store]
+
+== Save and reopen
+
+A completed investigation remains browser-local until Save is chosen. Save
+publishes one immutable snapshot and changes the address to `/saved/<id>`.
+Copy link copies that address. Saving neither reruns analysis nor replaces an
+existing snapshot; a failed Save leaves the current city and inspection usable.
+A repeated click on an already saved investigation copies its existing link.
+
+Open saved loads a read-only picker grouped by repository. Each entry shows the
+requested branch, release tag, or default-branch choice, a short commit, and UTC
+saved time. Opening it shows the full commit. Different repositories, branches,
+release tags, and successive commits coexist; none is a storage key or an
+overwrite target. Analyze accepts ordinary repository URLs, `/tree/<branch>`,
+and `/releases/tag/<tag>`; annotated tags resolve to a full commit, with at most
+16 tag-object reads. This is not a history explorer or automatic branch scan.
+
+A saved URL restores the recorded city, metrics, outcomes, and retained evidence
+without GitHub requests or parser initialization. It starts in the normal
+overview: camera, selection, query, and sort are not saved. Closing the original
+tab or restarting the host does not remove a committed snapshot. There is no
+automatic expiry, login, per-user ownership, edit, rename, or deletion UI.
+Saved source is shared with anyone who can reach the host; the URL is not an
+authorization credential. Sharing across computers requires an accessible
+operator deployment, not the default loopback address.
+
+== Complete versioned snapshot
+
+The version-1 container retains:
+
+* Repository URL and requested ref, selected full commit, additional and fixed
+  exclusions, canonical hierarchy, and original provider paths.
+* Exact original eligible source bytes and normalized analyzed UTF-8, including
+  original bytes for unsupported-text outcomes.
+* Every per-file outcome; successful raw metrics, unit identities and owned byte
+  regions, per-unit complexity, and decision kind/span/owner contributions.
+* Fixed city geometry, colors, bounds, and source/metric associations.
+* A build-input fingerprint covering production source, pinned parser assets,
+  lockfile, and standalone builder; format version is recorded separately.
+
+The executable schema is `src/application/saved-investigation.ts`. Binary
+source sections have lengths and SHA-256 digests. The server checks shape,
+references, byte boundaries, hashes, blob identities, and presentation safety
+in a separate worker. It does not parse repository code, recompute metrics,
+verify a claimed build identity, or certify GitHub provenance. Hash consistency
+is not proof that a client actually used the claimed commit or analyzer.
+Browser source/unit-detail views and portable import/export remain outside this
+slice; retaining their evidence does not claim those interfaces exist.
+
+== Operation and limits
+
+Enable persistence with `--data-dir <directory>`, for example:
+
+[source,shell]
+----
+npm start -- --port 55583 --data-dir /var/lib/code-city
+----
+
+Select a dedicated local directory outside `dist/` and the source checkout.
+Paths are resolved against the host's working directory. Artifact containment
+and symlink aliases into it are rejected. Without a usable configured directory,
+Save and the picker report unavailability; browser analysis still works.
+One host per data directory is supported. No database or new package dependency
+is required.
+
+[cols="2,1",options="header"]
+|===
+|Bound |Value
+|Encoded JSON header |16 MiB
+|Captured unit/contribution metadata |12 MiB; exhaustion disables Save, not analysis
+|Original source total |128 MiB
+|Complete upload |192 MiB
+|Committed snapshots |1,024
+|Charged committed storage |2 GiB, including a reserved 16 KiB receipt per entry
+|Concurrent writes / binary reads |1 / 4
+|Upload/validation or binary-read operation timer |120 seconds
+|Validation worker heap |256 MiB old generation, 32 MiB young generation
+|===
+
+Existing 4,000-file, 2 MiB/module, and 40 MiB normalized-source bounds do not
+change. These are input/operation bounds, not total process RAM, disk latency,
+power-loss durability, or denial-of-service guarantees. Anonymous clients do
+not establish reliable per-person quotas. A busy/full writer cannot consume
+read admission or browser analysis capacity. Static assets remain independently
+served. Uploads require a same-origin POST, exact binary media type and declared
+length; chunked/oversized or invalid bodies are not published.
+
+== Atomic publication and recovery
+
+Each entry is `snapshots/<random-id>/{snapshot.ccs,record.json}` beneath the data
+directory. The receipt records server UTC time, repository/ref, full commit,
+length, and whole-container hash. Upload, validation, and file synchronization
+precede same-volume directory rename. Only committed directories enter the
+catalog; no partially uploaded entry is visible and IDs are never overwritten.
+Acknowledgment follows publication and the owned cleanup attempt. A lost response can leave
+a complete saved entry discoverable through Open saved; Save is not an
+exactly-once network protocol.
+
+A failed operation removes only its owned staging directory and lock. Failed
+staging cleanup retains the lock so further uploads cannot accumulate uncharged
+bytes. A crash may leave a lock or staging directory: committed reads still
+work, but new writes remain blocked. With the host stopped, inspect those
+artifacts, preserve uncertain work, then remove only confirmed abandoned staging
+and its lock. Never promote a partial directory automatically.
+
+Back up the whole data directory. Stop the host before backup restoration or
+operator deletion of selected committed directories. Startup validates receipts,
+regular files, lengths, and bounded catalog structure; malformed storage fails
+closed without deleting it. Restore validates the recorded whole-container and
+source hashes and rejects corruption or unsupported versions without provider
+or parser fallback. Process-restart durability is tested; filesystem failure,
+power loss, network filesystems, TLS ingress, and Internet deployment are not
+qualified by this delivery.

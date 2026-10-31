@@ -8,24 +8,27 @@ authoritative algorithms for the current browser-analysis milestone and the
 later whole-core target. The browser implements source acquisition and
 analysis in a dedicated worker, complete acquisition before file processing,
 supported per-file continuation, and browser-temporary source-result association.
-Browser source viewing and saved investigations remain later whole-core
-outcomes.
+Browser source viewing remains a later whole-core outcome. Explicit Save and
+reopen are defined in xref:saved-investigations.adoc[Saved Investigations].
 
 [[CC-CORE-SRC-01]]
 === Public repository input
 
 Accept one anonymously accessible public GitHub repository root URL or explicit
-`/tree/<branch-suffix>` branch link. The initial acceptance repository is
+`/tree/<branch-suffix>` branch link or `/releases/tag/<tag-suffix>` release link.
+The initial acceptance repository is
 `https://github.com/FelixGeisler/code-city`. Private repositories, uploads,
-archives, local folders, other providers, tags, commit links, and generic
+archives, local folders, other providers, tag-management/history browsing,
+commit links, and generic
 arbitrary refs are excluded.
 
 [[CC-CORE-SRC-02]]
 === Explicit immutable-revision analysis
 
 Only an explicit Analyze action resolves the then-current tip of
-the supplied branch, or the default branch when no branch was supplied, and
-records its full immutable commit ID. No selection event, watch, or schedule
+the supplied branch or release tag, or the default branch when neither was
+supplied, and records its full immutable commit ID. Release tags are dereferenced
+to commits; unavailable tags report `Revision unavailable`. No selection event, watch, or schedule
 starts analysis. Later runs do not alter earlier results.
 
 [[CC-CORE-SRC-03]]
@@ -33,7 +36,7 @@ starts analysis. Later runs do not alter earlier results.
 
 A dedicated browser worker acquires and analyzes the complete selected-commit
 dataset. The browser owns unsaved sources, results, presentation, and
-investigation. The server receives data only on later explicit Save, not on
+investigation. The server receives data only on explicit Save, not on
 Analyze or while a tab remains idle. Ownership is fixed by
 xref:architecture:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015].
 
@@ -133,7 +136,8 @@ initial target contract and grammar authority. The current milestone applies
 these rules in its browser worker and continues supported per-file failures as
 `Source text is not supported`, `Syntax could not be analyzed`, or `Metrics
 could not be computed`. This does not imply the later recursive presentation,
-browser source view, or persistence outcomes. Algorithm evidence is in
+browser source view. Saved-data behavior is defined in
+xref:saved-investigations.adoc[Saved Investigations]. Algorithm evidence is in
 `test/base-metrics.test.mjs`, `test/complexity.test.mjs`,
 `test/csharp-qualification.test.mjs`, and `test/source-admission.test.mjs`;
 shared-core continuation evidence is in `test/project-analysis.test.mjs` and

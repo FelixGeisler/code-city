@@ -481,7 +481,7 @@ test("the UI thread displays measured progress and delegates analysis without st
   const source = await readFile(new URL("../src/edge/standalone-browser-controller.ts", import.meta.url), "utf8");
   const main = await readFile(new URL("../src/edge/standalone-browser-main.ts", import.meta.url), "utf8");
   const css = await readFile(new URL("../src/edge/standalone-browser-shell.css", import.meta.url), "utf8");
-  assert.match(main, /createBrowserWorkerTransport\(\)/u);
+  assert.match(main, /createBrowserWorkerTransport\(/u);
   assert.doesNotMatch(main, /createFetchSessionTransport/u);
   assert.match(main, /Browser analysis requires HTTPS or localhost/u);
   assert.match(main, /document\.createElement\("progress"\)/u);

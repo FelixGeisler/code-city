@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 registerHooks({ resolve(specifier, context, nextResolve) { return nextResolve(/^\.\.?\//u.test(specifier) && !/\.[a-z]+$/iu.test(specifier) ? `${specifier}.ts` : specifier, context); } });
 const { resetCamera, pickAtCanvasPoint } = await import("../src/domain/camera-picking-policy.ts");
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +14,7 @@ import { createBrowserProviderHarness, FIXTURE_REVISION } from "./standalone-bro
 
 const WATCHDOG_MS = 600_000;
 const REPOSITORY = "https://github.com/fixture/standalone";
-const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,findOpen:document.querySelector('[data-analyzed]')?.open??null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
+const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,saved:document.querySelector('[data-save]')?.textContent==='Copy link',saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,findOpen:document.querySelector('[data-analyzed]')?.open??null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
 const renderObservation = `(() => {
  window.__render={matrices:[],uploads:0,integers:{},frames:[],capturePixels:false,progress:[]};
  const progressIds=new WeakMap();let nextProgress=0;
@@ -35,6 +35,7 @@ const renderObservation = `(() => {
  Worker.prototype.addEventListener=function(type,callback,...options){
   if(type!=='message'||typeof callback!=='function')return add.call(this,type,callback,...options);
   const wrapped=event=>{const gate=window.__gate;const data=event.data;
+   if(data.type==='ANALYSIS_SUCCEEDED')window.__cityFingerprint=JSON.stringify(data.city);
    if(gate.active){
     if(!gate.opened&&data.type==='ANALYSIS_PROGRESS'&&data.stage==='analysis'&&data.completed===0)gate.opened=true;
     else if(gate.opened){gate.queue.push({data,deliver:()=>callback.call(this,event)});window.__codeCityDeliveryEvidence(JSON.stringify({type:data.type,stage:data.stage,completed:data.completed}));return;}
@@ -58,7 +59,8 @@ export async function checkStandaloneBrowser() {
     const manifest = await checked(auditStandaloneArtifact(canonicalStandaloneRoot));
     temporary = await checked(mkdtemp(path.join(os.tmpdir(), "code-city-browser-worker-evidence-")));
     const preload = await checked(writeSignalPreload(temporary));
-    processUnderTest = launchStandalone({ preload });
+    const dataDirectory = path.join(temporary, "saved-data");
+    processUnderTest = launchStandalone({ preload, serverArguments: ["--port", "0", "--data-dir", dataDirectory] });
     const origin = await checked(readyOrigin(processUnderTest));
     const discovery = await checked(discoverInstalledChrome());
     const version = await checked(readInstalledChromeVersion(discovery));
@@ -77,8 +79,8 @@ export async function checkStandaloneBrowser() {
       }
     });
     const pages = [];
-    async function page({ withoutCrypto = false } = {}) {
-      const { targetId } = await checked(cdp.send("Target.createTarget", { url: "about:blank" }));
+    async function page({ withoutCrypto = false, url = origin, browserContextId } = {}) {
+      const { targetId } = await checked(cdp.send("Target.createTarget", { url: "about:blank", ...(browserContextId ? { browserContextId } : {}) }));
       const { sessionId } = await checked(cdp.send("Target.attachToTarget", { targetId, flatten: true }));
       await checked(cdp.send("Page.enable", {}, sessionId));
       await checked(cdp.send("Runtime.enable", {}, sessionId));
@@ -99,7 +101,7 @@ export async function checkStandaloneBrowser() {
       const onLoad = message => { if (message.sessionId === sessionId && message.method === "Page.loadEventFired") loaded.resolve(); };
       cdp.listeners.add(onLoad);
       try {
-        await checked(cdp.send("Page.navigate", { url: origin }, sessionId));
+        await checked(cdp.send("Page.navigate", { url }, sessionId));
         await checked(loaded.promise);
       } finally { cdp.listeners.delete(onLoad); }
       await wait(s => s.ready === "complete");
@@ -267,6 +269,30 @@ export async function checkStandaloneBrowser() {
     assert.equal(await p.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{const panel=document.querySelector('[data-inspector]'),last=panel.querySelector('dl > div:last-child');resolve(document.documentElement.scrollWidth<=innerWidth&&last.getBoundingClientRect().bottom<=panel.getBoundingClientRect().bottom);})))`), true, "mobile district metrics were clipped or overflowed");
     await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 1365, height: 900, deviceScaleFactor: 1, mobile: false }, p.sessionId));
 
+    process.stdout.write("Browser evidence: explicit Save and project/ref picker\n");
+    async function saveCurrent() {
+      await p.click("[data-save]");
+      const saved = await p.wait(s => s.saved || s.saveMessage.includes("unchanged"));
+      assert.ok(saved.saved, saved.saveMessage);
+      return p.evaluate("location.href");
+    }
+    const savedDistrictFingerprint = await p.evaluate("window.__cityFingerprint");
+    const savedDistrictUrl = await saveCurrent();
+    for (const url of ["https://github.com/fixture/another", REPOSITORY + "/tree/feature/save", REPOSITORY + "/releases/tag/v1.0"]) {
+      harness.setMode("success"); await p.submit(url); await p.wait(s => s.canvases === 1 && s.analyzed === 5 && !s.saved); await saveCurrent();
+    }
+    const beforePicker = harness.requests.length;
+    await p.click("[data-open-saved]");
+    await p.evaluate("new Promise(resolve=>{const check=()=>{if(document.querySelectorAll('[data-saved-projects] details').length===2){observer.disconnect();resolve();}};const observer=new MutationObserver(check);observer.observe(document.querySelector('[data-saved-projects]'),{subtree:true,childList:true});check();})");
+    assert.equal(await p.evaluate("document.querySelectorAll('[data-saved-projects] button').length"), 4);
+    assert.ok(await p.evaluate("document.querySelector('[data-saved-projects]').textContent.includes('feature/save')&&document.querySelector('[data-saved-projects]').textContent.includes('tag: v1.0')"));
+    harness.setMode("no-provider");
+    await p.evaluate("[...document.querySelectorAll('[data-saved-projects] button')].find(button=>button.textContent.includes('default branch')&&button.closest('details').querySelector('summary bdi').textContent==='fixture/standalone').click();true");
+    await p.wait(s => s.canvases === 1 && s.analyzed === 5 && s.saved);
+    assert.ok(await p.evaluate("window.__cityFingerprint") === savedDistrictFingerprint, "Saved city/metrics were not restored exactly");
+    assert.ok(harness.requests.slice(beforePicker).every(item => new URL(item.url).origin === origin && !new URL(item.url).pathname.startsWith('/parser/')));
+    assert.equal(await p.evaluate("location.href"), savedDistrictUrl);
+
     await run("mixed", s => s.canvases === 1 && s.analyzed === 5 && s.failed === 2);
     assert.equal((await p.snapshot()).failuresOpen, false);
     assert.equal(await p.evaluate(`document.querySelector('[data-failed-summary]').textContent`), "2 files not analyzed");
@@ -380,6 +406,18 @@ export async function checkStandaloneBrowser() {
       assert.ok(value.value < value.max || value.ready, "bar reached completion before presentation");
       previous.set(value.id, value);
     }
+    process.stdout.write("Browser evidence: maximum snapshot Save and failed-write isolation\n");
+    // A failed explicit Save must leave the completed maximum-sized scene usable.
+    const maximumFingerprint = await p.evaluate("window.__cityFingerprint");
+    await mkdir(path.join(dataDirectory, "write-lock"));
+    await p.click("[data-save]");
+    await p.wait(s => s.saveMessage.includes("unchanged"));
+    process.stdout.write("Browser evidence: maximum failed Save preserved scene\n");
+    assert.equal((await p.snapshot()).analyzed, 4000); assert.equal((await p.snapshot()).canvases, 1);
+    assert.ok(await p.evaluate("window.__cityFingerprint") === maximumFingerprint);
+    await rm(path.join(dataDirectory, "write-lock"), { recursive: true });
+    const maximumSavedUrl = await saveCurrent();
+    process.stdout.write("Browser evidence: maximum Save completed\n");
     await checked(cdp.send("Page.navigate", { url: "about:blank" }, p.sessionId));
     const maximumWorker = maximum.events.find(e => e.kind === "worker");
     await checked(harness.waitFor(e => e.kind === "detached" && e.sessionId === maximumWorker.sessionId));
@@ -387,10 +425,23 @@ export async function checkStandaloneBrowser() {
       const response = await checked(request(origin, target, { method: target.startsWith("/_code-city/") ? "POST" : "GET", headers: { Origin: origin, "Content-Type": "application/json" }, body: target.startsWith("/_code-city/") ? "{}" : undefined }));
       assert.equal(response.status, 404); assert.equal(response.body.length, 0);
     }
+    process.stdout.write("Browser evidence: restart and fresh-context reopen without provider/parser\n");
+    sendGracefulSignal(processUnderTest, "SIGTERM"); await checked(expectCleanExit(processUnderTest));
+    processUnderTest = launchStandalone({ preload, serverArguments: ["--port", new URL(origin).port, "--data-dir", dataDirectory] });
+    assert.equal(await checked(readyOrigin(processUnderTest)), origin);
+    const restoreStart = harness.requests.length;
+    harness.setMode("no-provider");
+    const { browserContextId } = await checked(cdp.send("Target.createBrowserContext"));
+    const reopened = await page({ url: maximumSavedUrl, browserContextId });
+    await reopened.wait(s => s.canvases === 1 && s.analyzed === 4000 && s.saved);
+    assert.ok(await reopened.evaluate("window.__cityFingerprint") === maximumFingerprint, "Restart/fresh-context restoration changed the saved city or metrics");
+    assert.ok(harness.requests.slice(restoreStart).every(item => new URL(item.url).origin === origin && !new URL(item.url).pathname.startsWith('/parser/')), "Reopen acquired or parsed source");
+    await checked(cdp.send("Target.closeTarget", { targetId: reopened.targetId }));
+    await checked(cdp.send("Target.disposeBrowserContext", { browserContextId }));
     for (const item of harness.requests) {
       const url = new URL(item.url);
       assert.ok([origin,"https://api.github.com","https://raw.githubusercontent.com"].includes(url.origin));
-      assert.ok(["GET", "OPTIONS"].includes(item.method));
+      assert.ok(["GET", "OPTIONS"].includes(item.method) || (item.method === "POST" && url.origin === origin && url.pathname === "/api/investigations"));
       assert.equal(url.pathname.startsWith("/_code-city/"), false);
       if (url.origin !== origin) {
         assert.equal(item.worker, true);
@@ -405,7 +456,7 @@ export async function checkStandaloneBrowser() {
     assert.equal((await idle.snapshot()).canvases, 1, "static-host shutdown discarded a browser-owned completed view");
     process.stdout.write(JSON.stringify({
       chrome: { category: discovery.category, version },
-      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
+      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
       requests: harness.requests.length, workerEvents: harness.events.filter(e=>e.kind==='event').length,
       publicFiles: manifest.files.filter(f=>f.role==='public').map(f=>f.path),
     }) + "\n");

@@ -1,4 +1,4 @@
-import { deriveBaseMetricAnalysis, selectGrammarFamily } from "../domain/base-metrics";
+import { deriveBaseMetricAnalysis, selectGrammarFamily, type BaseMetricAnalysis } from "../domain/base-metrics";
 import { buildCity } from "../domain/city-model";
 import { finalizeModuleComplexity, type ModuleComplexityFact } from "../domain/complexity";
 import { compareUnsignedUtf8 } from "../domain/source-admission";
@@ -80,6 +80,7 @@ export async function analyzeProjectSources(
   acquired: AcquiredProjectSources,
   parser: SyntaxProjectionCapability,
   constructCity: (facts: readonly ModuleComplexityFact[]) => CityPayload = buildCity,
+  capture?: Readonly<{ contribution(path: string, owner: number, kind: string, start: number, end: number): void; module(path: string, analysis: BaseMetricAnalysis, complexities: Readonly<Float64Array>): void }>,
 ): Promise<ProjectAnalysisResult> {
   const facts: ModuleComplexityFact[] = [];
   const notAnalyzedFiles: FailedFile[] = acquired.notAnalyzedFiles.map((failure) => ({ ...failure }));
@@ -119,7 +120,9 @@ export async function analyzeProjectSources(
     let releaseFailed = false;
     try {
       const analysis = deriveBaseMetricAnalysis(module.canonicalPath, module.normalizedSource, stream.observations);
-      fact = finalizeModuleComplexity(analysis).fact;
+      const finalized = finalizeModuleComplexity(analysis, capture ? (owner, kind, start, end) => capture.contribution(module.canonicalPath, owner, kind, start, end) : undefined);
+      fact = finalized.fact;
+      capture?.module(module.canonicalPath, analysis, finalized.perUnitComplexities);
     } catch {
       notAnalyzedFiles.push({ canonicalPath: module.canonicalPath, category: "Metrics could not be computed" });
     } finally {

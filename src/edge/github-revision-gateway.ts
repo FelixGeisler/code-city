@@ -16,7 +16,9 @@ export function encodeGithubPathSegment(value: string): string {
 export function githubRevisionUrl(repository: RepositoryReference): string {
   const owner = encodeGithubPathSegment(repository.owner);
   const name = encodeGithubPathSegment(repository.repository);
-  const requestUrl = repository.branch === null
+  const requestUrl = repository.tag !== undefined
+    ? `https://api.github.com/repos/${owner}/${name}/git/ref/tags/${encodeGithubPathSegment(repository.tag)}`
+    : repository.branch === null
     ? `https://api.github.com/repos/${owner}/${name}/commits?per_page=1&page=1`
     : `https://api.github.com/repos/${owner}/${name}/branches/${encodeGithubPathSegment(repository.branch)}`;
   if (new URL(requestUrl).href !== requestUrl) {
@@ -137,6 +139,25 @@ export function createGithubRevisionGateway(fetchImpl: typeof fetch): RevisionGa
     try {
       parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     } catch {
+      return { kind: "invalid-evidence" };
+    }
+    if (repository.tag !== undefined) {
+      if (ownDataValue(parsed, "ref") !== `refs/tags/${repository.tag}`) return { kind: "invalid-evidence" };
+      let object = ownDataValue(parsed, "object");
+      const seen = new Set<string>();
+      for (let depth = 0; depth <= 16; depth++) {
+        const sha = ownDataValue(object, "sha"), type = ownDataValue(object, "type");
+        if (typeof sha !== "string" || !PROVIDER_REVISION.test(sha) || seen.has(sha)) return { kind: "invalid-evidence" };
+        if (type === "commit") return { kind: "revision", revision: sha };
+        if (type !== "tag" || depth === 16) return { kind: "invalid-evidence" }; seen.add(sha);
+        const url = `https://api.github.com/repos/${encodeGithubPathSegment(repository.owner)}/${encodeGithubPathSegment(repository.repository)}/git/tags/${sha}`;
+        const tagResponse = await fetchImpl(url, { method: "GET", headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10" }, mode: "cors", credentials: "omit", referrer: "", referrerPolicy: "no-referrer", cache: "no-store", redirect: "error", signal });
+        if (!tagResponse.ok || tagResponse.url !== url || tagResponse.redirected) { await releaseResponse(tagResponse); return { kind: "invalid-evidence" }; }
+        const tagBytes = await readBoundedBody(tagResponse); if (!tagBytes) return { kind: "invalid-evidence" };
+        const tag = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(tagBytes)) as unknown;
+        if (ownDataValue(tag, "sha") !== sha) return { kind: "invalid-evidence" };
+        object = ownDataValue(tag, "object");
+      }
       return { kind: "invalid-evidence" };
     }
     return repository.branch === null

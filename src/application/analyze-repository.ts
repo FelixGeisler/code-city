@@ -16,6 +16,7 @@ export type RepositoryAnalysisDependencies = Readonly<{
   revisionGateway: RevisionGateway;
   sourceGateway: ImmutableRawSourceGateway;
   parser: SyntaxProjectionCapability;
+  capture?: Parameters<typeof analyzeProjectSources>[3];
 }>;
 
 /** One execution-neutral acquisition/analysis path; edges own worker lifetime. */
@@ -66,7 +67,7 @@ export async function analyzeRepository(
     const analysis = await analyzeProjectSources(acquired, parser, (facts) => {
       onProgress({ stage: "city-construction" });
       return buildCity(facts);
-    });
+    }, dependencies.capture);
     if (signal.aborted) return { kind: "cancelled" };
     return analysis.kind === "failure" ? { ...analysis, revision } : { kind: "success", revision, result: analysis.result };
   } catch {

@@ -1,0 +1,63 @@
+= ADR 0016: Immutable investigation file store
+
+Status:: Accepted
+Human acceptance:: The user approved filesystem-backed snapshots and explicitly
+stated “You decide” for storage choices while requiring multiple projects and
+multiple releases/branches for each project.
+
+== Context
+
+ADR 0015 assigns explicit saved investigations to the server, without accounts
+or metric certification. The user approved Save/reopen and delegated storage
+technology choices, then required multiple repositories and multiple branches
+or releases per repository. Reopening must not reacquire or reanalyze source.
+
+== Alternatives
+
+* A database adds a deployment/backup dependency without a current query need.
+* Browser-only storage cannot provide server-persistent, shareable reopening.
+* Immutable snapshot files plus small server receipts fit bounded Save-by-ID
+  and a read-only repository-grouped picker using native Node.js facilities.
+
+== Decision
+
+Use a configured local data directory outside the artifact and source tree.
+Store each Save in its own random-ID directory, containing a versioned snapshot
+container and a small server-generated receipt. Publish the completed directory
+by same-volume rename only after validation and file synchronization. Existing
+snapshots are never overwritten. Repository, requested branch/tag, selected full
+commit, and saved UTC time identify each entry; repository/ref are labels, not
+storage keys. Different repositories, refs, and successive commits coexist.
+
+The container has a bounded UTF-8 JSON header and length-delimited binary source
+sections. It retains original and normalized source, outcomes, unit identities,
+owned decision contributions, hierarchy, metrics, and fixed visual inputs.
+It records the snapshot version separately from a client-claimed analyzer
+build-input fingerprint. Version mismatches and damaged data fail explicitly; there is no GitHub/parser
+fallback. The server checks structure, hashes and references, not metric truth
+or GitHub provenance. The browser restores and validates presentation locally.
+
+Use one admitted write, an isolated bounded validation worker, and separately
+bounded snapshot reads. Stream uploads to a staging directory rather than
+parsing large request bodies on the asset-serving event loop. Keep static
+serving and browser analysis independent of write admission. The operational
+limits and failure behavior are owned by
+xref:requirements:saved-investigations.adoc[Saved Investigations].
+
+No automatic snapshot expiry or deletion API. Operators back up the data
+directory and remove unwanted snapshot directories while the host is stopped.
+An interrupted write never appears in the catalog. A surviving write lock or
+staging directory requires stopped-host operator recovery, not unsafe automatic
+lock stealing or deletion of uncertain work. Reopening committed snapshots is
+independent of write-lock availability. Only one host per directory is supported.
+Save is unavailable unless `--data-dir` is configured; analysis still works.
+
+== Consequences
+
+No database/package dependency or account system is introduced. Storage has a
+real format/version compatibility boundary and needs deliberate migration when
+it changes. File/OS corruption and backup recovery remain operator concerns;
+process-restart persistence is qualified, not a power-loss or filesystem SLA.
+Anonymous bounds isolate resources but do not establish per-person quotas or
+protection against arbitrary network denial of service. Local disk operation
+is selected; network filesystems, TLS ingress and Internet deployment are not.

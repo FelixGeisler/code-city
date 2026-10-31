@@ -6,12 +6,15 @@
 |Integrity |Validate complete provider identities/bytes, closed worker events, city values, and manifest records before use. |Source/gateway, controller, manifest, and browser tests.
 |Determinism |One TypeScript/WASM analyzer, canonical ordering, pinned grammars, fixed visual rules, and identical second-build bytes. |Domain/core tests and reproducibility gate.
 |Safety/privacy |Treat source as data; keep unsaved source browser-local; render paths/failures as inert text; serve only verified public assets. |Operating policy, packaged worker/provider network proof, rendering tests.
-|Lifecycle |Revoke old publication before stop; drain provider reads or terminate parser work; release on discard/page loss and keep stale callbacks inert. |Browser worker transport, shared-core regression, and real cancellation tests.
+|Lifecycle |Revoke old publication before stop; drain provider reads or terminate parser work; release on replacement/page loss and keep stale callbacks inert. |Browser worker transport, shared-core regression, and real cancellation tests.
 |Responsiveness |Execute parsing in a real browser worker, not the UI or HTTP loop. Idle/completed users own no server analysis capacity. |Packaged multi-tab, UI responsiveness, and static-host audits.
+|Persistence |Validate and synchronize complete snapshots before atomic publication; preserve current views on failed Save; reopen without acquisition/parser work. |Store/process-restart and fresh-browser-context maximum-envelope evidence.
 |Release |Locked install/list/audit, types/tests, canonical build, byte reproduction, packaged Chrome/perimeter/signal audit, docs and manifest-bound upload. |`npm run verify` and workflow tests.
 |===
 
 No Raspberry Pi performance, concurrency, memory, or deployment threshold is
 claimed. Browser Web Crypto requires a secure context; remote TLS ingress is not
-provided. Future Save must bound operation work and isolate reads/static serving
-from writes. Login and metric certification are not requirements.
+provided. Save bounds and read/static isolation are specified in
+xref:requirements:saved-investigations.adoc[Saved Investigations]. Power-loss
+and network-filesystem durability are not qualified. Login and metric
+certification are not requirements.

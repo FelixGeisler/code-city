@@ -5,10 +5,11 @@
 |Layer |Block |Responsibility
 |Domain |Repository/admission/metric/city policies |Deterministic validation, calculations, geometry, and camera/picking rules.
 |Application |`analyzeRepository`, raw acquisition, project analysis |One execution-neutral sequence for revision selection, complete bounded acquisition, per-file continuation, measured progress, and city construction.
-|Browser worker edge |GitHub gateways, Tree-sitter adapter, production worker |Perform anonymous provider reads and parsing; retain temporary normalized sources locally; send presentation results, not source, to the UI.
+|Browser worker edge |GitHub gateways, Tree-sitter adapter, production worker |Perform anonymous provider reads and parsing; retain source and analysis evidence locally; export explicit snapshots directly to the host; send presentation results, not source, to the UI.
 |Browser main edge |Local worker transport and standalone controller |Own workers and generations, abort/drain provider work, terminate parser work, validate events, suppress stale publication, and dispose on page exit.
 |Presentation |Inventory, inspector, presenter |Filter/sort/select canonical file identities without moving the camera or reuploading geometry. Render paths and failures as inert text.
-|Node edge |Native HTTP asset host |Validate configuration/public manifest records and serve only fixed public routes. No production analysis/session runtime is mounted or packaged.
+|Saved-data application |Snapshot codec/capture |Versioned representation, evidence retention, bounds, references and presentation validation; no metric recomputation.
+|Node edge |Native host and investigation store |Stream owned staging writes, isolate validation, publish immutable directories and bound reads. No repository analysis/session runtime is mounted or packaged.
 |Delivery |Builder, manifest, audits, browser evidence, workflows |Reproduce exact bytes, verify parser/public-private closure, drive actual Chrome with controlled provider traffic, and bind artifact publication to its run.
 |===
 
@@ -17,8 +18,10 @@
 A browser-local owner identity is not a server session or authentication. Opening
 an idle page allocates no analysis worker and sends no command to the host.
 The current worker owns normalized source and facts; the UI receives validated
-city and failure/progress data. No source is uploaded to the asset host.
-Inventory interaction creates no provider or HTTP request.
+city and failure/progress data. Only explicit Save uploads source/evidence;
+the file store is independent of local analysis.
+File-inventory interaction creates no provider or HTTP request. Open saved
+loads receipt metadata only; selecting an entry loads its snapshot.
 
 Parser/runtime/worker URLs are fixed same-origin public assets. GitHub origins
 are explicit CSP connections. Repository content cannot select executable URLs.

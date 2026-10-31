@@ -1,3 +1,4 @@
+import type { InvestigationStore } from "./investigation-store";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
@@ -40,6 +41,7 @@ export interface InactiveHttpPerimeterInput {
   readonly fixtureManifestBytes: Uint8Array;
   readonly artifactRoot: string;
   readonly handlers?: FixedRouteHandlers;
+  readonly store?: InvestigationStore;
 }
 
 export interface RunningInactiveHttpPerimeter {
@@ -78,6 +80,7 @@ function createPerimeterServer(
   configuration: StandaloneConfiguration | AssetHostConfiguration,
   routes: ReadonlyMap<string, PublicFixture>,
   handlers: FixedRouteHandlers,
+  store?: InvestigationStore,
 ) {
   const closingSockets = new WeakSet<Duplex>();
   const wireObservers = new WeakMap<Duplex, RequestWireObserver>();
@@ -230,7 +233,19 @@ function createPerimeterServer(
       return;
     }
 
-    const staticFixture = routes.get(request.url);
+    if (store && (request.url === "/api/investigations" || /^\/api\/investigations\/[A-Za-z0-9_-]{43}(?:\/record)?$/u.test(request.url))) {
+      if (!originAccepted(wireHead, request.method === "POST")) { reject(request, response, 403); return; }
+      if (kind !== "request") { reject(request, response, 417); return; }
+      if (request.method !== "GET" && !(request.method === "POST" && request.url === "/api/investigations")) { reject(request, response, 405); return; }
+      if (request.method === "POST") {
+        const mediaTypes = exactWireHeaderValues(wireHead, "content-type");
+        if (mediaTypes.length !== 1 || canonicalWireValue(mediaTypes[0]) !== "application/octet-stream") { reject(request, response, 415); return; }
+      }
+      applySecurityHeaders(response);
+      void store.handle(request, response, status => reject(request, response, status)).catch(() => { if (!response.headersSent) reject(request, response, 500); else response.destroy(); });
+      return;
+    }
+    const staticFixture = routes.get(/^\/saved\/[A-Za-z0-9_-]{43}$/u.test(request.url) ? "/" : request.url);
     const apiMode = commandConfiguration ? API_ROUTES[request.url as ApiTarget] : undefined;
     if (staticFixture === undefined && apiMode === undefined) {
       reject(request, response, 404);
@@ -322,7 +337,7 @@ function createPerimeterServer(
 /** Repository-internal inactive perimeter construction boundary. */
 export async function startInactiveHttpPerimeter(input: InactiveHttpPerimeterInput): Promise<RunningInactiveHttpPerimeter> {
   const fixtures = await loadPublicFixtures(input.fixtureManifestBytes, input.artifactRoot);
-  const perimeter = createPerimeterServer(input.configuration, fixtures.routes, input.handlers ?? Object.freeze({}));
+  const perimeter = createPerimeterServer(input.configuration, fixtures.routes, input.handlers ?? Object.freeze({}), input.store);
   const server = perimeter.server;
 
   const origin = await new Promise<string>((resolve, reject) => {

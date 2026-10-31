@@ -7,8 +7,8 @@ import { canonicalStandaloneRoot } from "./build-standalone.mjs";
 
 export const SERVER_ARGUMENTS = Object.freeze(["--port", "0"]);
 
-export function launchStandalone({ preload, serverArguments = SERVER_ARGUMENTS } = {}) {
-  const entry = path.join(canonicalStandaloneRoot, "server", "standalone.mjs");
+export function launchStandalone({ preload, serverArguments = SERVER_ARGUMENTS, artifactRoot = canonicalStandaloneRoot } = {}) {
+  const entry = path.join(artifactRoot, "server", "standalone.mjs");
   const args = [...(preload ? ["--import", pathToFileURL(preload).href] : []), entry, ...serverArguments];
   const child = spawn(process.execPath, args, { stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "", pending = "";

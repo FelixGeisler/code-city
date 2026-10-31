@@ -75,7 +75,7 @@ export function checkedComplexityIncrement(value: number): number {
   return value + 1;
 }
 
-export function finalizeModuleComplexity(input: ComplexityInput): FinalizedModuleComplexity {
+export function finalizeModuleComplexity(input: ComplexityInput, contribution?: (owner: number, kind: string, startByte: number, endByte: number) => void): FinalizedModuleComplexity {
   if (!isCanonicalSourcePath(input.canonicalPath)
     || !nonnegativeSafeInteger(input.S)
     || !nonnegativeSafeInteger(input.U)
@@ -189,6 +189,7 @@ export function finalizeModuleComplexity(input: ComplexityInput): FinalizedModul
       const complexity = complexities[topLevelIndex]!;
       if (complexity >= Number.MAX_SAFE_INTEGER) malformed();
       complexities[topLevelIndex] = complexity + 1;
+      contribution?.(topLevelIndex, observation.decisionKind, observation.startByte, observation.endByte);
     }
   } else {
     let nextRegion = 0;
@@ -240,6 +241,7 @@ export function finalizeModuleComplexity(input: ComplexityInput): FinalizedModul
       const complexity = complexities[owner]!;
       if (complexity >= Number.MAX_SAFE_INTEGER) malformed();
       complexities[owner] = complexity + 1;
+      contribution?.(owner, observation.decisionKind, observation.startByte, observation.endByte);
     }
   }
 

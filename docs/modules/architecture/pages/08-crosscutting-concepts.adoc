@@ -9,11 +9,12 @@
 |Temporary ownership |Source and results are local to the current browser worker. No backend session, source reservation, or idle dataset exists. |Browser transport tests, actual multi-tab and cancellation evidence.
 |Safe publication |Local generation gates and validated city data; inert path/failure text. Public worker/parser assets are deliberate; private server and manifest return `404`. |Packaged browser and perimeter audits.
 |Progress |Actual phase counts over the worker channel; the browser controller maps them to one fixed work budget after inventory admission. |Shared-core, controller, and packaged browser progress tests.
+|Saved data |Separate format/build identities, atomic immutable publication, bounded isolated validation and independent reads; no provenance or metric certification. |Snapshot/store tests and restart/fresh-context browser reopen with provider access blocked.
 |Release |One audited manifest-bound artifact and an isolated reproducibility build; no Pages deployment. |Workflow, package, publication, and retirement records.
 |===
 
 Current custody and hosting policy is in
 xref:requirements:browser-analysis-operating-policy.adoc[Browser Analysis Operating Policy].
-Future explicit Save adds bounded untrusted-content persistence, not analysis
-certification or a login requirement. Storage format and recovery rules remain
-unselected; no per-person quota is claimed from anonymous browser identifiers.
+xref:requirements:saved-investigations.adoc[Saved Investigations] defines
+untrusted-content persistence and recovery. No per-person quota is claimed
+from anonymous browser identifiers.

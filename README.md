@@ -1,6 +1,6 @@
 # Code City
 
-Code City builds a deterministic city from JavaScript, TypeScript, and C# in a public GitHub repository. Acquisition and analysis run in a browser Web Worker; the Node.js service serves the packaged application and parser assets, not analysis sessions.
+Code City builds a deterministic city from JavaScript, TypeScript, and C# in a public GitHub repository. Acquisition and analysis run in a browser Web Worker; the Node.js service serves assets and explicitly saved snapshots, not analysis sessions.
 
 ## Install
 
@@ -14,8 +14,12 @@ npm ci --ignore-scripts
 
 ```bash
 npm run build
-npm start -- --port 55583
+npm start -- --port 55583 --data-dir /var/lib/code-city
 ```
+
+Choose a writable data directory outside the checkout and `dist/`; on Windows,
+use an absolute path under your application-data directory. Without `--data-dir`,
+analysis works but Save is unavailable.
 
 The canonical artifact is `dist/`. Only `--port` is required; `--host` defaults to `127.0.0.1`. Port `0` chooses an ephemeral port for testing. A non-loopback host also requires `--canonical-host`. Analysis/session/source-memory capacity flags are no longer accepted.
 
@@ -31,11 +35,14 @@ Development output is `build/development/`. Browser analysis requires HTTPS or a
 
 - Analyze one anonymously accessible public GitHub repository at an immutable revision.
 - Acquire files with bounded overlap, then compute metrics and construct the city in a dedicated browser worker.
-- Show measured phase-local progress, cancellation, per-file failures, and the searchable/sortable file inventory.
-- Keep unsaved sources/results in browser memory. Discard, replacement, page exit, and worker loss release local ownership.
+- Show one continuous measured progress bar, cancellation, per-file failures, and the searchable/sortable file inventory.
+- Keep unsaved sources/results in browser memory. Replacement, page exit, and worker loss release local ownership.
 - Idle tabs hold no server analysis session or source reservation; completed tabs do not compete for a server analysis worker.
 
-There is no login, Save, shared inventory, reopen, or application-managed persistence yet. Shared saved investigations are the next delivery; they will be client-computed data, not server-certified metrics.
+- Save an immutable investigation, copy its URL, and reopen after a host restart without GitHub acquisition or parsing.
+- Open saved investigations grouped by repository, with separate branch/release/commit entries.
+
+There is no login, automatic saving, saved-entry management UI, or server metric certification. Snapshots include source and analysis evidence, are shared with anyone reaching the host, and never expire automatically. Back up/delete them as described in [Saved Investigations](docs/modules/requirements/pages/saved-investigations.adoc).
 
 ## Verification
 

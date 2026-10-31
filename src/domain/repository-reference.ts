@@ -2,6 +2,7 @@ export type RepositoryReference = Readonly<{
   owner: string;
   repository: string;
   branch: string | null;
+  tag?: string;
 }>;
 
 const SURROUNDING_ASCII_WHITESPACE = /^[ \t\r\n]*|[ \t\r\n]*$/g;
@@ -18,7 +19,8 @@ export function parseRepositoryReference(input: string): RepositoryReference | u
 
   const path = value.slice(LITERAL_PREFIX.length);
   const segments = path.split("/");
-  if (segments.length !== 2 && (segments.length < 4 || segments[2] !== "tree")) {
+  const release = segments[2] === "releases" && segments[3] === "tag";
+  if (segments.length !== 2 && (release ? segments.length < 5 : segments.length < 4 || segments[2] !== "tree")) {
     return undefined;
   }
 
@@ -36,7 +38,7 @@ export function parseRepositoryReference(input: string): RepositoryReference | u
     return { owner, repository, branch: null };
   }
 
-  const rawBranch = segments.slice(3).join("/");
+  const rawBranch = segments.slice(release ? 4 : 3).join("/");
   if (rawBranch.length === 0 || rawBranch.split("/").some((component) => component.length === 0)) {
     return undefined;
   }
@@ -51,5 +53,5 @@ export function parseRepositoryReference(input: string): RepositoryReference | u
     return undefined;
   }
 
-  return { owner, repository, branch };
+  return release ? { owner, repository, branch: null, tag: branch } : { owner, repository, branch };
 }

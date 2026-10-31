@@ -98,7 +98,7 @@ export function createBrowserProviderHarness(cdp, origin, onFailure) {
       workers.set(workerSession, state);
       pageWorkers.set(sessionId, state);
       await send("Runtime.enable", {}, workerSession);
-      await send("Network.enable", {}, workerSession);
+      await send("Network.enable", { maxPostDataSize: 0 }, workerSession);
       await send("Runtime.addBinding", { name: "__codeCityEvidence" }, workerSession);
       await send("Runtime.evaluate", { expression: `(() => { const send = self.postMessage.bind(self); self.postMessage = (value, ...rest) => { self.__codeCityEvidence(JSON.stringify(value)); send(value, ...rest); }; })()` }, workerSession);
       await send("Runtime.runIfWaitingForDebugger", {}, workerSession);
@@ -122,7 +122,15 @@ export function createBrowserProviderHarness(cdp, origin, onFailure) {
     if (method === "Runtime.bindingCalled" && params.name === "__codeCityDeliveryEvidence") {
       record({ kind: "delivery-held", sessionId, value: JSON.parse(params.payload) }); return;
     }
-    if (method === "Network.requestWillBeSent" && workers.has(sessionId)) workers.get(sessionId).networkUrls.add(params.request.url);
+    if (method === "Network.requestWillBeSent") {
+      const url = new URL(params.request.url);
+      if (![origin, "https://api.github.com", "https://raw.githubusercontent.com"].includes(url.origin)) throw new Error("Unexpected observed network origin");
+      const state = workers.get(sessionId) ?? pageWorkers.get(sessionId);
+      if (workers.has(sessionId)) workers.get(sessionId).networkUrls.add(params.request.url);
+      // Never mirror large binary uploads into CDP JSON. Observe their metadata
+      // through Network while allowing the actual request to reach the host.
+      if (url.origin === origin && url.pathname.startsWith("/api/investigations")) requests.push({ url: url.href, method: params.request.method, worker: workers.has(sessionId), sessionId: state?.sessionId ?? sessionId, headers: params.request.headers });
+    }
     if (method !== "Fetch.requestPaused") return;
     const url = new URL(params.request.url);
     const state = workers.get(sessionId) ?? pageWorkers.get(sessionId);
@@ -140,7 +148,8 @@ export function createBrowserProviderHarness(cdp, origin, onFailure) {
       throw new Error(`Unexpected network origin or non-worker provider request: ${url.origin}`);
     }
     if (!["GET", "OPTIONS"].includes(params.request.method)) throw new Error("Unexpected provider request method");
-    if (url.origin === "https://api.github.com" && !url.pathname.startsWith("/repos/fixture/standalone/")) throw new Error("Unexpected provider repository");
+    if (url.origin !== origin && state.mode === "no-provider") throw new Error("Reopen contacted GitHub");
+    if (url.origin === "https://api.github.com" && !/^\/repos\/fixture\/(?:standalone|another)\//u.test(url.pathname)) throw new Error("Unexpected provider repository");
     if (params.request.method === "OPTIONS") {
       await fulfill(sessionId, params.requestId, Buffer.alloc(0), "application/json", "OPTIONS"); return;
     }
@@ -153,12 +162,14 @@ export function createBrowserProviderHarness(cdp, origin, onFailure) {
           record({ kind: "revision-held", sessionId: ownerSessionId }); return;
         }
         bytes = Buffer.from(JSON.stringify([{ sha: FIXTURE_REVISION }]));
-      } else if (url.pathname.endsWith(`/git/commits/${FIXTURE_REVISION}`)) bytes = Buffer.from(JSON.stringify({ sha: FIXTURE_REVISION, tree: { sha: ROOT } }));
+      } else if (url.pathname.includes("/branches/")) bytes = Buffer.from(JSON.stringify({ name: decodeURIComponent(url.pathname.split("/branches/")[1]), commit: { sha: FIXTURE_REVISION } }));
+      else if (url.pathname.includes("/git/ref/tags/")) bytes = Buffer.from(JSON.stringify({ ref: `refs/tags/${decodeURIComponent(url.pathname.split("/git/ref/tags/")[1])}`, object: { type: "commit", sha: FIXTURE_REVISION } }));
+      else if (url.pathname.endsWith(`/git/commits/${FIXTURE_REVISION}`)) bytes = Buffer.from(JSON.stringify({ sha: FIXTURE_REVISION, tree: { sha: ROOT } }));
       else if (url.pathname.endsWith(`/git/trees/${ROOT}`) && url.search === "?recursive=1") bytes = Buffer.from(JSON.stringify({ sha: ROOT, truncated: false, tree: state.tree }));
       else throw new Error(`Unexpected fixed provider route: ${url.pathname}`);
     } else {
-      const prefix = `/fixture/standalone/${FIXTURE_REVISION}/`;
-      if (!url.pathname.startsWith(prefix)) throw new Error("Unexpected raw revision/path");
+      const prefix = /^\/fixture\/(?:standalone|another)\/a{40}\//u.exec(url.pathname)?.[0];
+      if (!prefix || !url.pathname.startsWith(prefix)) throw new Error("Unexpected raw revision/path");
       const name = url.pathname.slice(prefix.length).split("/").map(decodeURIComponent).join("/");
       const source = state.sources.get(name);
       if (!source) throw new Error("Unexpected raw source");
@@ -183,7 +194,8 @@ export function createBrowserProviderHarness(cdp, origin, onFailure) {
     setMode(mode) { selectedMode = mode; },
     waitFor,
     async attachPage(sessionId) {
-      await send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, sessionId);
+      await send("Network.enable", { maxPostDataSize: 0 }, sessionId);
+      await send("Fetch.enable", { patterns: ["https://api.github.com/*", "https://raw.githubusercontent.com/*", `${origin}/`, `${origin}/saved/*`, `${origin}/browser.js`, `${origin}/browser.css`, `${origin}/analysis-worker.js`, `${origin}/parser/*`].map(urlPattern => ({ urlPattern, requestStage: "Request" })) }, sessionId);
       await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
     },
     async release(sessionId) {

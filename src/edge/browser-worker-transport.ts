@@ -1,3 +1,5 @@
+import { parseSavedRecord } from "./browser-saved-investigations";
+import { validSavedId, type SavedRecord } from "../application/saved-investigation";
 import { parseRepositoryReference } from "../domain/repository-reference";
 import { parseAdditionalExclusions } from "../domain/source-admission";
 import { parseBrowserSessionEvent, type BrowserAnalyzeCommand, type BrowserCommand, type BrowserSessionTransport } from "./standalone-browser-controller";
@@ -7,6 +9,7 @@ type OwnedWorker = {
   generation: number;
   providerActive: boolean;
   finished: boolean;
+  saveRequest?: { id: number; resolve(record: SavedRecord): void; reject(error: Error): void };
   stop?: Promise<void>;
   releaseStop?: () => void;
   dispose(): void;
@@ -15,6 +18,7 @@ type OwnedWorker = {
 /** Browser-local ownership only: opening an idle page performs no backend request. */
 export function createBrowserWorkerTransport(
   createWorker: () => Worker = () => new Worker(new URL("./browser-analysis-worker.ts", import.meta.url), { type: "module" }),
+  restored?: (repositoryUrl: string, record: SavedRecord, exclusions: readonly string[]) => void,
 ): BrowserSessionTransport {
   return Object.freeze({
     open(observer) {
@@ -24,6 +28,7 @@ export function createBrowserWorkerTransport(
       let version = 0;
       let latestGeneration = 0;
       let active: OwnedWorker | undefined;
+      let saveId = 0;
       const destroy = (owned: OwnedWorker): void => {
         owned.dispose();
         if (active === owned) active = undefined;
@@ -48,15 +53,16 @@ export function createBrowserWorkerTransport(
           const selectedVersion = ++version;
           if (active) await stop(active);
           if (closed || version !== selectedVersion) return 202;
-          if (!parseRepositoryReference(command.repositoryUrl) || !parseAdditionalExclusions(command.additionalExclusions)) return 422;
+          if (command.savedId === undefined ? !parseRepositoryReference(command.repositoryUrl) || !parseAdditionalExclusions(command.additionalExclusions) : !validSavedId(command.savedId)) return 422;
           try {
             const worker = createWorker();
             let disposed = false;
             const owned: OwnedWorker = {
-              worker, generation: command.generation, providerActive: true, finished: false,
+              worker, generation: command.generation, providerActive: command.savedId === undefined, finished: false,
               dispose() {
                 if (disposed) return;
                 disposed = true;
+                owned.saveRequest?.reject(new Error("Investigation changed")); owned.saveRequest = undefined;
                 worker.removeEventListener("message", message);
                 worker.removeEventListener("error", error);
                 worker.removeEventListener("messageerror", error);
@@ -70,6 +76,27 @@ export function createBrowserWorkerTransport(
             };
             const message = (received: MessageEvent<unknown>): void => {
               if (closed || active !== owned) return;
+              const raw = received.data as Record<string, unknown> | null;
+              if (raw && raw.sessionId === sessionId && raw.generation === command.generation && version === selectedVersion && !owned.stop) {
+                if (raw.type === "SAVE_RESULT") {
+                  const pending = owned.saveRequest;
+                  if (pending && raw.requestId === pending.id) {
+                    owned.saveRequest = undefined;
+                    try { if (raw.ok !== true) throw new Error(typeof raw.error === "string" ? raw.error : "Save failed"); pending.resolve(parseSavedRecord(raw.record)); }
+                    catch (failure) { pending.reject(failure instanceof Error ? failure : new Error("Save failed")); }
+                  }
+                  return;
+                }
+                if (raw.type === "RESTORED") {
+                  try {
+                    const record = parseSavedRecord(raw.record);
+                    if (record.id !== command.savedId || typeof raw.repositoryUrl !== "string" || !parseRepositoryReference(raw.repositoryUrl)) throw new Error("Invalid restored metadata");
+                    if (!Array.isArray(raw.exclusions) || raw.exclusions.some(item => typeof item !== "string")) throw new Error("Invalid saved exclusions");
+                    restored?.(raw.repositoryUrl, record, raw.exclusions as string[]);
+                  } catch { error(); }
+                  return;
+                }
+              }
               const event = parseBrowserSessionEvent(received.data);
               if (!event || event.sessionId !== sessionId || event.generation !== command.generation) { error(); return; }
               if (event.type === "ANALYSIS_PROGRESS" && event.stage !== "acquisition") owned.providerActive = false;
@@ -108,6 +135,15 @@ export function createBrowserWorkerTransport(
           if (active) await stop(active);
           if (!closed && command.generation === latestGeneration) observer.event({ type: "CURRENT_DISCARDED", ...command });
           return 204;
+        },
+        save() {
+          const owned = active;
+          if (closed || !owned || !owned.finished || owned.saveRequest) return Promise.reject(new Error("Saving is unavailable or busy"));
+          return new Promise<SavedRecord>((resolve, reject) => {
+            const id = ++saveId; owned.saveRequest = { id, resolve, reject };
+            try { owned.worker.postMessage({ type: "SAVE", sessionId, generation: owned.generation, requestId: id }); }
+            catch { owned.saveRequest = undefined; reject(new Error("Save failed")); }
+          });
         },
         close() {
           if (closed) return;

@@ -4,7 +4,7 @@
 
 The repository produces one canonical manifest-bound application artifact in
 `dist/`. It contains public browser UI, analysis worker and parser assets,
-and a private native Node.js asset host. The repository does not deploy that
+and a private native Node.js host with a bounded saved-data validator. The repository does not deploy that
 service. The operator supplies `--port`; binding defaults to loopback.
 Browser Web Crypto requires HTTPS or a secure localhost context. A remote TLS
 ingress and its trust configuration are not provided by this milestone.
@@ -48,8 +48,11 @@ hosted-analyzer observer only after that gate passed. The last script-free
 notice may remain reachable. This repository makes no claim that the GitHub
 Pages repository setting was disabled, deleted, or changed.
 
-== Later deployment design
+== Saved data and later deployment
 
-Release hosting, TLS ingress, device operation, private providers, and saved
-storage/recovery remain unselected. Login and accounts are not required by the
-initial shared-view product.
+`--data-dir` selects a dedicated local directory outside the artifact. Snapshot
+files survive artifact replacement and host restart. The operator, not the
+builder or publication job, owns backup/deletion/recovery; see
+xref:requirements:saved-investigations.adoc[Saved Investigations].
+Release hosting, TLS ingress, device operation and private providers remain
+unselected. Login and accounts are not required by the shared-view product.
