@@ -73,7 +73,7 @@ export function validateSavedHeader(value: unknown): { header: SavedHeader; sect
   requireValue(typeof data.analyzer === "string" && /^[0-9a-f]{64}$/u.test(data.analyzer));
   requireValue(data.version === 2 && typeof data.repositoryUrl === "string" && data.repositoryUrl.length <= 4096 && parseRepositoryReference(data.repositoryUrl));
   requireValue(typeof data.revision === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(data.revision));
-  for (const field of ["exclusions", "hierarchy"] as const) requireValue(list(data[field], 100_000).every(path => typeof path === "string" && path.length <= 4096 && path.isWellFormed()));
+  for (const field of ["exclusions", "hierarchy"] as const) requireValue(list(data[field], 100_000).every(path => typeof path === "string" && (field === "hierarchy" || path.length <= 4096) && path.isWellFormed()));
   requireValue(JSON.stringify(data.fixedExcludedSegments) === JSON.stringify(FIXED_EXCLUDED_SEGMENTS));
   const files = list(data.files, MAX_ADMITTED_MODULES);
   requireValue(files.length > 0);
