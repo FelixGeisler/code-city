@@ -118,6 +118,36 @@ test("closing an owner during drain unblocks replacement without starting detach
   assert.deepEqual(f.events, []);
 });
 
+test("inspection RPC is revision-bound, bounded per operation, and malformed data does not discard the city", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.analyze(f.command(1)); const worker = f.workers[0];
+    f.emit(worker, "REVISION_SELECTED", 1, { revision });
+    f.emit(worker, "ANALYSIS_ALL_FILES_FAILED", 1, { revision, notAnalyzedFiles: [{ canonicalPath: "bad.js", category: "Syntax could not be analyzed" }] });
+    const query = { type: "units", path: "file.js", offset: 0 };
+    const old = f.owner.inspect(query); const rejected = assert.rejects(old, /Inspection changed/u);
+    const current = f.owner.inspect(query); await rejected;
+    let command = worker.messages.at(-1);
+    f.emit(worker, "INSPECTION_RESULT", 1, { requestId: command.requestId, revision, ok: true, value: { type: "units", path: "file.js", offset: 0, total: 0, rows: [] } });
+    assert.equal((await current).total, 0);
+    const malformed = f.owner.inspect(query); command = worker.messages.at(-1);
+    f.emit(worker, "INSPECTION_RESULT", 1, { requestId: command.requestId, revision: "b".repeat(40), ok: true, value: {} });
+    await assert.rejects(malformed, /inspection unavailable/u); assert.equal(f.losses(), 0); assert.equal(worker.terminated, 0);
+  } finally { f.owner.close(); }
+});
+
+test("replacement rejects pending inspection and stale replies cannot reach the replacement", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.analyze(f.command(1)); const worker = f.workers[0];
+    f.emit(worker, "REVISION_SELECTED", 1, { revision }); f.emit(worker, "ANALYSIS_ALL_FILES_FAILED", 1, { revision, notAnalyzedFiles: [{ canonicalPath: "bad.js", category: "Syntax could not be analyzed" }] });
+    const pending = f.owner.inspect({ type: "units", path: "file.js", offset: 0 }); const rejected = assert.rejects(pending, /Inspection changed/u);
+    const old = worker.messages.at(-1); await f.owner.analyze(f.command(2)); await rejected;
+    f.emit(worker, "INSPECTION_RESULT", 1, { requestId: old.requestId, revision, ok: true, value: {} });
+    assert.equal(f.losses(), 0); assert.equal(f.workers[1].terminated, 0);
+  } finally { f.owner.close(); }
+});
+
 test("startup, crash, and malformed-worker errors release owned resources and expose no raw error", async () => {
   const failed = await fixture(() => { throw new Error("private startup detail"); });
   await failed.owner.analyze(failed.command(1));

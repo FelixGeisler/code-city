@@ -48,8 +48,9 @@ references, byte boundaries, hashes, blob identities, and presentation safety
 in a separate worker. It does not parse repository code, recompute metrics,
 verify a claimed build identity, or certify GitHub provenance. Hash consistency
 is not proof that a client actually used the claimed commit or analyzer.
-Browser source/unit-detail views and portable import/export remain outside this
-slice; retaining their evidence does not claim those interfaces exist.
+xref:unit-inspection.adoc[Unit Source Inspection] uses these retained facts in
+fresh and reopened investigations. Portable import/export remains outside the
+current slice. The version-1 format is unchanged.
 
 == Operation and limits
 

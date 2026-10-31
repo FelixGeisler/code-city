@@ -5,8 +5,9 @@
 |Layer |Block |Responsibility
 |Domain |Repository/admission/metric/city policies |Deterministic validation, calculations, geometry, and camera/picking rules.
 |Application |`analyzeRepository`, raw acquisition, project analysis |One execution-neutral sequence for revision selection, complete bounded acquisition, per-file continuation, measured progress, and city construction.
-|Browser worker edge |GitHub gateways, Tree-sitter adapter, production worker |Perform anonymous provider reads and parsing; retain source and analysis evidence locally; export explicit snapshots directly to the host; send presentation results, not source, to the UI.
+|Browser worker edge |GitHub gateways, Tree-sitter adapter, production worker |Perform anonymous provider reads and parsing; retain source and analysis evidence locally; export explicit snapshots directly to the host; send presentation metadata and only explicitly requested bounded source excerpts to the UI.
 |Browser main edge |Local worker transport and standalone controller |Own workers and generations, abort/drain provider work, terminate parser work, validate events, suppress stale publication, and dispose on page exit.
+|Application |Unit inspection reader |Index retained units, finalized values and recorded ownership; page locations, source windows and highlight unions without parsing or recomputing metrics.
 |Presentation |Inventory, inspector, presenter |Filter/sort/select canonical file identities without moving the camera or reuploading geometry. Render paths and failures as inert text.
 |Saved-data application |Snapshot codec/capture |Versioned representation, evidence retention, bounds, references and presentation validation; no metric recomputation.
 |Node edge |Native host and investigation store |Stream owned staging writes, isolate validation, publish immutable directories and bound reads. No repository analysis/session runtime is mounted or packaged.
@@ -18,7 +19,9 @@
 A browser-local owner identity is not a server session or authentication. Opening
 an idle page allocates no analysis worker and sends no command to the host.
 The current worker owns normalized source and facts; the UI receives validated
-city and failure/progress data. Only explicit Save uploads source/evidence;
+city and failure/progress data. Unit inspection reads only selected bounded
+metadata/source over a revision/generation/request-tagged local channel; it
+adds no provider or server call. Only explicit Save uploads source/evidence;
 the file store is independent of local analysis.
 File-inventory interaction creates no provider or HTTP request. Open saved
 loads receipt metadata only; selecting an entry loads its snapshot.

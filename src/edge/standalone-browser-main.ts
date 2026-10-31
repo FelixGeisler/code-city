@@ -127,6 +127,7 @@ function renderFailures(rows: readonly BrowserFailedFile[]): void {
 const presentation = createStandalonePresentationCoordinator({
   documentTarget: document,
   root: presentationRoot,
+  inspect: query => controller.inspect(query),
   failed() {
     feedback.textContent = "";
     renderFailures([]);

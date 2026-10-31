@@ -1,5 +1,6 @@
 import type { ImmutableRawSourceGateway } from "./source-retrieval";
 import type { BaseMetricAnalysis } from "../domain/base-metrics";
+import type { InspectionEvidence } from "./unit-inspection";
 import type { ProjectAnalysis } from "./project-analysis";
 import { SAVE_LIMITS, sourceSha256, cityForSnapshot, snapshotPrefix, validateSavedHeader, type SavedContribution, type SavedHeader, type SavedUnit, type SourceSection } from "./saved-investigation";
 import { compareUnsignedUtf8, FIXED_EXCLUDED_SEGMENTS } from "../domain/source-admission";
@@ -8,6 +9,8 @@ import { compareUnsignedUtf8, FIXED_EXCLUDED_SEGMENTS } from "../domain/source-a
 export function createInvestigationCapture() {
   const raw = new Map<string, { bytes: Uint8Array; blob: string; rawPath: string }>();
   const evidence = new Map<string, { units: SavedUnit[]; contributions: SavedContribution[] }>();
+  const inspections = new Map<string, InspectionEvidence>();
+  const owners = new Map<string, { values: number[]; counts: number[]; total: number }>();
   let rawBytes = 0, metadataBytes = 0, complete = true;
   const disable = (): void => { complete = false; raw.clear(); evidence.clear(); };
   const entry = (path: string) => { let value = evidence.get(path); if (!value) { value = { units: [], contributions: [] }; evidence.set(path, value); } return value; };
@@ -32,9 +35,38 @@ export function createInvestigationCapture() {
       } };
     },
     contribution(path: string, owner: number, kind: string, start: number, end: number): void {
+      try {
+        let runs = owners.get(path);
+        if (!runs) { runs = { values: [], counts: [], total: 0 }; owners.set(path, runs); }
+        const last = runs.values.length - 1;
+        if (runs.values[last] === owner) runs.counts[last] = runs.counts[last]! + 1;
+        else { runs.values.push(owner); runs.counts.push(1); }
+        runs.total++;
+      } catch { owners.delete(path); }
       try { append(path, [owner, kind, start, end], false); } catch { disable(); }
     },
     module(path: string, analysis: BaseMetricAnalysis, complexities: Readonly<Float64Array>): void {
+      try {
+        const runs = owners.get(path) ?? { values: [], counts: [], total: 0 };
+        owners.delete(path);
+        const values = Uint32Array.from(runs.values), counts = Uint32Array.from(runs.counts);
+        inspections.set(path, {
+          units: { length: analysis.units.length, at(index) {
+            const unit = analysis.units.at(index);
+            return unit ? { kind: unit.kind, startByte: unit.kind === "top-level" ? 0 : unit.startByte, endByte: unit.kind === "top-level" ? 0 : unit.endByte, complexity: complexities[index]! } : undefined;
+          } },
+          contributionCount: runs.total,
+          *contributions() {
+            let run = 0, remaining = counts[0] ?? 0;
+            for (const row of analysis.observations) if (row.kind === "decision") {
+              if (remaining === 0) { run++; remaining = counts[run] ?? 0; }
+              if (remaining === 0) throw new Error("Missing contribution owner");
+              remaining--;
+              yield [values[run]!, row.decisionKind, row.startByte, row.endByte] as const;
+            }
+          },
+        });
+      } catch { inspections.delete(path); }
       try {
         let index = 0;
         if (complete) entry(path);
@@ -46,6 +78,7 @@ export function createInvestigationCapture() {
         }
       } catch { disable(); }
     },
+    inspection(path: string): InspectionEvidence | undefined { return inspections.get(path); },
     async snapshot(repositoryUrl: string, revision: string, exclusions: readonly string[], result: ProjectAnalysis, analyzer: string): Promise<Blob> {
       if (!complete) throw new Error("Investigation exceeds Save limits");
       const sections: Uint8Array[] = [];

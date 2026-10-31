@@ -1,3 +1,4 @@
+import type { InspectionQuery, InspectionResult } from "../application/unit-inspection";
 import type { SavedRecord } from "../application/saved-investigation";
 import { validateCityPayload, type ValidatedCity } from "../application/city-payload";
 import { compareUnsignedUtf8, isCanonicalSourcePath, MAX_ADMITTED_MODULES } from "../domain/source-admission";
@@ -69,6 +70,7 @@ export interface BrowserSessionOwner {
   discard(command: BrowserCommand): Promise<number>;
   close(): void;
   save?(): Promise<SavedRecord>;
+  inspect?(query: InspectionQuery): Promise<InspectionResult>;
 }
 
 export type BrowserSessionTransport = Readonly<{
@@ -94,6 +96,7 @@ export type StandaloneBrowserController = Readonly<{
   submit(repositoryUrl: string, additionalExclusions: string): void;
   openSaved(id: string): void;
   save(): Promise<SavedRecord>;
+  inspect(query: InspectionQuery): Promise<InspectionResult>;
   dispose(): void;
 }>;
 
@@ -691,6 +694,10 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     start() { if (!disposed && !owner) openOwner(); },
     submit,
     openSaved(id) { submit("", "", id); },
+    async inspect(query) {
+      if (disposed || currentGeneration === undefined || !owner?.inspect) throw new Error("Unit inspection unavailable");
+      return owner.inspect(query);
+    },
     async save() {
       if (disposed || currentGeneration === undefined || !owner?.save) throw new Error("No completed investigation is available");
       return owner.save();

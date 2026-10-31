@@ -10,8 +10,9 @@
 |===
 
 Provider content, paths, bytes, and worker messages cross validation boundaries.
-The UI consumes only validated presentation data from its own worker. Source
-stays worker-local until explicit Save and is never executed. Provider requests omit credentials
+The UI consumes validated presentation data from its own worker. Explicit unit
+activation additionally reads a bounded source excerpt into an inert source
+dialog. Only Save uploads source to the server; source is never executed. Provider requests omit credentials
 and referrers. A repository cannot choose imports, worker paths, or parser URLs.
 
 Web Crypto requires a secure browser context. Localhost HTTP works; remote
