@@ -115,7 +115,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
       sourceMessage.textContent = (result.syntaxUnavailable ? "Syntax coloring unavailable. " : "") + (result.highlights.length ? "Underlined: owned complexity-contribution spans." : "No owned contribution in this source page.");
       sourcePaging.hidden = false; previousSource.hidden = nextSource.hidden = history.length === 0 && next === null;
       previousSource.disabled = history.length === 0; nextSource.disabled = next === null; scope.disabled = false;
-      code.scrollTop = 0; code.scrollLeft = 0; if (focusSource) { focusSource = false; code.focus?.({ preventScroll: true }); }
+      code.scrollTop = 0; code.scrollLeft = 0; if (focusSource) { focusSource = false; dialog.scrollTop = 0; code.focus?.({ preventScroll: true }); }
       void loadContributions();
     } catch { if (active && epoch === sourceEpoch) { sourcePending = false; shown = undefined; code.replaceChildren(); sourceMessage.textContent = "Source inspection unavailable."; contributionMessage.textContent = "No source page is shown."; } }
   }
@@ -136,7 +136,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
           if (!current()) return;
           wholeUnit = false; scope.value = "shown"; contributionOffset = 0;
           if (cursor !== row.cursor) { if (cursor !== null) history.push(cursor); cursor = row.cursor; focusSource = true; void loadSource(); }
-          else { code.scrollTop = 0; code.scrollLeft = 0; code.focus?.({ preventScroll: true }); void loadContributions(); }
+          else { code.scrollTop = 0; code.scrollLeft = 0; dialog.scrollTop = 0; code.focus?.({ preventScroll: true }); void loadContributions(); }
         });
         open.dataset.contribution = String(row.id); item.append(open); contributions.append(item);
       }

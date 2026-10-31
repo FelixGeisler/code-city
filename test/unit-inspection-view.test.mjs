@@ -78,7 +78,8 @@ test('a long unit defaults to shown-source contributions and whole-unit entries 
  assert.equal(data(host,'contributionRows').children.length,0);assert.match(data(host,'contributionStatus').textContent,/0 of 27/u);assert.match(data(host,'sourceRange').textContent,/Shown source: 660:1/u);assert.match(data(host,'unitDetails').textContent,/Complexity 28 \(whole unit\).*660:1–1371:2/u);
  const scope=data(host,'contributionScope');await action(()=>{scope.value='unit';scope.dispatchEvent(new Event('change'));});
  assert.equal(data(host,'contributionRows').children.length,27);const target=all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0];assert.match(target.textContent,/975:2/u);
- await action(()=>target.click());assert.equal(scope.value,'shown');assert.equal(data(host,'sourceCode').children[0].children[0].textContent,'975');assert.match(data(host,'sourceRange').textContent,/Shown source: 975:2/u);assert.ok(data(host,'contributionRows').children.length>0&&data(host,'contributionRows').children.length<27);
+ data(host,'unitSource').scrollTop=500;
+ await action(()=>target.click());assert.equal(data(host,'unitSource').scrollTop,0);assert.equal(scope.value,'shown');assert.equal(data(host,'sourceCode').children[0].children[0].textContent,'975');assert.match(data(host,'sourceRange').textContent,/Shown source: 975:2/u);assert.ok(data(host,'contributionRows').children.length>0&&data(host,'contributionRows').children.length<27);
  const before=calls.length;target.click();await flush();assert.equal(calls.length,before,'detached whole-unit row must not issue a stale jump');
  await action(()=>button(host,'Previous source').click());assert.match(data(host,'sourceRange').textContent,/Shown source: 660:1/u);assert.equal(data(host,'contributionRows').children.length,0);release();
 });

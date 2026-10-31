@@ -40,7 +40,9 @@ Spans continuing outside the page keep their exact full locations and say so.
 
 `Whole unit` explicitly lists all owned contributions, still in bounded pages.
 Activating a native contribution-location button shows source starting at that
-record's retained start byte, returns to `Shown source`, and focuses the code.
+record's retained start byte, returns to `Shown source`, scrolls the source dialog
+to its top and focuses the code. This also works when the location was selected
+from far down a long contribution list.
 Previous source returns through navigation history. This moves only the source
 window, not the city camera, selection or geometry. It performs no provider read,
 parsing or metric computation. Overlapping owned highlights remain their union;
