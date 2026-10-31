@@ -21,7 +21,10 @@ The initial acceptance repository is
 `https://github.com/FelixGeisler/code-city`. Private repositories, uploads,
 archives, local folders, other providers, tag-management/history browsing,
 commit links, and generic
-arbitrary refs are excluded.
+arbitrary refs are excluded from the delivered input contract.
+The separately planned xref:local-working-tree.adoc[local working-tree slice]
+adds user-approved future scope; it is not implemented and does not silently
+change these GitHub acquisition or immutable-revision rules.
 
 [[CC-CORE-SRC-02]]
 === Explicit immutable-revision analysis

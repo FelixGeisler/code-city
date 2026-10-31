@@ -1007,8 +1007,10 @@ The approved whole core excludes:
 * history exploration, tag management, commit links, generic arbitrary refs,
   watching, or scheduling; explicit branch/release inputs and saved snapshots
   are supported.
-* private repositories, non-GitHub providers, uploads, archives, or local
-  folders;
+* direct authenticated provider acquisition (including ADO), archives, and
+  other unselected source inputs; user-selected local working trees are now
+  separately approved future scope in xref:local-working-tree.adoc[Local
+  Working-Tree Analysis], not an implemented input;
 * source editing or automated fixes;
 * dependency analysis;
 * threshold findings, warnings, grades, or recommendations;
