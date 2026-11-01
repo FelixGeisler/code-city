@@ -1,24 +1,25 @@
 = Overview
 
-Code City turns one public GitHub repository into a deterministic 3D city of
+Code City turns a selected local working tree or public GitHub repository into a deterministic 3D city of
 its supported JavaScript, TypeScript, and C# modules. Analysis runs in a browser
 Web Worker; unsaved investigations consume no server analysis session or source
 reservation. Explicit Save persists immutable investigations; shared URLs
-reopen them without GitHub acquisition or parsing.
+reopen results and analyzed code without folder access, GitHub acquisition or parsing.
 
-image::overview-flow.svg[Flow from a repository URL to a complete Code City]
+image::overview-flow.svg[Flow from a selected folder or repository URL to a complete Code City]
 
 [cols="1,3",options="header"]
 |===
 | |Code City
 
 |Input
-|One URL of an anonymously accessible public GitHub repository and optional
-newline-separated canonical additional exclusions
+|A read-only selected local folder or anonymously accessible public GitHub URL,
+plus optional newline-separated canonical additional exclusions
 
 |Selection
-|The captured URL and exclusions, plus the supplied branch/release or, when neither is supplied, the default-branch tip resolved to one immutable commit on
-Analyze
+|Working-tree contents including uncommitted edits, identified from captured
+content; or the supplied GitHub branch/release/default tip resolved to one
+immutable commit on Analyze
 
 |Output
 |One deterministic city with sanitized per-file failure rows, or one terminal

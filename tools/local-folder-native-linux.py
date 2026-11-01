@@ -3,8 +3,9 @@
 
 Qualification-only Python stdlib + ctypes/libX11/libXtst; no user desktop APIs.
 No portal fallback: chooser must belong to the recorded Chrome PID or its children.
-English GTK chooser: real XTEST Ctrl+L, synthetic absolute path, Return (navigate), Return
-(default Open/Select). Chrome's read prompt: Tab from default Cancel, Return.
+English GTK chooser: real XTEST Ctrl+L/Ctrl+A, exact synthetic directory with
+trailing slash, Tab out of completion, explicit Alt+O Open. Chrome's read prompt:
+Tab from default Cancel, Return; the driver still requires the actual granted handle.
 The JS driver requires a real selected handle and granted permission afterwards;
 UI differences fail the native gate, never imply success or an OPFS fallback.
 """
@@ -918,6 +919,8 @@ try:
         for char in a.fixture + '/':
             key(w, pid, char, typing_modifiers(char))
         actions.append('type-owned-synthetic-path')
+        key(w, pid, 'Tab')  # Leave the completion popup before activating the dialog's _Open.
+        actions.append('Tab-leave-location-completion')
         diagnose('-before-confirm')  # Actual owned chooser state, not an inferred default button.
         # GTK's default response may be Cancel. Activate its explicit English
         # _Open action, not an inferred Return/default-button selection.

@@ -5,11 +5,12 @@
 |Term |Meaning
 |Additional exclusion |An exact canonical repository-relative path captured by Analyze.
 |Canonical artifact |`dist/`, with manifest-public UI/worker/parser assets, private native host, and version-1 manifest.
-|Canonical path |Validated repository-relative identity used for ordering and presentation.
-|Complete acquisition |Complete recursive identity and ancestry validation before filtering/reads; all admitted source retrieval finishes before analysis.
-|Current implementation |Browser-owned public GitHub analysis and unsaved state; a native Node.js asset/snapshot host.
+|Canonical path |Validated input-root-relative identity used for ordering and presentation.
+|Complete acquisition |Validated GitHub inventory or pre-pruned local enumeration; all admitted capture/read work finishes before analysis.
+|Current implementation |Browser-owned local working-tree/GitHub analysis and unsaved state; a native Node.js asset/snapshot host.
 |Generation |A monotonically increasing browser-local attempt identity that prevents stale publication.
-|Immutable revision |A full commit selected by explicit analysis.
+|Immutable revision |A full GitHub commit selected by explicit analysis.
+|Working-tree capture |Actual local contents/settings identified by SHA-256; not a Git commit or atomic filesystem snapshot.
 |Local owner |A browser transport/lifetime identifier, not authentication or a backend session.
 |Worker |A dedicated browser Web Worker running the shared analyzer. Native analysis adapters are regression references; a separate data-validation worker checks saved snapshots.
 |Saved investigation |An immutable client-created snapshot persisted by explicit Save and reopened without acquisition or parsing.

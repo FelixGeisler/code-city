@@ -1,18 +1,21 @@
 = Solution Strategy
 
-. Validate the public GitHub URL and captured exclusions before creating work.
+. Validate the selected local capability or public GitHub URL and captured
+  exclusions before creating work.
 . Start one dedicated browser Web Worker for the current local attempt.
-. Resolve an immutable revision and run the shared complete-acquisition pipeline.
+. Resolve an immutable GitHub revision or capture actual local content with
+  pre-descent pruning. Complete bounded acquisition before analysis.
 . Initialize the pinned parser once, continue supported per-file failures, and
   construct the deterministic city from successful facts.
 . Send measured progress and presentation results over the worker's message
   channel. Validate them and gate publication by local identity and generation.
-. Keep original/normalized source, unit/contribution evidence and results in
+. Keep normalized source, unit/contribution evidence and results in
   the worker until replacement, page loss, or worker loss. Capture-budget
   exhaustion disables Save without changing analysis results.
 
 Acquisition cancellation aborts and settles owned provider reads before worker
-release. During parser work the browser can terminate the worker without
+release. Read-only local work is terminated directly because native filesystem
+promises cannot reliably be aborted. During parser work it terminates without
 waiting for its synchronous event loop. No portable browser worker-exit event
 is assumed. Old publication is revoked before stop or replacement.
 
@@ -23,7 +26,7 @@ is not the remedy for idle tabs; those resources no longer exist in this path.
 == Dependency direction
 
 Domain code owns deterministic rules. Application code owns execution-neutral
-acquisition/analysis sequencing. Browser edges integrate GitHub, Tree-sitter,
+acquisition/analysis sequencing. Browser edges integrate GitHub, local directory capabilities, Tree-sitter,
 worker lifetime, and presentation. The Node edge hosts manifest-public bytes and bounded snapshot I/O.
 Native worker/session adapters are retained only for regression qualification;
 the delivered host does not import or package them. Tools own manifest closure,
@@ -33,4 +36,5 @@ Explicit Save streams a versioned snapshot to an owned staging directory.
 An isolated data validator checks it before atomic publication. Reopen decodes
 recorded data, never invokes acquisition or parsing, and shares no analysis
 capacity. xref:adr/0016-immutable-investigation-file-store.adoc[ADR 0016] records
-the file-store decision.
+the file-store decision; xref:adr/0020-source-once-shared-investigation-snapshots.adoc[ADR 0020]
+selects normalized source-once retention and deliberately shared visibility.
