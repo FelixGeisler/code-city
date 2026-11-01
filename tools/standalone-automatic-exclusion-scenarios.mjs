@@ -67,8 +67,8 @@ async function selectFolder(p) {
   await p.click('[data-choose-folder]');
   await p.evaluate(`new Promise(resolve=>{let observer;const check=()=>{if(document.querySelector('[data-folder-status]').textContent.startsWith('Folder selected.')){observer?.disconnect();resolve(true);}};observer=new MutationObserver(check);observer.observe(document.querySelector('[data-folder-status]'),{subtree:true,childList:true,characterData:true});check();})`);
 }
-async function createFolder(p,name,{onlyExcluded=false,cache=cacheMarker}={}) {
-  const fixtures=onlyExcluded ? [['.vite/cache.ts',`export function cache(x: number) { return x ? '${cache}' : ''; }\n`]] : [
+async function createFolder(p,name,{onlyExcluded=false,cache=cacheMarker,excludedRoot='.vite'}={}) {
+  const fixtures=onlyExcluded ? [[`${excludedRoot}/cache.ts`,`export function cache(x: number) { return x ? '${cache}' : ''; }\n`]] : [
     ['src/app.ts',`export function app(x: number) { const marker = '${markerA}'; return x ? marker : ''; }\n`],
     ['.vite/cache.js',`export function cache(x) { const marker = '${cache}'; return x ? marker : ''; }\n`],
     ['.vite/node_modules/deep.js',"export function nested(x) { return x ? 1 : 0; }\n"],
@@ -148,19 +148,24 @@ export async function exerciseAutomaticExclusions({page,cdp,harness,origin,reque
   await checked(cdp.send('Target.closeTarget',{targetId:p.targetId}));
 
   const all=await page({localPicker:true,observation:automaticExclusionObservation});
-  await createFolder(all,'synthetic-all-excluded',{onlyExcluded:true});await selectFolder(all);
+  const excludedRoot='SYNTHETICFLOW.Hub.Web/ClientApp/long-workspace-directory-for-automatic-exclusion-layout/.vite';
+  await createFolder(all,'synthetic-all-excluded',{onlyExcluded:true,excludedRoot});await selectFolder(all);
   start=harness.events.length;await analyze(all);
   const failed=await checked(harness.waitFor(e=>harness.events.indexOf(e)>=start&&e.kind==='event'&&e.value.type==='WORKING_TREE_FAILED'));
   assert.equal(failed.value.category,'No supported modules');
   const empty=await all.wait(s=>s.progress===null&&s.status.includes('No supported'));
   assert.equal(empty.canvases,0);assert.equal(empty.setup,true);assert.equal(empty.analyzed,0);assert.equal(empty.failed,0);
-  assert.equal(await all.evaluate(`document.querySelector('[data-exclusions]').open&&document.querySelector(${JSON.stringify(checkbox('.vite'))}).checkVisibility()`),true);
+  assert.equal(await all.evaluate(`document.querySelector('[data-exclusions]').open&&document.querySelector(${JSON.stringify(checkbox(excludedRoot))}).checkVisibility()`),true);
   assert.equal(harness.events.slice(start).filter(e=>e.kind==='local-read').length,0);
-  await assertRows(all,[['.vite','cache:.vite']]);
+  await assertRows(all,[[excludedRoot,'cache:.vite']]);
+  await checked(cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},all.sessionId));
+  const layout=await all.evaluate(`(()=>{const input=document.querySelector(${JSON.stringify(checkbox(excludedRoot))}),box=input.getBoundingClientRect();return {width:box.width,height:box.height,label:input.parentElement.getBoundingClientRect().height,scroll:document.documentElement.scrollWidth,viewport:innerWidth};})()`);
+  assert.ok(layout.width>=12&&layout.width<=32&&layout.height<=32,JSON.stringify(layout));
+  assert.ok(layout.label>=44&&layout.scroll<=layout.viewport+1,JSON.stringify(layout));
   process.stdout.write(`Automatic exclusion table: local all excluded: 0 analyzed, 0 canvas, editable exclusions (${failed.value.type})\n`);
-  await all.click(checkbox('.vite'));start=harness.events.length;await analyze(all);
-  await terminal({p:all,harness,checked,start,paths:['.vite/cache.ts'],label:'local all-excluded recovery'});
-  await inspect(all,'.vite/cache.ts',cacheMarker);
+  await all.click(checkbox(excludedRoot));start=harness.events.length;await analyze(all);
+  await terminal({p:all,harness,checked,start,paths:[`${excludedRoot}/cache.ts`],label:'local all-excluded recovery'});
+  await inspect(all,`${excludedRoot}/cache.ts`,cacheMarker);
   assertLocalRequests(harness.requests.slice(afterIncludedSave),origin);
   await checked(cdp.send('Target.closeTarget',{targetId:all.targetId}));
 
