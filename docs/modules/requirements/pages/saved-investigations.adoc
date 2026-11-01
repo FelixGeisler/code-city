@@ -59,7 +59,7 @@ actually used the claimed inputs or analyzer.
 Only version 4 payloads are supported under the accepted pre-production policy
 in xref:architecture:adr/0021-recorded-automatic-exclusion-policy.adoc[ADR 0021].
 Reopen restores the recorded policy and original source/results without applying
-today's defaults. Pending checkbox/manual edits affect only the next Analyze,
+today's defaults. Pending exclusion-list edits affect only the next Analyze,
 not Save of the current investigation.
 Older payloads fail explicitly with no acquisition, parser fallback, migration,
 rewrite, implicit relayout or deletion. Older seven-field receipt metadata stays

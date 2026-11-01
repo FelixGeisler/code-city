@@ -36,7 +36,7 @@ export function assertLocalRequests(requests, origin, {expectedPosts=0,savedId,f
 }
 const folderMessage = (p, text) => p.evaluate(`new Promise(resolve=>{let observer;const check=()=>{if(document.querySelector('[data-folder-status]').textContent.includes(${JSON.stringify(text)})){observer?.disconnect();resolve(true);}};observer=new MutationObserver(check);observer.observe(document.querySelector('[data-folder-status]'),{childList:true,subtree:true,characterData:true});check();})`);
 async function submit(p) {
-  await p.evaluate(`(()=>{const change=document.querySelector('[data-change-repository]');if(document.querySelector('form').hidden&&!change.disabled)change.click();document.querySelector('select[name=input-kind]').value='working-tree';document.querySelector('textarea').value='src/user-excluded';document.querySelector('form').requestSubmit();return true;})()`);
+  await p.evaluate(`(()=>{const change=document.querySelector('[data-change-repository]');if(document.querySelector('form').hidden&&!change.disabled)change.click();document.querySelector('[data-source-local]').click();const input=document.querySelector('textarea');const paths=input.value.split('\\n').filter(Boolean);if(!paths.includes('src/user-excluded'))paths.push('src/user-excluded');input.value=paths.join('\\n');document.querySelector('form').requestSubmit();return true;})()`);
 }
 async function healthy(p) {
   const value = await p.wait(s=>s.canvases===1||s.feedback!==''||/failure|unavailable|could not|No supported|exceeds|admission failed/u.test(s.status));
@@ -46,7 +46,7 @@ export async function exerciseLocalBrowser({page,cdp,harness,origin,request,chec
   process.stdout.write('Browser evidence: local working-tree capture and source-once Save\n');
   harness.setMode('no-provider');
   const p = await page({localPicker:true});
-  assert.equal(await p.evaluate(`document.querySelector('select[name=input-kind]').value`),'working-tree');
+  assert.equal(await p.evaluate(`document.querySelector('[data-source-local]').getAttribute('aria-selected')`),'true');
   const start = harness.requests.length, workers = harness.workers.size;
   await p.evaluate(`document.querySelector('form').requestSubmit();true`); await folderMessage(p,'Choose a folder');
   assert.equal(harness.workers.size,workers,'Missing folder created a worker');

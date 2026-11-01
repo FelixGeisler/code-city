@@ -33,8 +33,8 @@ Development output is `build/development/`. Browser analysis requires HTTPS or a
 
 ## Current behavior
 
-- Select a local folder, then Analyze working-tree files including uncommitted edits; recognized dependency/output/framework-cache directories are pruned before descent. Exclusions separates manual paths from detected automatic paths/reasons, with 32-row pages. Uncheck a detected path to include that exact root on the next Analyze; siblings/nested matches stay independent and manual paths always win. Local `.git` is never included. Selection and setting edits perform no scan, reanalysis or upload. No Git operations or `.gitignore` interpretation occurs.
-- Or analyze one anonymously accessible public GitHub repository at an immutable revision.
+- Choose the Local folder or GitHub URL tab; only its input is shown. Select a folder, then Analyze working-tree files including uncommitted edits, or analyze an anonymously accessible public GitHub repository at an immutable revision.
+- Recognized dependency/output/framework-cache directories are pruned before descent and added to one editable Exclusions list. Remove a detected path to include that exact root on the next Analyze; readd it to exclude again. Siblings/nested matches stay independent and manual paths always win. Unchanged reruns preserve settings and capture identity. Local `.git` is never included. Source tabs, selection and setting edits perform no scan, reanalysis or upload. No Git operations or `.gitignore` interpretation occurs.
 - Acquire files with bounded overlap, then compute metrics and construct the city in a dedicated browser worker.
 - Show one continuous measured progress bar, cancellation, per-file failures, and the searchable/sortable file inventory.
 - Keep unsaved sources/results in browser memory. Replacement, page exit, and worker loss release local ownership.

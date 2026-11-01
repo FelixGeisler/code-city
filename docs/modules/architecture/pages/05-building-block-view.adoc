@@ -33,11 +33,16 @@ File-inventory interaction creates no provider or HTTP request. Open saved
 loads receipt metadata only; selecting an entry loads its snapshot.
 
 The pure versioned exclusion catalogue is shared by local pre-descent pruning,
-both GitHub admission passes, UI reasons and v4 validation. The wire vocabulary
+both GitHub admission passes and v4 validation. The wire vocabulary
 is pinned: future catalogue changes require a new policy version, not silent
 reinterpretation. Workers freeze applied settings and publish session/generation-bound
-policy reports before terminal close. UI edits stage only the next Analyze;
-Save consumes the worker's recorded policy. Native validation imports this pure
+policy reports before terminal close. The shell's single text editor keeps manual
+paths, known automatic roots, exact includes and the presented set separately.
+Membership edits reconcile those settings without promoting displayed automatic
+roots to manual rules. Reports merge only into untouched, unfocused text; pending
+or invalid edits stay intact. Source/attempt epochs guard reports, while source
+tabs invalidate pending picker callbacks without clearing the current city.
+UI edits stage only the next Analyze; Save consumes the worker's recorded policy. Native validation imports this pure
 policy closure without acquiring source. See
 xref:adr/0021-recorded-automatic-exclusion-policy.adoc[ADR 0021] and
 xref:requirements:saved-investigations.adoc[Saved Investigations].

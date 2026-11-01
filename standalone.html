@@ -10,31 +10,27 @@
   <main>
     <header data-app-bar><h1>Code City</h1><button type="button" data-open-saved>Open saved</button></header>
     <form id="repository-setup" novalidate>
-      <label for="input-kind">Source</label>
-      <select id="input-kind" name="input-kind">
-        <option value="working-tree" selected>Local working tree</option>
-        <option value="github">Public GitHub</option>
-      </select>
-      <div data-local-setup>
+      <div role="tablist" aria-label="Source" data-source-tabs>
+        <button id="source-local" type="button" role="tab" aria-selected="true" aria-controls="local-setup" data-source-local>Local folder</button>
+        <button id="source-github" type="button" role="tab" aria-selected="false" aria-controls="github-setup" tabindex="-1" data-source-github>GitHub URL</button>
+      </div>
+      <div id="local-setup" role="tabpanel" aria-labelledby="source-local" data-local-setup>
         <button type="button" data-choose-folder>Choose folder</button>
         <bdi data-folder-name dir="auto">No folder selected</bdi>
-        <p data-folder-status role="status">Read-only folder access requires secure desktop Chromium. Selection does not start analysis.</p>
+        <p data-folder-status role="status"></p>
       </div>
-      <div data-github-setup hidden>
+      <div id="github-setup" role="tabpanel" aria-labelledby="source-github" data-github-setup hidden>
         <label for="repository">Public GitHub repository, branch, or release URL</label>
         <input id="repository" name="repository" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repository">
       </div>
       <button type="submit">Analyze</button>
       <details data-exclusions>
         <summary>Exclusions</summary>
-        <label for="additional-exclusions">Manual exclusions: one canonical path per line</label>
+        <label for="additional-exclusions">One path per line</label>
         <textarea id="additional-exclusions" name="additional-exclusions" rows="3" autocomplete="off" spellcheck="false"></textarea>
-        <h2>Automatic exclusions</h2>
-        <p>Recognized dependency, generated output/report and framework/cache directory conventions are excluded by default, not certified as generated. Each detected directory can be included on the next Analyze. Manual paths always win; local .git is never included. No gitignore inference.</p>
-        <p data-automatic-rules></p>
-        <div data-automatic-exclusions></div>
+        <p data-exclusions-help>Remove a path to include it on the next Analyze.</p>
       </details>
-      <p id="shared-save-info" data-shared-save>Analyze and inspection stay in your browser. Only Save uploads all admitted normalized source and results. No login: everyone reaching this instance can read saved investigations and code.</p>
+      <p id="shared-save-info" data-shared-save>Save uploads code and results. Everyone with access can read them.</p>
     </form>
     <header data-investigation hidden>
       <div data-investigation-identity>

@@ -18,8 +18,17 @@ repositories or transmit private material to a coding assistant.
 
 == Folder access and inclusion
 
+Show direct `Local folder` and `GitHub URL` tabs, defaulting to Local folder,
+with only the active source input visible. Native tab buttons expose selected
+state, roving focus and Left/Right/Home/End navigation as well as Enter/Space.
+Switching tabs changes setup only: no Analyze, filesystem access, upload or
+current investigation/camera change. It invalidates pending folder selection and
+source-bound settings as described in xref:automatic-exclusions.adoc[Exclusions].
+Restoring a saved result selects its original source without resetting its policy.
+
 Use the browser's read-only directory picker in a secure desktop Chromium
-context. Unsupported environments show a local unsupported message and keep
+context. Keep setup concise: show the selected folder name and one short shared
+Save notice; show unsupported/denied/cancelled errors when applicable. Unsupported environments show a local unsupported message and keep
 GitHub input usable. Denied/cancelled selection leaves an existing completed
 investigation unchanged. Selection alone never starts analysis or persistence.
 Do not fall back to recursively enumerating a complete FileList: multi-gigabyte
