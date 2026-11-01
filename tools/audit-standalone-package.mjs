@@ -15,7 +15,7 @@ assert.deepEqual(manifest.files.filter(f => f.role === "public").map(f => f.path
 ]);
 assert.deepEqual(manifest.files.filter(f => f.role === "private").map(f => f.path), [
   "server/licenses.json",
-  "server/src/application/city-payload.js", "server/src/application/saved-investigation.js",
+  "server/src/application/city-payload.js", "server/src/application/investigation-origin.js", "server/src/application/saved-investigation.js",
   "server/src/domain/city-model.js", "server/src/domain/district-layout.js", "server/src/domain/repository-reference.js", "server/src/domain/source-admission.js",
   "server/src/edge/node/body-reader.js", "server/src/edge/node/config.js", "server/src/edge/node/fixture-manifest.js",
   "server/src/edge/node/http-perimeter.js", "server/src/edge/node/investigation-store.js", "server/src/edge/node/snapshot-validation-worker.js",
