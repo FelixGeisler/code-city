@@ -1,6 +1,6 @@
 = Local Working-Tree Analysis
 
-Status:: Implemented; delivery qualification pending
+Status:: Implemented
 
 == Scope and custody
 
