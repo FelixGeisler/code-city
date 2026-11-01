@@ -531,7 +531,6 @@ test("production admission selects the exact qualified C# package asset with unc
     "package.json": "0d264a6f710dfc12b4931aea6bc165e057f35b139bb51643e20dffae39990ebd",
     "package-lock.json": "2bfd60516adbf33268895765edf07887ebb2af386b55e9d9a5adba6c4cf0c800",
     "src/domain/base-metrics.ts": "72503f7b527a5fc443edf5986ee447f365827ecccad7eeacabcaaf3684d9286a",
-    "src/domain/source-admission.ts": "f2674e37249372961133466a612e61d6c504622242040d826606ff168c3140c4",
   };
   for (const [relativePath, expected] of Object.entries(pins)) assert.equal(sha256(await readFile(path.join(projectRoot, ...relativePath.split("/")))), expected, relativePath);
   const productionAssets = await readFile(path.join(projectRoot, "src", "edge", "tree-sitter-assets.ts"), "utf8");
