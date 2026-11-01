@@ -1,8 +1,6 @@
 import {
   compareUnsignedUtf8,
-  FIXED_EXCLUDED_SEGMENTS,
   hasSupportedSuffix,
-  isCanonicalAdditionalExclusions,
   isCanonicalPath,
   isExcludedSourcePath,
   MAX_ADMITTED_MODULES,
@@ -11,6 +9,7 @@ import {
   normalizeSourceText,
   SUPPORTED_SUFFIXES,
 } from "../domain/source-admission";
+import { exclusionSettings, recordExclusionPolicy, type ExclusionInput, type ExclusionReport, type RecordedExclusionPolicy } from "../domain/exclusion-policy";
 import { validWorkingTreeName, type WorkingTreeInvestigationOrigin } from "./investigation-origin";
 import type { AcquiredProjectSources, SourceFailure } from "./source-retrieval";
 
@@ -30,7 +29,7 @@ export type LocalSourceCandidate = Readonly<{
 
 /** Pure application port; no native handles, repository URLs or Git object identities. */
 export type LocalWorkingTreeGateway = Readonly<{
-  loadInventory(exclusions: readonly string[], signal: AbortSignal): Promise<
+  loadInventory(exclusions: ExclusionInput, signal: AbortSignal, report?: ExclusionReport): Promise<
     | Readonly<{ kind: "inventory"; candidates: readonly LocalSourceCandidate[] }>
     | LocalSourceFailure
   >;
@@ -63,21 +62,24 @@ type Slot = {
  * Captures a non-atomic working tree before parsing. Progress is canonical consumed candidates,
  * including unsupported text, from (0,total) to (total,total); total never exceeds 4,000.
  *
- * Identity v1 is SHA-256 of UTF-8 JSON {version,policy,files}. files are canonical-order
+ * Identity v2 is SHA-256 of UTF-8 JSON {version,policy,files}. files are canonical-order
  * [NFC path, actual raw byte length, SHA-256(raw bytes)] tuples, including unsupported text.
- * Policy includes suffixes, fixed exclusions, case-insensitive .git pruning and user exclusions.
+ * Policy includes suffixes, case-insensitive .git pruning and the full applied recorded exclusion policy.
  * Root display name and file timestamps are deliberately not content identity.
  */
 export async function acquireLocalWorkingTree(
   name: string,
-  exclusions: readonly string[],
+  exclusions: ExclusionInput,
   signal: AbortSignal,
   gateway: LocalWorkingTreeGateway,
   onProgress: (completed: number, total: number) => void = () => {},
+  report: ExclusionReport = () => {},
 ): Promise<LocalWorkingTreeResult> {
   if (signal.aborted) return { kind: "cancelled" };
-  if (!validWorkingTreeName(name) || !isCanonicalAdditionalExclusions(exclusions)) return unavailable();
-  const policyExclusions = Object.freeze([...exclusions]);
+  if (!validWorkingTreeName(name)) return unavailable();
+  let policyExclusions;
+  try { policyExclusions = exclusionSettings(exclusions); } catch { return unavailable(); }
+  let recordedPolicy: RecordedExclusionPolicy = recordExclusionPolicy(policyExclusions);
   const modules: AcquiredProjectSources["modules"] = [];
   const notAnalyzedFiles: AcquiredProjectSources["notAnalyzedFiles"] = [];
   const files: [string, number, string][] = [];
@@ -91,7 +93,7 @@ export async function acquireLocalWorkingTree(
   signal.addEventListener("abort", abortOwned, { once: true });
   let result: LocalWorkingTreeResult = unavailable();
   const capture = async (): Promise<LocalWorkingTreeResult> => {
-    const inventory = await gateway.loadInventory(policyExclusions, signal);
+    const inventory = await gateway.loadInventory(policyExclusions, signal, (policy, complete) => { recordedPolicy = policy; report(policy, complete); });
     if (signal.aborted) return { kind: "cancelled" };
     if (inventory.kind !== "inventory") return inventory;
     const candidates: LocalSourceCandidate[] = [];
@@ -186,12 +188,11 @@ export async function acquireLocalWorkingTree(
     }
     if (completed === candidates.length && !signal.aborted) {
       const manifest = {
-        version: "code-city-working-tree-v1",
+        version: "code-city-working-tree-v2",
         policy: {
           supportedSuffixes: SUPPORTED_SUFFIXES,
-          fixedExcludedSegments: FIXED_EXCLUDED_SEGMENTS,
           metadata: "case-insensitive-.git-at-every-depth",
-          exclusions: policyExclusions,
+          exclusionPolicy: recordedPolicy,
         },
         files,
       };

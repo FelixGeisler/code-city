@@ -11,7 +11,7 @@
 |Browser worker edge |Shiki adapter |Color retained text with bundled grammars/theme and inline Oniguruma WASM; no HTML, acquisition or analysis-parser initialization.
 |Domain |Recursive district layout |Iterative deterministic nested platforms; preserve the existing file-dimension and color functions.
 |Presentation |Inventory, inspector, presenter |Filter/sort/select canonical file identities without moving the camera or reuploading geometry. Render paths and failures as inert text.
-|Saved-data application |Snapshot codec/capture |Tagged version-3 origin, one normalized source copy, retained facts, bounds/references/presentation validation; no metric recomputation.
+|Saved-data application |Snapshot codec/capture |Version-4 tagged origin and recorded exclusion policy, one normalized source copy, retained facts, bounds/references/presentation validation; no metric recomputation.
 |Node edge |Native host and investigation store |Stream owned staging writes, isolate validation, publish immutable directories and bound reads. No repository analysis/session runtime is mounted or packaged.
 |Delivery |Builder, manifest, audits, browser evidence, workflows |Reproduce exact bytes, verify parser/public-private closure, drive actual Chrome with controlled provider traffic, and bind artifact publication to its run.
 |===
@@ -32,9 +32,14 @@ the file store is independent of local analysis.
 File-inventory interaction creates no provider or HTTP request. Open saved
 loads receipt metadata only; selecting an entry loads its snapshot.
 
-The version-3 reader pins recognized recorded exclusion policies independently
-of current analyzer defaults. They are metadata on restore, not filters: changing
-an admission rule must not change or invalidate an existing investigation. See
+The pure versioned exclusion catalogue is shared by local pre-descent pruning,
+both GitHub admission passes, UI reasons and v4 validation. The wire vocabulary
+is pinned: future catalogue changes require a new policy version, not silent
+reinterpretation. Workers freeze applied settings and publish session/generation-bound
+policy reports before terminal close. UI edits stage only the next Analyze;
+Save consumes the worker's recorded policy. Native validation imports this pure
+policy closure without acquiring source. See
+xref:adr/0021-recorded-automatic-exclusion-policy.adoc[ADR 0021] and
 xref:requirements:saved-investigations.adoc[Saved Investigations].
 
 Parser/runtime/worker URLs are fixed same-origin public assets. GitHub origins

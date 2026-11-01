@@ -1,8 +1,9 @@
+import { automaticRootPaths, excludedDirectory, exclusionSettings, automaticRule, manuallyExcluded, recordExclusionPolicy, type ExclusionInput, type ExclusionReport, type ExclusionSettings } from "./exclusion-policy";
+
 export const SUPPORTED_SUFFIXES = [
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".cs",
 ] as const;
 
-export const FIXED_EXCLUDED_SEGMENTS = ["node_modules", "dist", "build", "bin", "obj", ".angular"] as const;
 export const MAX_ADMITTED_MODULES = 4_000;
 export const MAX_NORMALIZED_MODULE_BYTES = 2_097_152;
 export const MAX_NORMALIZED_TOTAL_BYTES = 41_943_040;
@@ -40,7 +41,6 @@ export type InventoryAdmissionResult =
 const PATH_CONTROL = /\p{Cc}/u;
 const DRIVE_PATH = /^[A-Za-z]:/;
 const textEncoder = new TextEncoder();
-const fixedExcludedSegments = new Set<string>(FIXED_EXCLUDED_SEGMENTS);
 
 type ValidatedEntry = Readonly<{
   canonicalPath: string;
@@ -140,15 +140,18 @@ function isTree(entry: ValidatedEntry | undefined): boolean {
   return entry?.mode === "040000" && entry.type === "tree";
 }
 
-export function isExcludedSourcePath(path: string, additionalExclusions: readonly string[]): boolean {
-  if (path.split("/").some((segment) => fixedExcludedSegments.has(segment))) return true;
-  return additionalExclusions.some((excluded) => path === excluded || path.startsWith(`${excluded}/`));
+export function isExcludedSourcePath(path: string, input: ExclusionInput): boolean {
+  const settings: ExclusionSettings = Array.isArray(input) ? { manual: input, included: [] } : input as ExclusionSettings;
+  if (manuallyExcluded(path, settings.manual)) return true;
+  return automaticRootPaths(path).some(root => !settings.included.includes(root));
 }
 
 export function prepareSourceInventory(
   entries: readonly ProjectedTreeEntry[],
-  additionalExclusions: readonly string[] = Object.freeze([]),
+  additionalExclusions: ExclusionInput = Object.freeze([]),
+  report: ExclusionReport = () => {},
 ): InventoryAdmissionResult {
+  const settings = exclusionSettings(additionalExclusions);
   const rawIdentities = new Set<string>();
   const canonicalIdentities = new Set<string>();
   const rawEntries = new Map<string, ValidatedEntry>();
@@ -177,6 +180,15 @@ export function prepareSourceInventory(
     }
   }
 
+  const roots: [string, string][] = [];
+  const pruned: string[] = [];
+  for (const entry of [...validated].sort((a, b) => compareUnsignedUtf8(a.canonicalPath, b.canonicalPath))) {
+    if (!isTree(entry) || pruned.some(root => entry.canonicalPath.startsWith(`${root}/`))) continue;
+    const rule = automaticRule(entry.canonicalPath);
+    if (rule) roots.push([entry.canonicalPath, rule.id]);
+    if (excludedDirectory(entry.canonicalPath, settings)) pruned.push(entry.canonicalPath);
+  }
+  report(recordExclusionPolicy(settings, roots), true);
   const candidates: SourceCandidate[] = [];
   let qualifyingSkippedEntry = false;
   for (const entry of validated) {

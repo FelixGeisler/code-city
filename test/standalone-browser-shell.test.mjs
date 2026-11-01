@@ -82,7 +82,7 @@ test("read-only selection does not Analyze, read sources, upload or clear an exi
     assert.equal(f.node("[data-folder-name]").textContent, "Synthetic");
     assert.deepEqual(f.state.calls, [["start"]]); assert.equal(f.state.clears, clears);
     f.submit();
-    assert.deepEqual(f.state.calls.at(-1), ["local", root, "Synthetic", ""]);
+    assert.deepEqual(f.state.calls.at(-1), ["local", root, "Synthetic", "", []]);
     assert.equal(f.node("[data-origin-label]").textContent, "Working-tree capture");
     assert.equal(f.state.calls.some(([name]) => name === "save"), false);
   } finally { f.close(); }
@@ -101,7 +101,7 @@ test("unsupported, denied and cancelled selection leave completed output unchang
       f.node("select[name=input-kind]").value = "github";
       f.node("select[name=input-kind]").dispatchEvent(new Event("change"));
       f.node("input[name=repository]").value = "https://github.com/fixture/repo"; f.submit();
-      assert.deepEqual(f.state.calls.at(-1), ["submit", "https://github.com/fixture/repo", ""]);
+      assert.deepEqual(f.state.calls.at(-1), ["submit", "https://github.com/fixture/repo", "", []]);
     } finally { f.close(); }
   }
 });
@@ -151,7 +151,8 @@ test("restoring local origin never reopens the folder and groups saved local/Git
   try {
     f.click("[data-choose-folder]"); await flush();
     const record = { id: "S".repeat(43), kind: "working-tree", repository: "same", ref: "working tree", revision: "c".repeat(64), savedAt: "now" };
-    f.state.restore({ kind: "working-tree", name: "same", captureId: record.revision }, record, []);
+    f.state.view.working(()=>{}); // saved opening binds callbacks to the current source epoch
+    f.state.restore({ kind: "working-tree", name: "same", captureId: record.revision }, record, {version:'code-city-auto-exclusions-1',manual:[],included:[],detected:[],effective:[]});
     assert.equal(picked, 1); assert.equal(f.node("input[name=repository]").value, "");
     assert.equal(f.node("[data-origin-label]").textContent, "Working-tree capture");
     f.submit(); assert.deepEqual(f.state.calls, [["start"]]);
@@ -160,4 +161,43 @@ test("restoring local origin never reopens the folder and groups saved local/Git
     f.click("[data-open-saved]"); await flush();
     assert.equal(f.node("[data-saved-projects]").children.length, 2);
   } finally { f.close(); }
+});
+
+const policyFor = (count=70) => ({version:'code-city-auto-exclusions-1',manual:['p00'],included:[],detected:Array.from({length:count},(_,i)=>[`p${String(i).padStart(2,'0')}/.next`,'cache:.next']),effective:['p00',...Array.from({length:count},(_,i)=>`p${String(i).padStart(2,'0')}/.next`)]});
+const automaticRows = f => f.node('[data-automatic-exclusions]').children[1].children;
+const checkbox = row => row.children[0].children[0];
+test('automatic rows use inert path/reason/native checkboxes and 32-row paging; edits stage without city/upload work',async()=>{
+ const f=await fixture(async()=>({name:'Synthetic'}));
+ try {
+  f.state.view.working(()=>{});f.state.view.exclusionPolicy(policyFor(),false);
+  const root=f.node('[data-automatic-exclusions]');assert.match(root.children[0].textContent,/incomplete/u);
+  assert.equal(automaticRows(f).length,32);const old=checkbox(automaticRows(f)[0]);assert.equal(old.checked,true);assert.match(old.attributes.get('aria-label'),/Automatic exclusion/u);
+  assert.match(automaticRows(f)[0].children[0].children[2].textContent,/manual exclusion wins/u);
+  const clears=f.state.clears;old.checked=false;old.dispatchEvent(new Event('change'));assert.equal(f.state.clears,clears);assert.deepEqual(f.state.calls,[['start']]);
+  root.children[2].children[1].dispatchEvent(new Event('click'));assert.equal(automaticRows(f).length,32);
+  old.checked=true;old.dispatchEvent(new Event('change')); // detached first-page callback has no authority
+  root.children[2].children[1].dispatchEvent(new Event('click'));assert.equal(automaticRows(f).length,6);
+  f.node('select[name=input-kind]').value='github'; // no source-change event: inspect staged submit
+  f.node('input[name=repository]').value='https://github.com/fixture/repo';f.submit();
+  assert.deepEqual(f.state.calls.at(-1),['submit','https://github.com/fixture/repo','',['p00/.next']]);assert.equal(f.state.clears,clears);
+  f.state.view.failed('No supported modules','ADM-06');assert.equal(automaticRows(f).length,6);
+  assert.equal(f.node('form').hidden,false);assert.equal(f.node('[data-exclusions]').open,true);assert.equal(automaticRows(f).length,6);
+  f.click('[data-change-repository]');assert.equal(f.node('form').hidden,true);f.click('[data-change-repository]');assert.equal(f.node('form').hidden,false);
+ } finally {f.close();}
+});
+
+test('restored exact includes/manual settings survive explicit folder selection; source changes and stale reports cannot restore them',async()=>{
+ const f=await fixture(async()=>({name:'Selected explicitly'}));
+ try {
+  const policy={version:'code-city-auto-exclusions-1',manual:['manual'],included:['.angular'],detected:[['.angular','cache:.angular']],effective:['manual']};
+  const record={id:'S'.repeat(43),kind:'working-tree',revision:'c'.repeat(64)};
+  f.state.restore({kind:'working-tree',name:'Saved',captureId:record.revision},record,policy);
+  f.click('[data-choose-folder]');await flush();assert.equal(checkbox(automaticRows(f)[0]).checked,false);
+  assert.equal(f.node('textarea[name=additional-exclusions]').value,'manual');f.submit();
+  assert.deepEqual(f.state.calls.at(-1).slice(2),['Selected explicitly','manual',['.angular']]);
+  const old=checkbox(automaticRows(f)[0]);
+  f.node('select[name=input-kind]').value='github';f.node('select[name=input-kind]').dispatchEvent(new Event('change'));
+  old.checked=false;old.dispatchEvent(new Event('change'));f.state.view.exclusionPolicy(policy,true);assert.equal(automaticRows(f).length,0);
+  f.node('input[name=repository]').value='https://github.com/fixture/repo';f.submit();assert.deepEqual(f.state.calls.at(-1).at(-1),[]);
+ } finally {f.close();}
 });

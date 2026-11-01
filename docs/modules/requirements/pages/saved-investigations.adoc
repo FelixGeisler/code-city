@@ -32,11 +32,11 @@ the default and cross-computer access needs an operator-selected deployment.
 
 == Complete source-once snapshot
 
-The version-3 container retains:
+The version-4 container retains:
 
 * Tagged input origin: real GitHub URL/ref/commit or local folder display name
   and actual working-tree capture ID, never an absolute filesystem path.
-* Fixed/additional exclusions, canonical hierarchy and every per-file outcome.
+* The applied xref:automatic-exclusions.adoc[recorded automatic/manual exclusion policy], canonical hierarchy and every per-file outcome.
 * Successful raw metrics, unit identities/owned regions, exact complexity and
   decision kind/span/owner contributions in normalized byte coordinates.
 * Fixed city geometry, colors, bounds and source/metric associations.
@@ -45,7 +45,7 @@ The version-3 container retains:
 * Build-input fingerprint of production source, pinned parser assets, lockfile
   and standalone builder; format version is separate.
 
-Save does not archive the checkout, dependency/build trees, assets, Git metadata,
+Save does not archive the checkout, excluded dependency/build trees, assets, Git metadata,
 original raw duplicates or invalid binary-source payloads. Full drill-down is
 retained for all admitted analyzed files; there is no top-N code sampling.
 
@@ -56,12 +56,11 @@ execute source, compute/certify metrics, verify a claimed build identity or
 certify GitHub/local provenance. Hash consistency is not proof that a client
 actually used the claimed inputs or analyzer.
 
-Version-3 saves with either the original five fixed exclusions or the updated
-six including `.angular` remain readable. Reopen preserves their recorded source
-and results without reapplying current exclusions. Analyze again to omit Angular
-cache code from an existing investigation.
-
-Only version 3 payloads are supported under the accepted pre-production policy.
+Only version 4 payloads are supported under the accepted pre-production policy
+in xref:architecture:adr/0021-recorded-automatic-exclusion-policy.adoc[ADR 0021].
+Reopen restores the recorded policy and original source/results without applying
+today's defaults. Pending checkbox/manual edits affect only the next Analyze,
+not Save of the current investigation.
 Older payloads fail explicitly with no acquisition, parser fallback, migration,
 rewrite, implicit relayout or deletion. Older seven-field receipt metadata stays
 readable in inventory so existing files do not block new-format Save/catalog

@@ -72,7 +72,7 @@ retains its current meaning.
 
 == Snapshot format
 
-Recursive investigations use snapshot version 3 and an explicit recursive geometry
+Recursive investigations use the xref:saved-investigations.adoc[current snapshot format] and an explicit recursive geometry
 identifier. Reopen restores the recorded layout without acquisition, parser
 initialization or metric recomputation. Old, unknown and corrupt formats fail
 explicitly. The user waived pre-production backward compatibility: there is no
@@ -89,7 +89,7 @@ and nested files; root versus `_root`; Unicode/ties; deep and wide hierarchies;
 unchanged metric dimensions; nearest building/platform picks; exact descendant
 highlighting; native keyboard navigation; stale results; no camera/geometry upload
 on drill-down; and responsive desktop/mobile views. Exercise the existing 4,000-file
-and 40 MiB envelope with representative deep and broad trees. Verify explicit rejection of old formats and version-3 saved snapshots through
+and 40 MiB envelope with representative deep and broad trees. Verify explicit rejection of old formats and current saved snapshots through
 host restart and fresh browser contexts, without provider or parser requests.
 Hash existing saved files before/after local rollout to prove they were not modified. These
 checks are not a universal device-memory or timing guarantee.

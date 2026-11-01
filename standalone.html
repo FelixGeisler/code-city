@@ -26,9 +26,13 @@
       </div>
       <button type="submit">Analyze</button>
       <details data-exclusions>
-        <summary>Additional exclusions (optional)</summary>
-        <label for="additional-exclusions">One canonical path per line</label>
+        <summary>Exclusions</summary>
+        <label for="additional-exclusions">Manual exclusions: one canonical path per line</label>
         <textarea id="additional-exclusions" name="additional-exclusions" rows="3" autocomplete="off" spellcheck="false"></textarea>
+        <h2>Automatic exclusions</h2>
+        <p>Recognized dependency, generated output/report and framework/cache directory conventions are excluded by default, not certified as generated. Each detected directory can be included on the next Analyze. Manual paths always win; local .git is never included. No gitignore inference.</p>
+        <p data-automatic-rules></p>
+        <div data-automatic-exclusions></div>
       </details>
       <p id="shared-save-info" data-shared-save>Analyze and inspection stay in your browser. Only Save uploads all admitted normalized source and results. No login: everyone reaching this instance can read saved investigations and code.</p>
     </form>

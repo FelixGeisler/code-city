@@ -1,3 +1,4 @@
+import { automaticRule, excludedDirectory, exclusionSettings, recordExclusionPolicy } from "../domain/exclusion-policy";
 import {
   isLocalMetadataPath,
   MAX_LOCAL_RAW_BYTES,
@@ -8,7 +9,6 @@ import {
 } from "../application/local-source";
 import {
   hasSupportedSuffix,
-  isCanonicalAdditionalExclusions,
   isCanonicalPath,
   isExcludedSourcePath,
   MAX_ADMITTED_MODULES,
@@ -86,19 +86,23 @@ type Frame = {
 
 /**
  * Iterative, read-only native directory traversal. Excluded directories are never entered:
- * values() and getFile() are not called for .git (any case), fixed or user exclusions.
+ * values() and getFile() are not called for .git (any case), excluded automatic roots or manual paths.
  * Only eligible file capabilities are retained, bounded by 4,000; never materializes a FileList.
  * Each inventory owns independent read closures, so replacement cannot alias an earlier capture.
  * Native File System Access controls physical/link visibility; this gateway never resolves links.
  */
 export function createLocalFolderGateway(root: unknown): LocalWorkingTreeGateway {
   return {
-    async loadInventory(exclusions, signal) {
+    async loadInventory(exclusions, signal, report = () => {}) {
+      let settings;
+      try { settings = exclusionSettings(exclusions); } catch { return unavailable(); }
+      const roots: [string, string][] = [];
+      let complete = false;
       const stack: Frame[] = [];
       const candidates: LocalSourceCandidate[] = [];
       let skippedSupportedDirectory = false;
       try {
-        if (signal.aborted || !directory(root) || !isCanonicalAdditionalExclusions(exclusions)) return unavailable();
+        if (signal.aborted || !directory(root)) return unavailable();
         stack.push({ rawPath: "", iterator: root.values(), names: new Set() });
         while (stack.length > 0) {
           if (signal.aborted) return unavailable();
@@ -117,19 +121,23 @@ export function createLocalFolderGateway(root: unknown): LocalWorkingTreeGateway
           if (name.length === 0 || name.includes("/") || !isCanonicalPath(canonicalPath)
             || frame.names.has(canonicalName)) return invalidPath();
           frame.names.add(canonicalName);
-          if (isLocalMetadataPath(canonicalPath) || isExcludedSourcePath(canonicalPath, exclusions)) continue;
+          if (isLocalMetadataPath(canonicalPath)) continue;
           if (entry.kind === "directory") {
+            const rule = automaticRule(canonicalPath);
+            if (rule) { roots.push([canonicalPath, rule.id]); report(recordExclusionPolicy(settings, roots), false); }
+            if (excludedDirectory(canonicalPath, settings)) continue;
             if (!directory(entry)) return unavailable();
             skippedSupportedDirectory ||= hasSupportedSuffix(canonicalPath);
             stack.push({ rawPath, iterator: entry.values(), names: new Set() });
           } else if (entry.kind === "file") {
-            if (!hasSupportedSuffix(canonicalPath)) continue;
+            if (!hasSupportedSuffix(canonicalPath) || isExcludedSourcePath(canonicalPath, settings)) continue;
             if (typeof entry.getFile !== "function") return unavailable();
             const handle = entry as unknown as FileHandle;
             candidates.push({ rawPath, canonicalPath, readRawSource: signal => readFile(handle, signal) });
             if (candidates.length > MAX_ADMITTED_MODULES) return limit();
           } else return unavailable();
         }
+        complete = true;
         if (candidates.length === 0) return {
           kind: "failure", category: "No supported modules", code: skippedSupportedDirectory ? "ADM-07" : "ADM-06",
         };
@@ -141,6 +149,7 @@ export function createLocalFolderGateway(root: unknown): LocalWorkingTreeGateway
         for (const frame of stack.reverse()) {
           try { await frame.iterator.return?.(); } catch { /* Preserve the original sanitized failure. */ }
         }
+        report(recordExclusionPolicy(settings, roots), complete);
       }
     },
   };

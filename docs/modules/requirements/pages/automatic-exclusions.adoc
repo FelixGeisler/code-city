@@ -1,0 +1,25 @@
+= Automatic source exclusions
+
+Explicit Analyze applies one case-sensitive directory catalogue at every depth:
+
+* Dependencies: `node_modules`, `bower_components`, `.pnpm-store`; only the pairs `.yarn/cache` and `.yarn/unplugged`.
+* Generated outputs/reports: `dist`, `build`, `bin`, `obj`, `coverage`, `.nyc_output`.
+* Framework/cache: `.angular`, `.next`, `.nuxt`, `.svelte-kit`, `.parcel-cache`, `.vite`, `.turbo`, `.nx`.
+
+Reasons identify recognized conventions, not certified authorship. Similar names, `vendor`, `packages`, `generated`, generic `.cache`, `.yarn/plugins` and configuration remain included. No gitignore inference, manifest execution or content classification occurs. Local `.git` at any case remains non-overridable.
+
+== Interaction and precedence
+
+Folder selection alone performs no discovery. Exclusions details separate manual paths from automatic detected paths and reasons. Native checked checkboxes exclude by default; unchecking stages an exact-root include exception for the next explicit Analyze. Manual exact/ancestor exclusions always win. Siblings and nested matching roots remain independent. Rows include explicitly included roots and explain manual overlap, with 32-row pagination. Editing settings changes no current city, source, camera or GPU buffers and performs no automatic analysis or upload.
+
+A new attempt snapshots settings and clears prior discovery. Failed, cancelled or all-excluded attempts keep available detections editable and identify incomplete discovery honestly. Late callbacks cannot replace newer source/attempt state. Source changes reset live include exceptions. Saved working-tree reanalysis retains restored settings through explicit folder selection, without reconnecting a folder implicitly.
+
+== Capture and Save
+
+The recorded version-1 policy contains canonical sorted unique manual paths, exact included roots, detected path/rule pairs and effective exclusions (manual paths plus actually pruned automatic roots). Discovery never claims hidden descendants. Local pruning precedes descent/read; GitHub validates the complete inventory before filtering in both admission passes. Existing source budgets and read ownership remain unchanged.
+
+Save records applied worker settings, never pending edits. Version-4 snapshots restore the same policy, source and city without folder, provider or parser acquisition. Unknown versions/rules, malformed or inconsistent policies and older snapshot versions are rejected, not migrated or deleted. Older receipts remain listable. Source-once envelopes and Save-only metadata bounds remain in force.
+
+== Acceptance
+
+Cover catalogue boundaries and case, narrow Yarn pairs, Angular/Vite nested roots, prune-before-descent, manual precedence, exact sibling/nested independence, included source acquisition in both gateways, partial/all-excluded editing, stale callbacks, staged edits without side effects, applied-policy Save and v4 strict validation/restore.

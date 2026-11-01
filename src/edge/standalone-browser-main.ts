@@ -1,3 +1,6 @@
+import { AUTOMATIC_EXCLUSION_RULES } from "../domain/exclusion-policy";
+import { createAutomaticExclusionsView } from "./automatic-exclusions-view";
+import { parseAdditionalExclusions } from "../domain/source-admission";
 import { validWorkingTreeName } from "../application/investigation-origin";
 import {
   createStandaloneBrowserController,
@@ -27,6 +30,13 @@ const originLabel = requiredElement<HTMLElement>("[data-origin-label]");
 let selectedFolder: { root: unknown; name: string } | undefined;
 let folderPickerEpoch = 0;
 const exclusions = requiredElement<HTMLTextAreaElement>("textarea[name=additional-exclusions]");
+requiredElement<HTMLElement>("[data-automatic-rules]").textContent = `Automatic directory conventions: ${AUTOMATIC_EXCLUSION_RULES.map(rule => rule.path).join(", ")}.`;
+const automaticExclusions = createAutomaticExclusionsView(requiredElement<HTMLElement>("[data-automatic-exclusions]"));
+let sourceSettingsEpoch = 0, attemptSettingsEpoch = 0;
+let retainRestoredFolderSettings = false;
+const resetSourceSettings = (): void => { sourceSettingsEpoch++; retainRestoredFolderSettings = false; automaticExclusions.reset(); };
+exclusions.addEventListener("input", () => { automaticExclusions.manual(parseAdditionalExclusions(exclusions.value) ?? []); });
+repository.addEventListener("input", resetSourceSettings);
 const feedback = requiredElement<HTMLElement>("[data-feedback]");
 const status = requiredElement<HTMLElement>("[data-status]");
 const commit = requiredElement<HTMLOutputElement>("[data-commit]");
@@ -62,6 +72,13 @@ function showAttempt(working: boolean): void {
   changeRepository.textContent = "Change source";
   changeRepository.setAttribute("aria-expanded", "false");
   repositoryName.textContent = capturedRepositoryUrl;
+}
+
+function showEditableExclusions(): void {
+  form.hidden = false;
+  requiredElement<HTMLDetailsElement>("[data-exclusions]").open = true;
+  changeRepository.textContent = "Close setup";
+  changeRepository.setAttribute("aria-expanded", "true");
 }
 
 function replaceStatus(message: string, action?: Readonly<{ label: string; run: () => void }>): void {
@@ -169,7 +186,12 @@ const view: StandaloneBrowserView = Object.freeze({
     renderFailures([]);
     presentation.clear();
   },
+  exclusionPolicy(policy, complete) {
+    if (sourceSettingsEpoch === attemptSettingsEpoch) automaticExclusions.report(policy, complete);
+  },
   working(cancel) {
+    attemptSettingsEpoch = sourceSettingsEpoch;
+    automaticExclusions.begin();
     showAttempt(true);
     replaceWorkingStatus(cancel);
   },
@@ -197,6 +219,7 @@ const view: StandaloneBrowserView = Object.freeze({
   },
   failed(category, code, revision) {
     showAttempt(false);
+    showEditableExclusions();
     presentation.clear();
     renderFailures([]);
     commit.textContent = revision ?? "";
@@ -204,6 +227,7 @@ const view: StandaloneBrowserView = Object.freeze({
   },
   cancelled() {
     showAttempt(false);
+    showEditableExclusions();
     presentation.clear();
     renderFailures([]);
     commit.textContent = "";
@@ -227,6 +251,7 @@ const view: StandaloneBrowserView = Object.freeze({
   },
   allFilesFailed(_generation, failures, revision) {
     showAttempt(false);
+    showEditableExclusions();
     replaceStatus("No files could be analyzed.");
     feedback.textContent = "";
     commit.textContent = revision;
@@ -247,7 +272,8 @@ function showSaved(record: SavedRecord): void {
   saveStatus.replaceChildren(time, link);
   history.replaceState(null, "", `/saved/${record.id}`);
 }
-const controller = createStandaloneBrowserController(createBrowserWorkerTransport(undefined, (origin, record, savedExclusions) => {
+const controller = createStandaloneBrowserController(createBrowserWorkerTransport(undefined, (origin, record, savedPolicy) => {
+  if (sourceSettingsEpoch !== attemptSettingsEpoch) return;
   view.origin?.(origin);
   inputKind.value = origin.kind;
   // Reopening a capture never reopens a filesystem capability.
@@ -255,7 +281,9 @@ const controller = createStandaloneBrowserController(createBrowserWorkerTranspor
   folderName.textContent = "No folder selected";
   repository.value = origin.kind === "github" ? origin.repositoryUrl : "";
   localSetup.hidden = origin.kind !== "working-tree"; githubSetup.hidden = origin.kind !== "github";
-  exclusions.value = savedExclusions.join("\n");
+  exclusions.value = savedPolicy.manual.join("\n");
+  automaticExclusions.restore(savedPolicy);
+  retainRestoredFolderSettings = origin.kind === "working-tree";
   showSaved(record);
 }), view);
 const secureAnalysis = window.isSecureContext && globalThis.crypto?.subtle !== undefined;
@@ -263,9 +291,10 @@ function submitAnalysis(repositoryUrl: string, additionalExclusions: string): vo
   if (!secureAnalysis) { replaceStatus("Browser analysis requires HTTPS or localhost."); return; }
   history.replaceState(null, "", "/");
   capturedRepositoryUrl = repositoryUrl; originLabel.textContent = "Commit";
-  controller.submit(repositoryUrl, additionalExclusions);
+  controller.submit(repositoryUrl, additionalExclusions, automaticExclusions.included());
 }
 inputKind.addEventListener("change", () => {
+  resetSourceSettings();
   folderPickerEpoch++;
   localSetup.hidden = inputKind.value !== "working-tree";
   githubSetup.hidden = inputKind.value !== "github";
@@ -278,6 +307,8 @@ chooseFolder.addEventListener("click", () => {
   void directoryPicker.call(window, { mode: "read" }).then(root => {
     if (epoch !== folderPickerEpoch) return;
     if (!validWorkingTreeName(root.name)) { folderStatus.textContent = "Folder name is not supported."; return; }
+    if (retainRestoredFolderSettings) retainRestoredFolderSettings = false;
+    else resetSourceSettings();
     selectedFolder = { root, name: root.name };
     folderName.textContent = root.name;
     folderStatus.textContent = "Folder selected. Choose Analyze to capture its current files; nothing has been uploaded.";
@@ -297,7 +328,7 @@ form.addEventListener("submit", (event) => {
   folderPickerEpoch++;
   history.replaceState(null, "", "/");
   capturedRepositoryUrl = selectedFolder.name; originLabel.textContent = "Working-tree capture";
-  controller.submitWorkingTree(selectedFolder.root, selectedFolder.name, exclusions.value);
+  controller.submitWorkingTree(selectedFolder.root, selectedFolder.name, exclusions.value, automaticExclusions.included());
 });
 changeRepository.addEventListener("click", () => {
   if (!hasAttempt || isWorking) return;

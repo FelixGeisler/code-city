@@ -1,3 +1,4 @@
+import type { ExclusionInput } from "../domain/exclusion-policy";
 import type {
   ImmutableRawSourceGateway,
   ImmutableSourceGateway,
@@ -186,7 +187,7 @@ export function projectTreeEvidence(
   value: unknown,
   expectedRoot: string,
   selectedWidth: number,
-  additionalExclusions: readonly string[] = Object.freeze([]),
+  additionalExclusions: ExclusionInput = Object.freeze([]),
 ): readonly ProjectedTreeEntry[] | undefined {
   if (ownString(value, "sha") !== expectedRoot || !validObjectId(expectedRoot, selectedWidth)) {
     return undefined;
@@ -264,7 +265,7 @@ async function requestTreeInventory(
   repository: RepositoryReference,
   root: string,
   selectedWidth: number,
-  additionalExclusions: readonly string[],
+  additionalExclusions: ExclusionInput,
   signal: AbortSignal,
 ): Promise<readonly ProjectedTreeEntry[] | undefined> {
   const evidence = await requestJson(fetchImpl, treeUrl(repository, root), TREE_EVIDENCE_CAP, signal);

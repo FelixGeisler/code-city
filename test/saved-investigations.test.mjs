@@ -15,6 +15,7 @@ const {analyzeProjectSources}=await import('../src/application/project-analysis.
 const {createNodeTreeSitterAdapter}=await import('../src/edge/node/parser-assets.ts');
 const {decodeSnapshot,validateSavedHeader,snapshotPrefix,SAVE_LIMITS,hasSaveCapacity,snapshotIdentity,parseSavedRecord}=await import('../src/application/saved-investigation.ts');
 const {parseRepositoryReference}=await import('../src/domain/repository-reference.ts');
+const {recordExclusionPolicy}=await import('../src/domain/exclusion-policy.ts');
 const {createGithubRevisionGateway}=await import('../src/edge/github-revision-gateway.ts');
 const SHA='a'.repeat(40);
 const temporary=await mkdtemp(path.join(os.tmpdir(),'code-city-saved-tests-'));
@@ -30,21 +31,20 @@ async function snapshot(url='https://github.com/owner/one/tree/main',revision=SH
  assert.equal(acquired.kind,'acquired');
  const analyzed=await analyzeProjectSources(acquired,createNodeTreeSitterAdapter(),undefined,capture);
  assert.equal(analyzed.kind,'analyzed');
- const blob=await capture.snapshot({kind:'github',repositoryUrl:url,revision},['excluded'],analyzed.result,'f'.repeat(64));
+ const blob=await capture.snapshot({kind:'github',repositoryUrl:url,revision},recordExclusionPolicy(['excluded']),analyzed.result,'f'.repeat(64));
  return {bytes:Buffer.from(await blob.arrayBuffer()),result:analyzed.result,capture};
 }
 async function host(data){const preload=await writeSignalPreload(temporary);const server=launchStandalone({artifactRoot,preload,serverArguments:['--port','0','--data-dir',data]});return {server,origin:await readyOrigin(server)};}
 async function stop(server){sendGracefulSignal(server,'SIGTERM');await expectCleanExit(server);}
 const post=(origin,bytes)=>request(origin,'/api/investigations',{method:'POST',headers:{Origin:origin,'Content-Type':'application/octet-stream'},body:bytes});
 
-test('v3 snapshots retain exactly one normalized copy, outcomes, hierarchy, unit identities and owned contributions',async()=>{
+test('v4 snapshots retain exactly one normalized copy, outcomes, hierarchy, unit identities and owned contributions',async()=>{
  const saved=await snapshot(),decoded=await decodeSnapshot(saved.bytes);
  assert.equal(decoded.header.files.length,3);assert.equal(decoded.header.analyzer,'f'.repeat(64));
  assert.deepEqual(decoded.header.hierarchy,['src']);
- assert.deepEqual(decoded.header.exclusions,['excluded']);
- assert.deepEqual(decoded.header.fixedExcludedSegments,['node_modules','dist','build','bin','obj','.angular']);
+ assert.deepEqual(decoded.header.exclusionPolicy,recordExclusionPolicy(['excluded']));
  assert.equal(decoded.header.files[0].outcome,'Source text is not supported');
- assert.equal(decoded.header.version,3);assert.equal(saved.bytes.subarray(0,8).toString(),'CCSAVE3\0');
+ assert.equal(decoded.header.version,4);assert.equal(saved.bytes.subarray(0,8).toString(),'CCSAVE4\0');
  assert.equal(decoded.header.files[0].normalized,null);assert.equal(decoded.sourceBytes.length,2);
  assert.equal(new TextDecoder().decode(decoded.sourceBytes[0]),'export function f(x) { return x ? 1 : 0; }\n');
  assert.equal(decoded.sourceBytes[1].length,0);
@@ -62,37 +62,26 @@ test('v3 snapshots retain exactly one normalized copy, outcomes, hierarchy, unit
 function encode(header,sections){const bytes=Buffer.from(JSON.stringify(header));return Buffer.concat([snapshotPrefix(bytes),bytes,...sections]);}
 const descriptor=bytes=>({length:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});
 
-test('exact historical-five and current-six v3 policies preserve cached source/results through decode and native restart',async(t)=>{
- const historical=['node_modules','dist','build','bin','obj'],current=[...historical,'.angular'];
- const filePath='SYNTHETICFLOW.Hub.Web/ClientApp/.angular/cache/22.2.2/flow.hub.web/vite/deps/dependency.js';
+test('v4 recorded overrides survive native restart; unknown policy/rules and v3 reject',async(t)=>{
+ const root='SyntheticWeb/ClientApp/.angular',filePath=root+'/cache/22.2.2/app/vite/deps/dependency.js';
  const source=new TextEncoder().encode('const synthetic = ;\n'),capture=createInvestigationCapture();
  const result={city:null,sources:[{canonicalPath:filePath,normalizedUtf8:source}],notAnalyzedFiles:[{canonicalPath:filePath,category:'Syntax could not be analyzed'}]};
- const original=await decodeSnapshot(new Uint8Array(await(await capture.snapshot({kind:'working-tree',name:'Synthetic historical capture',captureId:'b'.repeat(64)},[],result,'f'.repeat(64))).arrayBuffer()));
- const data=path.join(temporary,'v3-policies');let running=await host(data);t.after(()=>terminateForCleanup(running.server));
- const saved=[];
- for(const policy of [historical,current]){
-  const header=structuredClone(original.header);header.fixedExcludedSegments=policy;
-  const body=encode(header,original.sourceBytes),decoded=await decodeSnapshot(body);
-  assert.deepEqual(decoded.header,header);assert.deepEqual(decoded.sourceBytes,original.sourceBytes);
-  const response=await post(running.origin,body);assert.equal(response.status,201,response.body.toString());
-  saved.push({id:JSON.parse(response.body).id,body,header});
+ const policy=recordExclusionPolicy({manual:['other'],included:[root]},[[root,'cache:.angular']]);
+ const original=await decodeSnapshot(new Uint8Array(await(await capture.snapshot({kind:'working-tree',name:'Synthetic capture',captureId:'b'.repeat(64)},policy,result,'f'.repeat(64))).arrayBuffer()));
+ const data=path.join(temporary,'v4-policies');let running=await host(data);t.after(()=>terminateForCleanup(running.server));
+ const body=encode(original.header,original.sourceBytes);
+ const response=await post(running.origin,body);assert.equal(response.status,201,response.body.toString());const id=JSON.parse(response.body).id;
+ for(const mutate of [p=>p.version='unknown',p=>p.extra=true,p=>p.detected[0][1]='unknown',p=>p.effective.push(root),p=>p.included=[],p=>p.manual=['z','a'],p=>p.detected.push(p.detected[0]),p=>p.included.push('../bad'),p=>p.detected=[],p=>{p.detected.unshift(['.git/node_modules','dependency:node_modules']);p.effective.unshift('.git/node_modules');}]){
+  const header=structuredClone(original.header);mutate(header.exclusionPolicy);
+  const invalid=encode(header,original.sourceBytes);await assert.rejects(()=>decodeSnapshot(invalid));assert.equal((await post(running.origin,invalid)).status,422);
  }
- for(const policy of [[],[...historical,'cache'],[...current,'vendor'],[...historical].reverse(),['dist','node_modules','build','bin','obj','.angular'],[...historical,'obj'],historical.slice(0,-1),null]){
-  const header=structuredClone(original.header);header.fixedExcludedSegments=policy;
-  const body=encode(header,original.sourceBytes);
-  await assert.rejects(()=>decodeSnapshot(body));
-  assert.equal((await post(running.origin,body)).status,422,JSON.stringify(policy));
+ for(const version of [2,3]){
+  const header=structuredClone(original.header);header.version=version;const invalid=encode(header,original.sourceBytes);invalid[6]=48+version;
+  await assert.rejects(()=>decodeSnapshot(invalid),/Unsupported saved investigation version/u);assert.equal((await post(running.origin,invalid)).status,422);
  }
  await stop(running.server);running=await host(data);
- for(const {id,body,header}of saved){
-  const reopened=await request(running.origin,'/api/investigations/'+id);
-  assert.equal(reopened.status,200);assert.deepEqual(reopened.body,body);
-  const decoded=await decodeSnapshot(reopened.body);assert.deepEqual(decoded.header,header);
-  assert.equal(decoded.header.files[0].path,filePath);assert.equal(decoded.header.files[0].outcome,'Syntax could not be analyzed');
-  assert.deepEqual(decoded.sourceBytes,[source]);
- }
- assert.equal(JSON.parse((await request(running.origin,'/api/investigations')).body).length,2);
- await stop(running.server);
+ const reopened=await request(running.origin,'/api/investigations/'+id);assert.equal(reopened.status,200);assert.deepEqual(reopened.body,body);
+ const decoded=await decodeSnapshot(reopened.body);assert.deepEqual(decoded.header.exclusionPolicy,policy);assert.equal(decoded.header.files[0].path,filePath);assert.deepEqual(decoded.sourceBytes,[source]);await stop(running.server);
 });
 
 test('syntax and metric failures retain normalized source with local identity and no raw capture API',async(t)=>{
@@ -100,11 +89,11 @@ test('syntax and metric failures retain normalized source with local identity an
  const origin={kind:'working-tree',name:'Edited project',captureId:'c'.repeat(64)};
  const sources=['syntax.js','metrics.js'].map(canonicalPath=>({canonicalPath,normalizedUtf8:new TextEncoder().encode('const x = ;\n')}));
  const result={city:null,sources,notAnalyzedFiles:[{canonicalPath:'syntax.js',category:'Syntax could not be analyzed'},{canonicalPath:'metrics.js',category:'Metrics could not be computed'},{canonicalPath:'unsupported.js',category:'Source text is not supported'}]};
- const body=Buffer.from(await(await capture.snapshot(origin,[],result,'f'.repeat(64))).arrayBuffer()),decoded=await decodeSnapshot(body);
+ const body=Buffer.from(await(await capture.snapshot(origin,recordExclusionPolicy([]),result,'f'.repeat(64))).arrayBuffer()),decoded=await decodeSnapshot(body);
  assert.deepEqual(decoded.header.origin,origin);assert.equal(decoded.sourceBytes.length,2);
  assert.deepEqual(decoded.header.files.map(file=>[file.path,file.normalized!==null]),[['metrics.js',true],['syntax.js',true],['unsupported.js',false]]);
  assert.deepEqual(snapshotIdentity(decoded.header),{kind:'working-tree',repository:origin.name,ref:'working tree',revision:origin.captureId});
- for(const broken of [{...result,sources:[]},{...result,sources:[...sources,sources[0]]},{...result,sources:[...sources,{canonicalPath:'unsupported.js',normalizedUtf8:new Uint8Array()}]}])await assert.rejects(()=>capture.snapshot(origin,[],broken,'f'.repeat(64)),/source evidence/u);
+ for(const broken of [{...result,sources:[]},{...result,sources:[...sources,sources[0]]},{...result,sources:[...sources,{canonicalPath:'unsupported.js',normalizedUtf8:new Uint8Array()}]}])await assert.rejects(()=>capture.snapshot(origin,recordExclusionPolicy([]),broken,'f'.repeat(64)),/source evidence/u);
  const running=await host(path.join(temporary,'failed-text'));t.after(()=>terminateForCleanup(running.server));
  const response=await post(running.origin,body);assert.equal(response.status,201,response.body.toString());
  assert.deepEqual((await request(running.origin,'/api/investigations/'+JSON.parse(response.body).id)).body,body);await stop(running.server);
@@ -129,7 +118,7 @@ test('capture budget exhaustion disables Save without changing completed metrics
  const {capture,result}=await snapshot();const city=result.city,sources=result.sources,inspection=capture.inspection('src/a.js');
  assert.ok(inspection);const contributions=[...inspection.contributions()];
  capture.contribution('unpublished.js',0,'x'.repeat(12*1048576),0,1);
- await assert.rejects(()=>capture.snapshot({kind:'github',repositoryUrl:'https://github.com/owner/one',revision:SHA},[],result,'f'.repeat(64)),/Save limits/u);
+ await assert.rejects(()=>capture.snapshot({kind:'github',repositoryUrl:'https://github.com/owner/one',revision:SHA},recordExclusionPolicy([]),result,'f'.repeat(64)),/Save limits/u);
  assert.equal(result.city,city);assert.equal(result.sources,sources);assert.equal(result.city.inspection[0].M,2);
  assert.equal(capture.inspection('src/a.js'),inspection);assert.deepEqual([...inspection.contributions()],contributions);
  capture.contribution('later.js',0,'if',0,1);
@@ -153,8 +142,8 @@ test('deep supported hierarchy saves and reopens within existing byte budgets wi
  const gateway={async loadInventory(){return{kind:'inventory',entries:[...Array.from({length:2049},(_,i)=>({path:directory.slice(0,(i+1)*2-1),mode:'040000',type:'tree'})),{path:filePath,mode:'100644',type:'blob',sha:createHash('sha1').update(`blob ${raw.length}\0`).update(raw).digest('hex')}]};},async readRawSource(){return{kind:'source',rawBytes:Uint8Array.from(raw)};}};
  const url='https://github.com/owner/deep',acquired=await acquireProjectSources(parseRepositoryReference(url),SHA,new AbortController().signal,gateway);assert.equal(acquired.kind,'acquired');
  const analyzed=await analyzeProjectSources(acquired,createNodeTreeSitterAdapter(),undefined,capture);assert.equal(analyzed.kind,'analyzed');
- const body=Buffer.from(await(await capture.snapshot({kind:'github',repositoryUrl:url,revision:SHA},[],analyzed.result,'f'.repeat(64))).arrayBuffer());
- const decoded=await decodeSnapshot(body);assert.equal(decoded.header.version,3);assert.equal(decoded.header.hierarchy.length,2049);assert.ok(decoded.header.hierarchy.at(-1).length>4096);assert.equal(decoded.header.files[0].path,filePath);assert.ok(new TextEncoder().encode(JSON.stringify(decoded.header)).length<SAVE_LIMITS.header);
+ const body=Buffer.from(await(await capture.snapshot({kind:'github',repositoryUrl:url,revision:SHA},recordExclusionPolicy([]),analyzed.result,'f'.repeat(64))).arrayBuffer());
+ const decoded=await decodeSnapshot(body);assert.equal(decoded.header.version,4);assert.equal(decoded.header.hierarchy.length,2049);assert.ok(decoded.header.hierarchy.at(-1).length>4096);assert.equal(decoded.header.files[0].path,filePath);assert.ok(new TextEncoder().encode(JSON.stringify(decoded.header)).length<SAVE_LIMITS.header);
  const data=path.join(temporary,'deep-store');let running=await host(data);t.after(()=>terminateForCleanup(running.server));const response=await post(running.origin,body);assert.equal(response.status,201,response.body.toString());const record=JSON.parse(response.body);
  await stop(running.server);running=await host(data);const reopened=await request(running.origin,'/api/investigations/'+record.id);assert.equal(reopened.status,200);assert.deepEqual(reopened.body,body);assert.equal((await decodeSnapshot(reopened.body)).header.files[0].path,filePath);
 });
@@ -198,7 +187,7 @@ test('old seven-field receipts coexist with new local saves; unsupported old pay
  assert.deepEqual(JSON.parse((await request(running.origin,'/api/investigations')).body),[receipt]);
  const oldOpen=await request(running.origin,'/api/investigations/'+id);assert.equal(oldOpen.status,200);await assert.rejects(()=>decodeSnapshot(oldOpen.body),/Unsupported saved investigation version/u);
  const {result,capture}=await snapshot(),origin={kind:'working-tree',name:'Local edits',captureId:'d'.repeat(64)};
- const bytes=Buffer.from(await(await capture.snapshot(origin,[],result,'f'.repeat(64))).arrayBuffer());
+ const bytes=Buffer.from(await(await capture.snapshot(origin,recordExclusionPolicy([]),result,'f'.repeat(64))).arrayBuffer());
  const response=await post(running.origin,bytes);assert.equal(response.status,201,response.body.toString());
  const saved=JSON.parse(response.body);assert.deepEqual(snapshotIdentity({origin}),{kind:saved.kind,repository:saved.repository,ref:saved.ref,revision:saved.revision});
  assert.equal(JSON.parse((await request(running.origin,'/api/investigations')).body).length,2);

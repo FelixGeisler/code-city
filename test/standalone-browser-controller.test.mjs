@@ -329,6 +329,7 @@ test("Analyze records positive generations and exact raw command values before i
     generation: 1,
     repositoryUrl: "  https://github.com/owner/repository  ",
     additionalExclusions: "raw\r\n value ",
+    included: [],
   });
   owner.observer.event({ type: "REVISION_SELECTED", sessionId: SESSION, generation: 1, revision: REVISION });
   owner.observer.event(successEvent(1));
@@ -344,6 +345,17 @@ test("Analyze records positive generations and exact raw command values before i
   await flush();
   assert.deepEqual(view.calls.slice(-2), [["clear"], ["invalid"]]);
   assert.equal(transport.owners.length, 1, "422 must not reconnect");
+});
+
+test('Analyze snapshots exact includes before awaiting owner readiness; policy reports remain generation/terminal bound',async()=>{
+ const transport=fakeTransport(),view=fakeView();const reports=[];view.exclusionPolicy=(p,c)=>reports.push([p,c]);
+ const controller=createStandaloneBrowserController(transport,view);controller.start();const owner=transport.owners[0];
+ const included=['.angular'];controller.submit('https://github.com/owner/repository','manual',included);included.length=0;
+ owner.readyControl.resolve({kind:'opened',sessionId:SESSION});await flush();assert.deepEqual(owner.analyzeCalls[0].command.included,['.angular']);
+ const policy={version:'code-city-auto-exclusions-1',manual:['manual'],included:['.angular'],detected:[['.angular','cache:.angular']],effective:['manual']};
+ owner.observer.event({type:'EXCLUSION_POLICY',sessionId:SESSION,generation:1,policy,complete:false});assert.equal(reports.length,1);
+ owner.observer.event({type:'ANALYSIS_CANCELLED',sessionId:SESSION,generation:1});owner.observer.event({type:'EXCLUSION_POLICY',sessionId:SESSION,generation:1,policy,complete:true});assert.equal(reports.length,1);
+ controller.submit('https://github.com/owner/repository','');await flush();owner.observer.event({type:'EXCLUSION_POLICY',sessionId:SESSION,generation:1,policy,complete:true});assert.equal(reports.length,1);controller.dispose();
 });
 
 test("an unrepresentable Analyze consumes its generation, loses the owner, and resumes at the following generation", async () => {
@@ -377,6 +389,7 @@ test("an unrepresentable Analyze consumes its generation, loses the owner, and r
     generation: 3,
     repositoryUrl: "https://github.com/owner/repository",
     additionalExclusions: "",
+    included: [],
   });
 });
 
@@ -520,7 +533,7 @@ test("working-tree protocol frames are strict, source-free and do not invent a r
 
 test("local acquisition progresses before identity; inspection/publication uses the actual capture ID", async () => {
   const { view, controller, owner, root } = await localFixture();
-  assert.deepEqual(owner.analyzeCalls[0].command, { sessionId: SESSION, generation: 1, inputKind: "working-tree", root, name: LOCAL_ORIGIN.name, additionalExclusions: "excluded" });
+  assert.deepEqual(owner.analyzeCalls[0].command, { sessionId: SESSION, generation: 1, inputKind: "working-tree", root, name: LOCAL_ORIGIN.name, additionalExclusions: "excluded", included: [] });
   owner.observer.event(localEvent("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name }));
   owner.observer.event(localEvent("WORKING_TREE_PROGRESS", { completed: 0, total: 2 }));
   owner.observer.event(localEvent("WORKING_TREE_PROGRESS", { completed: 1, total: 2 }));

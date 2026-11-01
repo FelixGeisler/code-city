@@ -3,7 +3,8 @@ import type { BaseMetricAnalysis } from "../domain/base-metrics";
 import type { InspectionEvidence } from "./unit-inspection";
 import type { ProjectAnalysis } from "./project-analysis";
 import { SAVE_LIMITS, sourceSha256, cityForSnapshot, snapshotPrefix, validateSavedHeader, type SavedContribution, type SavedHeader, type SavedUnit, type SourceSection } from "./saved-investigation";
-import { compareUnsignedUtf8, FIXED_EXCLUDED_SEGMENTS } from "../domain/source-admission";
+import type { RecordedExclusionPolicy } from "../domain/exclusion-policy";
+import { compareUnsignedUtf8 } from "../domain/source-admission";
 
 /** Save-only evidence budget; exhaustion never changes analysis admission/results. */
 export function createInvestigationCapture() {
@@ -65,7 +66,7 @@ export function createInvestigationCapture() {
       } catch { disable(); }
     },
     inspection(path: string): InspectionEvidence | undefined { return inspections.get(path); },
-    async snapshot(origin: InvestigationOrigin, exclusions: readonly string[], result: ProjectAnalysis, analyzer: string): Promise<Blob> {
+    async snapshot(origin: InvestigationOrigin, exclusionPolicy: RecordedExclusionPolicy, result: ProjectAnalysis, analyzer: string): Promise<Blob> {
       if (!complete) throw new Error("Investigation exceeds Save limits");
       const sections: Uint8Array[] = [];
       const descriptor = async (bytes: Uint8Array): Promise<SourceSection> => ({ length: bytes.length,
@@ -88,7 +89,7 @@ export function createInvestigationCapture() {
           outcome: fact ? "success" : failures.get(path)!, fact: fact ?? null, units: captured?.units.map(unit => unit[0] === "top-level" ? [unit[0], 0, norm!.length, unit[3], unit[4]] : unit) ?? [], contributions: captured?.contributions ?? [] });
         if (norm) sections.push(norm);
       }
-      const header: SavedHeader = { version: 3, analyzer, origin, exclusions: [...exclusions], fixedExcludedSegments: [...FIXED_EXCLUDED_SEGMENTS], hierarchy: [...hierarchy].sort(compareUnsignedUtf8), files, city: cityForSnapshot(result.city) };
+      const header: SavedHeader = { version: 4, analyzer, origin, exclusionPolicy, hierarchy: [...hierarchy].sort(compareUnsignedUtf8), files, city: cityForSnapshot(result.city) };
       validateSavedHeader(header);
       const encoded = new TextEncoder().encode(JSON.stringify(header));
       const blob = new Blob([snapshotPrefix(encoded).buffer, encoded.buffer, ...sections.map(bytes => bytes.slice().buffer)], { type: "application/octet-stream" });

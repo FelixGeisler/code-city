@@ -237,6 +237,21 @@ test("a pre-capture local failure is terminal and unavailable capability cloning
   finally { failed.owner.close(); }
 });
 
+test('policy metadata is validated and retained before failure; cancelled/replaced workers cannot deliver late policy',async()=>{
+ const f=await fixture();
+ const policy={version:'code-city-auto-exclusions-1',manual:[],included:[],detected:[['.angular','cache:.angular']],effective:['.angular']};
+ try {
+  await f.owner.analyze({...localCommand(f),included:[]});const old=f.workers[0];
+  f.emit(old,'EXCLUSION_POLICY',1,{policy,complete:false});assert.equal(f.events.at(-1).type,'EXCLUSION_POLICY');
+  await f.owner.cancel(localCommand(f));f.emit(old,'EXCLUSION_POLICY',1,{policy,complete:true});assert.equal(f.events.at(-1).type,'ANALYSIS_CANCELLED');
+  await f.owner.analyze({...localCommand(f),generation:2});const current=f.workers[1];
+  f.emit(old,'EXCLUSION_POLICY',1,{policy,complete:true});assert.equal(f.events.at(-1).type,'ANALYSIS_CANCELLED');
+  f.emit(current,'EXCLUSION_POLICY',2,{policy,complete:true});f.emit(current,'WORKING_TREE_FAILED',2,{category:'No supported modules',code:'ADM-06'});
+  assert.deepEqual(f.events.slice(-2).map(e=>e.type),['EXCLUSION_POLICY','WORKING_TREE_FAILED']);assert.equal(f.losses(),0);
+ } finally {f.owner.close();}
+ const invalid=await fixture();try {await invalid.owner.analyze(invalid.command(1));invalid.emit(invalid.workers[0],'EXCLUSION_POLICY',1,{policy:{...policy,version:'future'},complete:true});assert.equal(invalid.losses(),1);}finally{invalid.owner.close();}
+});
+
 test("startup, crash, and malformed-worker errors release owned resources and expose no raw error", async () => {
   const failed = await fixture(() => { throw new Error("private startup detail"); });
   await failed.owner.analyze(failed.command(1));

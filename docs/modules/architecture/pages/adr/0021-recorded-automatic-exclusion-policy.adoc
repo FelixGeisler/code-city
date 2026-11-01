@@ -1,0 +1,22 @@
+= ADR 0021: Recorded automatic exclusion policy
+
+Status:: Accepted
+Acceptance:: Human approval “OK. Go” of automatic defaults, visible overrides and saved effective exclusions; after explanation of the new saved format, “There are no saves”. The coordinator confirmed v4 only, without migration, compatibility reading or physical deletion. This supersedes the external proposed retain-v3 alternative, not historical ADRs 0019 or 0020.
+
+== Context
+
+Recognized dependency, generated-output and framework-cache directory conventions must be pruned before local descent. Users must be able to include individual detected roots without including siblings or nested automatic roots. Saved investigations must retain the applied policy rather than reinterpret it using future defaults.
+
+== Options and decision
+
+Retaining v3 with extra authoritative fields would leave ambiguous policy ownership. Recomputing exclusions on reopen would change saved meaning. Use one deterministic versioned catalogue, exact-root include exceptions, manual ancestor precedence, and a recorded policy containing settings, detected path/rule pairs and effective exclusions.
+
+Use CCSAVE4 followed by a zero byte and header version 4. Replace the exclusions/fixedExcludedSegments pair with exclusionPolicy. Pin the version-1 wire catalogue and validate shape, canonical ordering, rule/path agreement and effective consistency. Reject older snapshots and unknown policy versions; retain receipt inventory readability. No migration, deletion, provider access or reanalysis on restore.
+
+== Consequences
+
+Applied worker settings are immutable; UI edits stage the next explicit Analyze only. Local capture identity v2 includes the recorded policy and actual raw content hashes. Both GitHub inventory admission passes use the same settings after full inventory validation. Discovery reports are attempt-bound and delivered before terminal close, including incomplete failed discovery. Metadata remains subject to existing Save-only header bounds, not a new source admission cap.
+
+The browser owns local source capabilities until explicit Save. Native validation imports only the pure pinned policy validator; shared anonymous custody, source-once storage and existing admission/read/cancellation bounds are unchanged.
+
+See xref:requirements:automatic-exclusions.adoc[product behavior].

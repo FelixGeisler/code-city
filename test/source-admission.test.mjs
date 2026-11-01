@@ -9,7 +9,6 @@ registerHooks({
 });
 
 const {
-  FIXED_EXCLUDED_SEGMENTS,
   MAX_ADMITTED_MODULES,
   MAX_NORMALIZED_MODULE_BYTES,
   MAX_NORMALIZED_TOTAL_BYTES,
@@ -104,7 +103,6 @@ test("every supported kind requires complete raw tree ancestry before filtering"
 });
 
 test("fixed and additional exclusions are case-sensitive exact segment or exact-descendant matches", () => {
-  assert.deepEqual(FIXED_EXCLUDED_SEGMENTS, ["node_modules", "dist", "build", "bin", "obj", ".angular"]);
   const entries = withParents([
     regular("node_modules/a.ts"), regular("x/dist/b.ts"), regular("Build/c.ts"), regular("packages/d.ts"),
     regular("src/e.ts"), regular("src2/f.ts"), regular("single.ts"), regular("prefix/g.ts"), regular("prefix2/h.ts"),

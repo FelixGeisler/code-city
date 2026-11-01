@@ -1,3 +1,4 @@
+import type { ExclusionInput, ExclusionReport } from "../domain/exclusion-policy";
 import type { RepositoryReference } from "../domain/repository-reference";
 import { applyRequestedSourceByteOwnership } from "./internal/source-byte-ownership";
 import {
@@ -34,7 +35,7 @@ export type ImmutableSourceGateway = Readonly<{
     repository: RepositoryReference,
     selected: string,
     signal: AbortSignal,
-    additionalExclusions?: readonly string[],
+    additionalExclusions?: ExclusionInput,
   ): Promise<InventoryGatewayResult>;
   readSource(
     repository: RepositoryReference,
@@ -54,7 +55,7 @@ export type ImmutableRawSourceGateway = Readonly<{
     repository: RepositoryReference,
     selected: string,
     signal: AbortSignal,
-    additionalExclusions?: readonly string[],
+    additionalExclusions?: ExclusionInput,
   ): Promise<InventoryGatewayResult>;
   readRawSource(
     repository: RepositoryReference,
@@ -152,7 +153,8 @@ export async function acquireProjectSources(
   signal: AbortSignal,
   gateway: ImmutableRawSourceGateway,
   observe: (ownership: RetrievalOwnership) => void = () => {},
-  additionalExclusions: readonly string[] = Object.freeze([]),
+  additionalExclusions: ExclusionInput = Object.freeze([]),
+  report: ExclusionReport = () => {},
 ): Promise<ProjectSourceAcquisitionResult> {
   if (!validObjectId(selected)) return providerFailure();
   if (signal.aborted) return { kind: "cancelled" };
@@ -174,7 +176,7 @@ export async function acquireProjectSources(
     if (signal.aborted) return terminal({ kind: "cancelled" });
     if (inventoryResult.kind !== "inventory") return terminal(providerFailure());
 
-    const inventory = prepareSourceInventory(inventoryResult.entries, additionalExclusions);
+    const inventory = prepareSourceInventory(inventoryResult.entries, additionalExclusions, report);
     if (inventory.kind === "failure") return terminal(inventory);
     observe({ phase: "provider-cleared", projectedInventory: true, providerResource: false });
 

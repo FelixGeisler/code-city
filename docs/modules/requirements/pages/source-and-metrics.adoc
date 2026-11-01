@@ -54,21 +54,16 @@ generators, or hooks.
 [[CC-CORE-SRC-05]]
 === Path exclusions
 
-Before analysis, exclude these case-sensitive directory segments at any depth:
-`node_modules`, `dist`, `build`, `bin`, `obj`, and `.angular`. These defaults
-apply to GitHub and local working-tree inputs; `.angular` excludes Angular's
-generated cache, not `.Angular`, `.angular-tools`, or a file named `.angular.js`.
-Additional exclusions are
+Both GitHub and local Analyze apply the catalogue and exact-root overrides in
+xref:automatic-exclusions.adoc[Automatic Source Exclusions]. Manual exclusions are
 newline-separated canonical repository-relative paths without glob or regular-
 expression syntax; each excludes an exact match and descendants on a `/`
 boundary. LF, CRLF, and CR separate lines; empty lines are ignored, but a
 nonempty line is neither trimmed nor normalized. Require well-formed NFC and
 the canonical path rules, preserve case and ordinary spaces, and reject exact
 case-sensitive duplicates before worker creation or provider work. The Analyze
-action captures and unsigned-UTF-8-sorts this array. Retain and display the
-fixed rules in the order above followed by the captured additional paths.
-Do not infer generated or third-party status from content, and do not exclude
-`packages` by name.
+action captures and unsigned-UTF-8-sorts this array separately from automatic
+detections and exact-root include exceptions.
 
 [[CC-CORE-SRC-06]]
 === Complete acquisition
@@ -176,7 +171,7 @@ by unsigned UTF-8 bytes.
 blob, and submodule commit records, and require every proper raw ancestor as an
 explicit directory-tree record. Missing ancestors and regular files, links,
 submodules, or other kinds in an ancestor position fail complete admission.
-After complete validation, apply fixed and additional exclusions, then admit
+After complete validation, apply recorded automatic and manual exclusions, then admit
 supported regular files and skip directories, links, submodules, and
 unsupported suffixes. Apply no additional inferred vendor or generated-content
 exclusion.
