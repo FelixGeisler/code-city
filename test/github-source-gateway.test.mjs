@@ -101,6 +101,20 @@ test("branch text is ignored while commit and validated root tree identities dri
   }
 });
 
+test("GitHub admission omits the reported synthetic Angular cache without consulting its blob identity", async () => {
+  const path = "SYNTHETICFLOW.Hub.Web/ClientApp/.angular/cache/22.2.2/flow.hub.web/vite/deps/dependency.js";
+  const parts = path.split("/");
+  const cached = { path, mode: "100644", type: "blob" };
+  Object.defineProperty(cached, "sha", { enumerable: true, get() { throw new Error("excluded blob identity must not be read"); } });
+  const entries = [...parts.slice(0, -1).map((_, i) => ({ path: parts.slice(0, i + 1).join("/"), mode: "040000", type: "tree" })), cached,
+    { path: ".angular.js", mode: "100644", type: "blob", sha: SHA40 }];
+  const projected = projectTreeEvidence({ sha: ROOT40, truncated: false, tree: entries }, ROOT40, 40);
+  const { prepareSourceInventory } = await import("../src/domain/source-admission.ts");
+  const admitted = prepareSourceInventory(projected);
+  assert.equal(admitted.kind, "candidates");
+  assert.deepEqual(admitted.candidates.map(c => c.canonicalPath), [".angular.js"]);
+});
+
 test("own-data projectors reject accessors and mixed identities without consulting excluded metadata", () => {
   let reads = 0;
   const accessor = (value, key) => {

@@ -2,7 +2,7 @@ export const SUPPORTED_SUFFIXES = [
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".cs",
 ] as const;
 
-export const FIXED_EXCLUDED_SEGMENTS = ["node_modules", "dist", "build", "bin", "obj"] as const;
+export const FIXED_EXCLUDED_SEGMENTS = ["node_modules", "dist", "build", "bin", "obj", ".angular"] as const;
 export const MAX_ADMITTED_MODULES = 4_000;
 export const MAX_NORMALIZED_MODULE_BYTES = 2_097_152;
 export const MAX_NORMALIZED_TOTAL_BYTES = 41_943_040;

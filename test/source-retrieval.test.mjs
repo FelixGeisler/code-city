@@ -99,7 +99,10 @@ test("complete validation precedes exclusions while valid excluded files are nev
     assert.deepEqual(malformed.calls, ["inventory"]);
   }
 
+  const cache = "SYNTHETICFLOW.Hub.Web/ClientApp/.angular/cache/22.2.2/flow.hub.web/vite/deps";
   const valid = gateway([
+    ...cache.split("/").map((_, i, parts) => ({ path: parts.slice(0, i + 1).join("/"), mode: "040000", type: "tree" })),
+    regular(`${cache}/dependency.js`, undefined),
     { path: "excluded", mode: "040000", type: "tree" },
     regular("excluded/huge.ts", undefined),
     regular("kept.ts"),

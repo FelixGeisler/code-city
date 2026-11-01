@@ -1,7 +1,11 @@
 import { validateCityPayload, type CityPayload } from "./city-payload";
-import { isCanonicalSourcePath, compareUnsignedUtf8, MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES, MAX_NORMALIZED_TOTAL_BYTES, FIXED_EXCLUDED_SEGMENTS } from "../domain/source-admission";
+import { isCanonicalSourcePath, compareUnsignedUtf8, MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES, MAX_NORMALIZED_TOTAL_BYTES } from "../domain/source-admission";
 import { parseInvestigationOrigin, type InvestigationOrigin } from "./investigation-origin";
 // Version-3 wire vocabulary is pinned, not silently widened by future analyzers.
+const V3_FIXED_EXCLUSION_LISTS = [
+  ["node_modules", "dist", "build", "bin", "obj"],
+  ["node_modules", "dist", "build", "bin", "obj", ".angular"],
+] as const;
 const EXPLICIT_UNIT_FORMS = ["function", "arrow", "method", "constructor", "getter", "setter", "static-block"];
 const DECISION_KINDS = ["if", "loop", "case", "catch", "ternary", "logical-and", "logical-or", "nullish", "logical-and-assign", "logical-or-assign", "nullish-assign"];
 import { parseRepositoryReference } from "../domain/repository-reference";
@@ -83,7 +87,9 @@ export function validateSavedHeader(value: unknown): { header: SavedHeader; sect
   requireValue(data.version === 3);
   parseInvestigationOrigin(data.origin);
   for (const field of ["exclusions", "hierarchy"] as const) requireValue(list(data[field], 100_000).every(path => typeof path === "string" && (field === "hierarchy" || path.length <= 4096) && path.isWellFormed()));
-  requireValue(JSON.stringify(data.fixedExcludedSegments) === JSON.stringify(FIXED_EXCLUDED_SEGMENTS));
+  const fixedExcludedSegments = list(data.fixedExcludedSegments, 6);
+  requireValue(V3_FIXED_EXCLUSION_LISTS.some(rules => rules.length === fixedExcludedSegments.length
+    && rules.every((rule, index) => rule === fixedExcludedSegments[index])));
   const files = list(data.files, MAX_ADMITTED_MODULES);
   requireValue(files.length > 0);
   const sections: SourceSection[] = [];

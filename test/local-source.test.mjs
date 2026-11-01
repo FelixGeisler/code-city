@@ -25,10 +25,13 @@ test("capture uses actual raw SHA-256 manifest, canonical order, policy, unsuppo
   assert.deepEqual(first.acquired.notAnalyzedFiles, [{ canonicalPath: "a.cs", category: "Source text is not supported" }]);
   const hash = bytes => createHash("sha256").update(bytes).digest("hex");
   const manifest = { version: "code-city-working-tree-v1", policy: {
-    supportedSuffixes: SUPPORTED_SUFFIXES, fixedExcludedSegments: FIXED_EXCLUDED_SEGMENTS,
+    supportedSuffixes: SUPPORTED_SUFFIXES, fixedExcludedSegments: ["node_modules", "dist", "build", "bin", "obj", ".angular"],
     metadata: "case-insensitive-.git-at-every-depth", exclusions: [],
   }, files: [["a.cs", 1, hash(new Uint8Array([255]))], ["é.ts", encode("\uFEFFx\r\ny\r").length, hash(encode("\uFEFFx\r\ny\r"))]] };
+  assert.deepEqual(FIXED_EXCLUDED_SEGMENTS, manifest.policy.fixedExcludedSegments);
   assert.equal(first.origin.captureId, hash(JSON.stringify(manifest)));
+  const historical = structuredClone(manifest); historical.policy.fixedExcludedSegments.pop();
+  assert.notEqual(first.origin.captureId, hash(JSON.stringify(historical)), "the new fixed policy changes capture identity even for unchanged files");
   assert.equal(first.acquired.selected, first.origin.captureId);
   assert.match(first.origin.captureId, /^[0-9a-f]{64}$/);
   assert.deepEqual(progress, [[0, 2], [1, 2], [2, 2]]);
@@ -63,7 +66,7 @@ test("exclusions and metadata are never read; 4000 candidates pass, 4001 fail be
   let unexpected = 0;
   const forbidden = path => candidate(path, async () => { unexpected++; throw new Error("private"); });
   const progress = [];
-  const result = await run([...entries, forbidden(".GIT/hidden.ts"), forbidden("dist/a.ts"), forbidden("excluded/x.ts")], ["excluded"], "root", (n, t) => progress.push([n, t]));
+  const result = await run([...entries, forbidden(".GIT/hidden.ts"), forbidden("dist/a.ts"), forbidden(".angular/a.ts"), forbidden("SYNTHETICFLOW.Hub.Web/ClientApp/.angular/cache/22.2.2/flow.hub.web/vite/deps/dependency.js"), forbidden("excluded/x.ts")], ["excluded"], "root", (n, t) => progress.push([n, t]));
   assert.equal(result.kind, "success");
   assert.equal(result.acquired.modules.length, 4000);
   assert.deepEqual(progress.at(-1), [4000, 4000]);

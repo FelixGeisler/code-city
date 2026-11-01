@@ -55,7 +55,10 @@ generators, or hooks.
 === Path exclusions
 
 Before analysis, exclude these case-sensitive directory segments at any depth:
-`node_modules`, `dist`, `build`, `bin`, and `obj`. Additional exclusions are
+`node_modules`, `dist`, `build`, `bin`, `obj`, and `.angular`. These defaults
+apply to GitHub and local working-tree inputs; `.angular` excludes Angular's
+generated cache, not `.Angular`, `.angular-tools`, or a file named `.angular.js`.
+Additional exclusions are
 newline-separated canonical repository-relative paths without glob or regular-
 expression syntax; each excludes an exact match and descendants on a `/`
 boundary. LF, CRLF, and CR separate lines; empty lines are ignored, but a

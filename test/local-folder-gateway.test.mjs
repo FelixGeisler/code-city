@@ -56,7 +56,7 @@ test("native-like prototypes work; exclusions prune BEFORE values/getFile and gi
     get kind() { return "directory"; }
     async *values() {
       yield forbiddenDir("node_modules"); yield forbiddenDir("dist"); yield forbiddenDir("build");
-      yield forbiddenDir("bin"); yield forbiddenDir("obj"); yield forbiddenDir(".GiT");
+      yield forbiddenDir("bin"); yield forbiddenDir("obj"); yield forbiddenDir(".angular"); yield forbiddenDir(".GiT");
       yield forbiddenDir("excluded"); yield forbiddenFile("omit.ts"); yield forbiddenFile(".gitignore");
       yield dir("nested", [forbiddenFile(".GIT"), file("ignored-and-untracked.CS", "edit", calls)], calls);
       yield file("a.ts", "edited", calls);
@@ -66,6 +66,18 @@ test("native-like prototypes work; exclusions prune BEFORE values/getFile and gi
   assert.equal(result.kind, "success");
   assert.deepEqual(result.acquired.modules.map(m => [m.canonicalPath, m.normalizedSource]), [["a.ts", "edited"], ["nested/ignored-and-untracked.CS", "edit"]]);
   assert.equal(calls.filter(c => c.startsWith("getFile:")).length, 4, "initial and post-read metadata per eligible file only");
+});
+
+test("reported synthetic Angular cache is pruned before descent while similar names stay readable", async () => {
+  const calls = [];
+  const cache = "SYNTHETICFLOW.Hub.Web/ClientApp/.angular/cache/22.2.2/flow.hub.web/vite/deps";
+  let nested = file("dependency.js", "must not read", calls);
+  for (const name of cache.split("/").reverse()) nested = dir(name, [nested], calls);
+  const result = await acquire(dir("root", [nested, dir(".Angular", [file("a.ts", "case", calls)], calls), dir(".angular-tools", [file("a.ts", "boundary", calls)], calls), file(".angular.js", "file", calls)]));
+  assert.equal(result.kind, "success");
+  assert.deepEqual(result.acquired.modules.map(m => m.canonicalPath), [".Angular/a.ts", ".angular-tools/a.ts", ".angular.js"]);
+  assert(!calls.includes("values:.angular"));
+  assert(!calls.some(call => call.includes("dependency.js") || call === "values:cache"));
 });
 
 test("iterative deep traversal validates native raw paths, NFC collisions and canonical order", async () => {
