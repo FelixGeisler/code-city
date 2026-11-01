@@ -27,6 +27,21 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+class WindowAttributes(C.Structure):
+    _fields_ = [('x', C.c_int), ('y', C.c_int), ('width', C.c_int), ('height', C.c_int),
+                ('border_width', C.c_int), ('depth', C.c_int), ('visual', C.c_void_p),
+                ('root', C.c_ulong), ('window_class', C.c_int), ('bit_gravity', C.c_int),
+                ('win_gravity', C.c_int), ('backing_store', C.c_int),
+                ('backing_planes', C.c_ulong), ('backing_pixel', C.c_ulong),
+                ('save_under', C.c_int), ('colormap', C.c_ulong), ('map_installed', C.c_int),
+                ('map_state', C.c_int), ('all_event_masks', C.c_long), ('your_event_mask', C.c_long),
+                ('do_not_propagate_mask', C.c_long), ('override_redirect', C.c_int), ('screen', C.c_void_p)]
+
+
+def require_viewable(map_state):
+    require(map_state == 2, 'Owned X11 window is not viewable')  # Xlib IsViewable
+
+
 def command_line(raw):
     # Strip only the terminator; extra NULs represent meaningful empty arguments.
     args = raw.split(b'\0')
@@ -180,6 +195,13 @@ if sys.argv[1:] == ['--self-test']:
     require(key_symbol('Return', lambda name: 0xff0d if name == b'Return' else 0) == 0xff0d,
             'Named keysym regression')
     require([typing_modifiers(c) for c in 'C_/-az'] == [1, 1, 0, 0, 0, 0], 'Shift-mask regression')
+    require_viewable(2)
+    for state in [0, 1, -1, 3]:
+        try:
+            require_viewable(state)
+        except RuntimeError:
+            continue
+        raise RuntimeError('Unmapped/unviewable target accepted')
     profile = '/tmp/owned'
     for args in [[b'chrome', b'--user-data-dir=/tmp/owned'],
                  [b'chrome', b'--user-data-dir', b'/tmp/owned']]:
@@ -426,6 +448,7 @@ open_display = bind('XOpenDisplay', Display, [C.c_char_p])
 close_display = bind('XCloseDisplay', C.c_int, [Display])
 connection_number = bind('XConnectionNumber', C.c_int, [Display])
 root_window = bind('XDefaultRootWindow', Window, [Display])
+get_attributes = bind('XGetWindowAttributes', C.c_int, [Display, Window, C.POINTER(WindowAttributes)])
 query_tree = bind('XQueryTree', C.c_int, [Display, Window, C.POINTER(Window), C.POINTER(Window), C.POINTER(C.POINTER(Window)), C.POINTER(C.c_uint)])
 atom = bind('XInternAtom', C.c_ulong, [Display, C.c_char_p, C.c_int])
 get_property = bind('XGetWindowProperty', C.c_int, [Display, Window, C.c_ulong, C.c_long, C.c_long, C.c_int, C.c_ulong, C.POINTER(C.c_ulong), C.POINTER(C.c_int), C.POINTER(C.c_ulong), C.POINTER(C.c_ulong), C.POINTER(C.POINTER(C.c_ubyte))])
@@ -498,11 +521,21 @@ def owned(pid):
     return False
 
 
+def window_map_state(w):
+    attributes = WindowAttributes()
+    require(get_attributes(d, w, C.byref(attributes)), 'Owned X11 window attributes unavailable')
+    return attributes.map_state
+
+
 def candidates():
     found = []
     for w in children(root):
         pids = property_value(w, '_NET_WM_PID')
         if not pids or not owned(pids[0]):
+            continue
+        # GTK publishes transient/PID properties before mapping its chooser.
+        # Wait within the existing readiness deadline; never force-map a window.
+        if window_map_state(w) != 2:
             continue
         role = property_value(w, 'WM_WINDOW_ROLE') or ''
         title = property_value(w, '_NET_WM_NAME') or property_value(w, 'WM_NAME') or ''
@@ -531,7 +564,10 @@ scope = ScopedX11(a, lambda: verify_processes(a, owner, evidence=evidence), conn
 
 
 def focus_target(w, pid):
-    scope.act(w, pid, lambda: set_focus(d, w, 1, 0))  # Connected owned Xvfb/window only.
+    def focus():
+        require_viewable(window_map_state(w))
+        return set_focus(d, w, 1, 0)
+    scope.act(w, pid, focus)  # Connected, owned and mapped Xvfb/window only.
     flush(d, 0)
     focused, revert = Window(), C.c_int()
     get_focus(d, C.byref(focused), C.byref(revert))
@@ -542,6 +578,7 @@ def key(w, pid, name, modifiers=0):
     code = keycode(d, key_symbol(name, keysym))
     require(code != 0, 'Key unavailable on isolated X11 keyboard: ' + name)
     def emit(event_type, mask):
+        require_viewable(window_map_state(w))
         event = Event()
         event.key = KeyEvent(event_type, 0, 1, d, w, root, 0, 0, 1, 1, 1, 1, modifiers, code, 1)
         return send(d, w, 1, mask, C.byref(event))
