@@ -139,7 +139,8 @@ class ScopedX11:
     def __init__(self, a, processes, peer, windows, window_pids, lookup, owned, evidence):
         self.a, self.processes, self.peer = a, processes, peer
         self.windows, self.window_pids, self.lookup, self.owned = windows, window_pids, lookup, owned
-        self.evidence, self.targets = evidence, {}
+        # Read-only identity observations are not focus/key targets.
+        self.evidence, self.targets, self.action_targets = evidence, {}, set()
 
     def server(self):
         self.evidence['displayProof'] = {'status': 'awaiting-x11-proof', 'displayQualified': False}
@@ -166,9 +167,48 @@ class ScopedX11:
                                          'browserPid': chrome['pid'], 'browserWindows': browser_windows,
                                          'window': w, 'windowProcess': identity}
 
-    def act(self, w, pid, action):
+    def prepare_action(self, w, pid):
         self.verify(w, pid)
+        # Keep every previous/current action target protected, including reused XIDs.
+        self.action_targets.add((w, pid))
+
+    def act(self, w, pid, action):
+        self.prepare_action(w, pid)
         return action()
+
+
+class ScopedServerGrab:
+    """One nesting counter for metadata snapshots and segmented keyboard grabs.
+
+    XGrabServer itself is not refcounted. An inner metadata scan must never
+    release an outer keyboard segment's grab. Every acquire needs fresh positive
+    process/connected-server proof; callers sync in finally after release.
+    """
+    def __init__(self, scope, grab, ungrab, sync):
+        self.scope, self.grab, self.ungrab, self.sync = scope, grab, ungrab, sync
+        self.depth = 0
+
+    def acquire(self):
+        self.scope.server()
+        if self.depth == 0:
+            self.grab()
+        self.depth += 1
+
+    def release(self):
+        require(self.depth > 0, 'Unbalanced owned X11 server ungrab')
+        self.depth -= 1
+        if self.depth == 0:
+            self.ungrab()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, _kind, _error, _traceback):
+        try:
+            self.release()
+        finally:
+            self.sync()
 
 
 def scoped_key(scope, w, pid, codes, emit, grab, ungrab, sync, focus, release_focus):
@@ -189,7 +229,7 @@ def scoped_key(scope, w, pid, codes, emit, grab, ungrab, sync, focus, release_fo
         scope.verify(w, pid)
         grab()
         try:
-            scope.verify(w, pid)
+            scope.prepare_action(w, pid)
             (focus if initial else release_focus)()
             initial = False  # keyboard-empty check only before this chord starts
             action()
@@ -273,14 +313,15 @@ def flush(display, discard):
         raise X11RequestError('Owned X11 request failed: ' + json.dumps(evidence['xErrors']))
 
 
-def checked_property_request(w, name, enumeration, targets, request, sync, collect,
+def checked_property_request(w, name, enumeration, action_targets, request, sync, collect,
                              errors, root_children, evidence):
     """Retirement is a terminal negative enumeration result, never ownership proof.
 
     Fence old errors before this request and collect its errors synchronously so
-    a closed GTK completion popup cannot poison the next key flush. Only an
-    unknown top-level PID candidate may retire, after one fresh root query proves
-    absence (a live/reused ID fails). No retry, grab, target or focus exemption.
+    a closed GTK completion popup cannot poison the next key flush. Only a
+    never-acted top-level PID candidate may retire, even if observed read-only,
+    after one fresh root query proves absence (a live/reused ID fails). No retry,
+    action-target or focus exemption; retirement never proves ownership.
     """
     sync()  # Old/other queued errors must fail outside this request's exception.
     status = request()
@@ -291,7 +332,7 @@ def checked_property_request(w, name, enumeration, targets, request, sync, colle
     # libX11 GetProp.c returns generic 1 on failed _XReply, including BadWindow.
     # That status alone is NOT proof: require the exact handler error as well.
     eligible = (enumeration and name == '_NET_WM_PID'
-                and not any(window == w for window, _pid in targets)
+                and not any(window == w for window, _pid in action_targets)
                 and status in (0, 1, 3)
                 and observed == [{'code': 3, 'request': 20, 'resource': w}])
     if eligible:
@@ -387,7 +428,7 @@ if sys.argv[1:] == ['--self-test']:
     # These are synthetic callbacks, not X11/GUI qualification.
     bad_candidate = {'code': 3, 'request': 20, 'resource': 599}
 
-    def property_case(status=3, name='_NET_WM_PID', enumeration=True, targets=None,
+    def property_case(status=3, name='_NET_WM_PID', enumeration=True, action_targets=None,
                       reported=None, present=(), prior=(), proof_errors=(), proof_fails=False):
         pending, trace, proof = list(prior), [], {}
         deliveries = [list([bad_candidate] if reported is None else reported), list(proof_errors)]
@@ -410,7 +451,7 @@ if sys.argv[1:] == ['--self-test']:
             return list(present)
 
         def run():
-            return checked_property_request(599, name, enumeration, targets or {}, request,
+            return checked_property_request(599, name, enumeration, action_targets or set(), request,
                                             sync, collect, pending, root_children, proof)
         return run, pending, trace, proof, sync
 
@@ -426,7 +467,11 @@ if sys.argv[1:] == ['--self-test']:
             'Successful property read changed or performed unnecessary presence work')
     for change in [
             {'enumeration': False}, {'name': 'WM_NAME'}, {'name': 'WM_TRANSIENT_FOR'},
-            {'targets': {(599, 102): {}}}, {'targets': {(599, 999): {}}},
+            {'action_targets': {(599, 102)}}, {'action_targets': {(599, 999)}},
+            {'name': '_net_wm_pid'}, {'name': '_NET_WM_PID '},
+            {'status': 0, 'reported': [{**bad_candidate, 'code': 2}]},
+            {'status': 1, 'reported': [{**bad_candidate, 'request': 3}]},
+            {'status': 1, 'reported': [{**bad_candidate, 'resource': 598}]},
             {'present': [501, 599]},  # extant/reused XID, regardless of PID
             {'status': 2}, {'status': 9}, {'status': 1, 'reported': []}, {'status': 3, 'reported': []},
             {'status': 1, 'reported': [{**bad_candidate, 'code': 2}]},
@@ -486,7 +531,7 @@ if sys.argv[1:] == ['--self-test']:
             require(not x_errors and evidence == {'xErrors': [unexpected]},
                     'Cleared fatal X11 error became an optional diagnostic failure')
     # An unrelated proven target does not prevent retirement of this unknown ID.
-    run, pending, trace, proof, sync = property_case(targets={(502, 102): {}})
+    run, pending, trace, proof, sync = property_case(action_targets={(502, 102)})
     require(run() is False and not pending, 'Unrelated managed target blocked negative enumeration')
 
     check()
@@ -528,13 +573,69 @@ if sys.argv[1:] == ['--self-test']:
                          lambda pid: state['chrome'] if pid == 101 else state['target'],
                          lambda pid: state['owned'] and pid in (101, 102), evidence)
 
+    # Reproduce CI's read-only verified completion popup, not just an unknown ID.
+    guard = reset()
+    state['top'].append(599)
+    state['pids'][599] = [102]
+    guard.verify(599, 102)
+    observed = dict(guard.targets)
+    require((599, 102) in observed and not guard.action_targets,
+            'Read-only verification incorrectly claimed an action target')
+    run, pending, trace, proof, sync = property_case(status=1, action_targets=guard.action_targets)
+    require(run() is False and not pending and proof == {'retiredUnknownCandidates': [599]},
+            'Previously observed never-acted popup failed exact negative retirement')
+    require(guard.targets == observed and not guard.action_targets,
+            'Retirement claimed ownership or promoted a read-only observation')
+    guard.act(599, 102, lambda: sent.append('popup-focus'))
+    guard.act(502, 102, lambda: sent.append('chooser-focus'))
+    run, pending, trace, proof, sync = property_case(status=1, action_targets=guard.action_targets)
+    refuses(run)
+    require(pending and not proof.get('retiredUnknownCandidates')
+            and guard.action_targets == {(599, 102), (502, 102)},
+            'A previous action target was retired after focus moved elsewhere')
+
+    # Verify's independent browser-root enumeration must use the same guarded
+    # negative PID read. Actual target reads never receive that exemption.
+    for observed_popup, acted_popup, target_popup in [(False, False, False), (True, False, False),
+                                                       (True, True, False), (False, False, True)]:
+        guard = reset()
+        state['top'].append(599)
+        state['pids'][599] = [102]
+        if observed_popup:
+            guard.verify(599, 102)
+        if acted_popup:
+            guard.act(599, 102, lambda: None)
+        calls = []
+        def disappearing_pid(window, enumeration=False):
+            calls.append((window, enumeration))
+            if window == 599:
+                run, pending, trace, proof, sync = property_case(
+                    status=1, enumeration=enumeration, action_targets=guard.action_targets)
+                require(run() is False, 'Retired popup must produce only negative PID evidence')
+                return None
+            return state['pids'].get(window)
+        guard.window_pids = disappearing_pid
+        if acted_popup or target_popup:
+            refuses(lambda: guard.verify(599 if target_popup else 502, 102))
+            require(not evidence['displayProof']['displayQualified'], 'Retirement falsely qualified target ownership')
+        else:
+            guard.verify(502, 102)
+            require(evidence['displayProof']['window'] == 502 and not guard.action_targets,
+                    'Negative popup read changed the verified target')
+            if not observed_popup:
+                require((599, 102) not in guard.targets, 'Retirement cached popup ownership')
+        require((599, True) in calls, 'Browser-window enumeration bypassed guarded PID retirement')
+        if target_popup:
+            require((599, False) in calls, 'Actual target PID read used enumeration exemption')
+
     for env in [b'', b'DISPLAY=\0', b'DISPLAY=:7\0']:
         guard = reset()
         state['env'] = env
         require('displayProof' not in evidence, 'Process binding must not qualify display')
         guard.act(502, 102, lambda: sent.append('focus'))
         guard.act(502, 102, lambda: sent.append('key'))
-        require(sent == ['focus', 'key'] and evidence['displayProof']['displayQualified'], 'Positive X11 proof rejected')
+        require(sent == ['focus', 'key'] and evidence['displayProof']['displayQualified']
+                and guard.action_targets == {(502, 102)}, 'Positive X11 action proof/registration rejected')
     guard = reset()
     state['top'] = [501]
     guard.act(501, 101, lambda: sent.append('browser-focus'))
@@ -548,7 +649,8 @@ if sys.argv[1:] == ['--self-test']:
         guard = reset()
         state.update(change)
         refuses(lambda: guard.act(502, 102, lambda: sent.append('forbidden')))
-        require(not sent and not evidence['displayProof']['displayQualified'], 'UI action without own X11 proof')
+        require(not sent and not evidence['displayProof']['displayQualified'] and not guard.action_targets,
+                'Failed proof emitted input or claimed an action target')
     for change in [{'start': '999'}, {'exe': '/wrong'}, {'uid': 43}, {'pgid': 999}]:
         guard = reset()
         guard.act(502, 102, lambda: sent.append('focus'))
@@ -562,6 +664,52 @@ if sys.argv[1:] == ['--self-test']:
         state.update(change)
         refuses(lambda: guard.act(502, 102, lambda: sent.append('forbidden-key')))
         require(sent == ['focus'], 'Server/browser/window not rechecked before key')
+    # The same refcounted production lock serves metadata and keyboard segments.
+    # No native X server is opened: assertions concern orchestration only.
+    def test_grab(guard, trace, failed=None):
+        def event(name):
+            trace.append(name)
+            require(name != failed, 'Injected ' + name + ' failure')
+        return ScopedServerGrab(guard, lambda: event('grab'), lambda: event('ungrab'), lambda: event('sync'))
+
+    for inner_error in (False, True):
+        guard, trace = reset(), []
+        lock = test_grab(guard, trace)
+        def snapshot():
+            with lock:
+                require(lock.depth == 2, 'Metadata did not nest in existing keyboard lock')
+                require(not inner_error, 'Injected metadata failure')
+        with lock:
+            if inner_error:
+                refuses(snapshot)
+            else:
+                snapshot()
+            require(lock.depth == 1 and 'ungrab' not in trace,
+                    'Metadata released a preexisting outer keyboard grab')
+        require(lock.depth == 0 and trace == ['grab', 'sync', 'ungrab', 'sync'],
+                'Nested snapshot grab/ungrab/finally-sync imbalance')
+    for failed in ('metadata', 'ungrab', 'sync'):
+        guard, trace = reset(), []
+        lock = test_grab(guard, trace, failed)
+        def failed_snapshot():
+            with lock:
+                require(failed != 'metadata', 'Injected metadata failure')
+        refuses(failed_snapshot)
+        require(lock.depth == 0 and trace == ['grab', 'ungrab', 'sync'],
+                'Failed snapshot leaked grab or skipped final sync')
+        refuses(lock.release)
+    guard, trace = reset(), []
+    lock = test_grab(guard, trace)
+    state['peer'] = (91, 42)
+    refuses(lock.acquire)
+    require(lock.depth == 0 and not trace, 'Unproved connected server was grabbed')
+    state['peer'] = (90, 42)
+    with lock:
+        state['peer'] = (91, 42)
+        refuses(lock.acquire)
+        require(lock.depth == 1 and trace == ['grab'], 'Failed nested proof changed outer lock')
+    require(trace == ['grab', 'ungrab', 'sync'] and lock.depth == 0, 'Failed nested proof leaked outer lock')
+
     # Exercise pure scoped_key orchestration; no X11 calls or mock success claims.
     def chord(guard, emit=None, focus=lambda: None, release_focus=lambda: None,
               codes=(37, 46), grab=None, sync=None):
@@ -571,6 +719,20 @@ if sys.argv[1:] == ['--self-test']:
 
     def events():
         return [event for event in sent if isinstance(event, tuple)]
+
+    guard, trace = reset(), []
+    lock = test_grab(guard, trace)
+    def metadata_during_key():
+        require(lock.depth == 1, 'Focus/metadata check is outside keyboard grab')
+        with lock:
+            require(lock.depth == 2, 'Keyboard metadata scan did not share grab depth')
+        require(lock.depth == 1 and trace.count('grab') == trace.count('ungrab') + 1,
+                'Nested metadata ungrabbed active keyboard segment')
+    scoped_key(guard, 502, 102, [37, 46], lambda code, down: sent.append((code, down)) or 1,
+               lock.acquire, lock.release, lock.sync, metadata_during_key, metadata_during_key)
+    require(lock.depth == 0 and trace.count('grab') == trace.count('ungrab') == 3
+            and guard.action_targets == {(502, 102)},
+            'Keyboard lost segmentation, shared-lock balance or action-target registration')
 
     guard = reset()
     # Assert the full verification/grab/focus/input/ungrab/sync order, including
@@ -754,7 +916,7 @@ if sys.argv[1:] == ['--self-test']:
     for change in [{'uid': 43}, {'pgid': 90}, {'start': '202'}]:
         refuses(lambda change=change: check_flat(l={**flat_linux, 'launcher': {**launcher, **change}}))
     refuses(lambda: check_flat(env=b'DISPLAY=:70\0'))
-    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, DISPLAY contradiction/source guards and DISPLAY-only evidence; empty metadata defers to exact connected-Xvfb/CDP top-level window proof; focus/key action boundary and identity rechecks; raw/empty argv preservation, ASCII/named keysyms and Shift masks; viewable map states, segmented XTEST grab/verification/initial-empty ordering, atomic primary pair, reverse modifier cleanup, press/release/sync failures, between-segment/paired-release lost-proof refusal, exact/descendant focus refusals and chooser-before-Allow guard; synchronous PID-enumeration unknown-candidate retirement with fresh absence proof, queued-error isolation, known-target/live-or-reused-XID/other-property/status/code/request/resource/mixed-error/root-proof refusals; optional-image boundary preserves fatal property/queued errors, including after the final diagnostic; no X11/native runtime'}))
+    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, DISPLAY contradiction/source guards and DISPLAY-only evidence; empty metadata defers to exact connected-Xvfb/CDP top-level window proof; focus/key action boundary and identity rechecks; raw/empty argv preservation, ASCII/named keysyms and Shift masks; viewable map states, segmented XTEST grab/verification/initial-empty ordering, atomic primary pair, reverse modifier cleanup, press/release/sync failures, between-segment/paired-release lost-proof refusal, exact/descendant focus refusals and chooser-before-Allow guard; read-only observations separated from permanent focus/key action targets; synchronous PID-enumeration never-acted candidate retirement with fresh absence proof, queued-error isolation, previous/current action-target/live-or-reused-XID/other-property/status/code/request/resource/mixed-error/root-proof refusals, independent browser enumeration and strict actual-target PID guards; shared nested metadata/keyboard server-grab balance, proof and error cleanup; optional-image boundary preserves fatal property/queued errors, including after the final diagnostic; no X11/native runtime'}))
     sys.exit(0)
 
 
@@ -870,7 +1032,7 @@ def property_value(w, name, enumeration=False):
     property_atom = atom(d, name.encode(), 0)
     try:
         if not checked_property_request(
-                w, name, enumeration, scope.targets,
+                w, name, enumeration, scope.action_targets,
                 lambda: get_property(d, w, property_atom, 0, 1024, 0, 0,
                                      C.byref(actual), C.byref(fmt), C.byref(count), C.byref(after), C.byref(data)),
                 lambda: flush(d, 0), lambda: x_sync(d, 0), x_errors,
@@ -923,27 +1085,30 @@ def window_map_state(w):
 
 
 def owned_windows():
-    scope.server()
-    found = []
-    for w in children(root):
-        pids = property_value(w, '_NET_WM_PID', enumeration=True)
-        if not pids or len(pids) != 1 or not owned(pids[0]):
-            continue
-        # Include premapped/hidden windows in diagnostics/closure checks, but
-        # candidate_windows never allows them to receive focus or input.
-        map_state = window_map_state(w)
-        scope.verify(w, pids[0])
-        role = property_value(w, 'WM_WINDOW_ROLE') or ''
-        title = property_value(w, '_NET_WM_NAME') or property_value(w, 'WM_NAME') or ''
-        transient = property_value(w, 'WM_TRANSIENT_FOR')
-        types = property_value(w, '_NET_WM_WINDOW_TYPE') or []
-        dialog = (atom(d, b'_NET_WM_WINDOW_TYPE_DIALOG', 0) in types
-                  or 'file' in role.lower() or bool(transient))
-        found.append({'window': w, 'pid': pids[0], 'role': role, 'title': title,
-                      'dialog': dialog, 'mapState': {0: 'IsUnmapped', 1: 'IsUnviewable', 2: 'IsViewable'}.get(map_state, 'unknown')})
-    evidence['windows'] = found
-    evidence['chooserClosed'] = not any(window['dialog'] for window in found)
-    return found
+    # Freeze the entire root list + PID/map/role/title scan, not just each read:
+    # GTK can otherwise destroy an observed popup between metadata requests.
+    # This context also nests safely inside allow-read's keyboard segment.
+    with server_grab:
+        found = []
+        for w in children(root):
+            pids = property_value(w, '_NET_WM_PID', enumeration=True)
+            if not pids or len(pids) != 1 or not owned(pids[0]):
+                continue
+            # Include premapped/hidden windows in diagnostics/closure checks, but
+            # candidate_windows never allows them to receive focus or input.
+            map_state = window_map_state(w)
+            scope.verify(w, pids[0])
+            role = property_value(w, 'WM_WINDOW_ROLE') or ''
+            title = property_value(w, '_NET_WM_NAME') or property_value(w, 'WM_NAME') or ''
+            transient = property_value(w, 'WM_TRANSIENT_FOR')
+            types = property_value(w, '_NET_WM_WINDOW_TYPE') or []
+            dialog = (atom(d, b'_NET_WM_WINDOW_TYPE_DIALOG', 0) in types
+                      or 'file' in role.lower() or bool(transient))
+            found.append({'window': w, 'pid': pids[0], 'role': role, 'title': title,
+                          'dialog': dialog, 'mapState': {0: 'IsUnmapped', 1: 'IsUnviewable', 2: 'IsViewable'}.get(map_state, 'unknown')})
+        evidence['windows'] = found
+        evidence['chooserClosed'] = not any(window['dialog'] for window in found)
+        return found
 
 
 def connected_server():
@@ -957,6 +1122,7 @@ def connected_server():
 scope = ScopedX11(a, lambda: verify_processes(a, owner, evidence=evidence), connected_server,
                   lambda: children(root), lambda w, enumeration=False: property_value(w, '_NET_WM_PID', enumeration),
                   proc, owned, evidence)
+server_grab = ScopedServerGrab(scope, lambda: grab_server(d), lambda: ungrab_server(d), lambda: flush(d, 0))
 
 
 def require_focus(w, pid):
@@ -969,16 +1135,12 @@ def require_focus(w, pid):
 
 def focus_target(w, pid):
     scope.verify(w, pid)
-    grab_server(d)
-    try:
-        scope.verify(w, pid)
+    with server_grab:
+        scope.prepare_action(w, pid)
         require_viewable(window_map_state(w))
         set_focus(d, w, 1, 0)
         flush(d, 0)
         require_focus(w, pid)
-    finally:
-        ungrab_server(d)
-        flush(d, 0)
 
 
 def key(w, pid, name, modifiers=0):
@@ -995,7 +1157,7 @@ def key(w, pid, name, modifiers=0):
         query_keymap(d, keymap)
         require(not any(keymap), 'Owned Xvfb already has depressed keys; refusing input')
     scoped_key(scope, w, pid, codes, lambda code, down: fake_key(d, code, int(down), 0),
-               lambda: grab_server(d), lambda: ungrab_server(d), lambda: flush(d, 0),
+               server_grab.acquire, server_grab.release, lambda: flush(d, 0),
                focus, release_focus)
     evidence['input']['chordsCompleted'] += 1
     evidence['input']['lastKey'] = name
