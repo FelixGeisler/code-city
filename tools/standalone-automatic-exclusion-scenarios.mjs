@@ -20,10 +20,16 @@ const includedPolicy = policy(editedManual, ['.vite'], includedDetected, ['.vite
 const localPaths = ['.yarn/plugins/authored.js','src/app.ts'];
 const githubPaths = ['.yarn/plugins/authored.js','owned.js','packages/owned.js'];
 const sort = values => [...values].sort(); // All fixture paths are ASCII.
-const checkbox = path => `[data-automatic-exclusions] input[aria-label="Automatic exclusion: ${path}"]`;
-const rows = p => p.evaluate(`([...document.querySelectorAll('[data-automatic-exclusions] li')].map(row=>({path:row.querySelector('bdi').textContent,checked:row.querySelector('input').checked,type:row.querySelector('input').type,reason:row.querySelector('span').textContent})))`);
+const editor = 'textarea[name=additional-exclusions]';
+const rows = p => p.evaluate(`document.querySelector(${JSON.stringify(editor)}).value.split('\\n').filter(Boolean)`);
 async function assertRows(p, detected, included = [], manual = []) {
-  assert.deepEqual(await rows(p), detected.map(([path,id])=>({path,checked:!included.includes(path),type:'checkbox',reason:` — ${id.startsWith('cache:')?'Recognized framework/cache convention':'Recognized dependency directory convention'}${manual.some(root=>path===root||path.startsWith(root+'/'))?'; manual exclusion wins even if unchecked':''}`})));
+  const effective = [...new Set([...manual,...detected.filter(([path])=>!included.includes(path)||manual.some(root=>path===root||path.startsWith(root+'/'))).map(([path])=>path)])];
+  assert.deepEqual(sort(await rows(p)), sort(effective));
+  assert.equal(await p.evaluate(`document.querySelectorAll('textarea').length===1&&!document.querySelector('select[name=input-kind], [data-automatic-exclusions], input[type=checkbox]')`),true);
+}
+async function togglePath(p, path) {
+  const paths=await rows(p);
+  await manual(p,paths.includes(path)?paths.filter(value=>value!==path):[...paths,path]);
 }
 async function openSetup(p) {
   await p.evaluate(`(()=>{if(document.querySelector('form').hidden)document.querySelector('[data-change-repository]').click();document.querySelector('[data-exclusions]').open=true;return true;})()`);
@@ -115,16 +121,22 @@ export async function exerciseAutomaticExclusions({page,cdp,harness,origin,reque
   await manual(p,initialManual);
   let start=harness.events.length;await analyze(p);
   const initial=await terminal({p,harness,checked,start,paths:localPaths,label:'local default'});
-  await assertApplied(harness,start,defaultPolicy);await openSetup(p);await assertRows(p,defaultDetected);
+  await assertApplied(harness,start,defaultPolicy);await openSetup(p);await assertRows(p,defaultDetected,[],initialManual);
+  const initialIdentity=(await p.snapshot()).commit;
+  start=harness.events.length;await analyze(p);
+  await terminal({p,harness,checked,start,paths:localPaths,label:'local identical default rerun'});
+  await assertApplied(harness,start,defaultPolicy);
+  assert.equal((await p.snapshot()).commit,initialIdentity,'Unchanged populated list promoted automatic paths to manual or changed identity');
+  await openSetup(p);
   // The gateway snapshots each admitted File twice (before/after streaming) to
   // detect mutation. Both accesses, and every requested directory descent, count.
   assert.deepEqual(sort(harness.events.slice(start).filter(e=>e.kind==='local-read').map(e=>e.value.path)),sort(localPaths.flatMap(path=>[path,path])),'Default capture read a pruned source or omitted an admitted source');
   assert.deepEqual(sort(harness.events.slice(start).filter(e=>e.kind==='local-descent').map(e=>e.value.path)),['','.yarn','.yarn/plugins','src'],'Default capture descended into a pruned directory');
   await inspect(p,'src/app.ts',markerA);
-  const beforeCheckbox=await quietState(p,harness);
-  await p.click(checkbox('.vite'));await manual(p,editedManual);
-  assert.deepEqual(await quietState(p,harness),beforeCheckbox,'Staged checkbox/manual edits changed source, worker RPC, network, city, GPU or camera');
-  await assertRows(p,defaultDetected,['.vite']);
+  const beforeEdit=await quietState(p,harness);
+  await togglePath(p,'.vite');await manual(p,[...await rows(p),'manual-next']);
+  assert.deepEqual(await quietState(p,harness),beforeEdit,'Staged list edits changed source, worker RPC, network, city, GPU or camera');
+  await assertRows(p,defaultDetected,['.vite'],editedManual);
   assertLocalRequests(harness.requests.slice(requestStart),origin);
   const pending=await save({p,harness,origin,request,checked,expected:defaultPolicy,paths:localPaths,markers:[markerA]});
   assert.equal(pending.fingerprint,JSON.stringify(initial.value.city));
@@ -132,19 +144,37 @@ export async function exerciseAutomaticExclusions({page,cdp,harness,origin,reque
   start=harness.events.length;await analyze(p);
   const includedPaths=['.vite/cache.js',...localPaths];
   await terminal({p,harness,checked,start,paths:includedPaths,label:'local explicit include'});
-  await assertApplied(harness,start,includedPolicy);await openSetup(p);await assertRows(p,includedDetected,['.vite']);
+  await assertApplied(harness,start,includedPolicy);await openSetup(p);await assertRows(p,includedDetected,['.vite'],editedManual);
   assert.deepEqual(sort(harness.events.slice(start).filter(e=>e.kind==='local-read').map(e=>e.value.path)),sort(includedPaths.flatMap(path=>[path,path])),'Exact include read nested dependencies or omitted real cache reads');
   assert.deepEqual(sort(harness.events.slice(start).filter(e=>e.kind==='local-descent').map(e=>e.value.path)),['','.vite','.yarn','.yarn/plugins','src'],'Exact include descended into nested dependencies');
-  await inspect(p,'.vite/cache.js',cacheMarker);
+  const includedIdentity=(await p.snapshot()).commit;
+  start=harness.events.length;await analyze(p);
+  await terminal({p,harness,checked,start,paths:includedPaths,label:'local identical included rerun'});
+  await assertApplied(harness,start,includedPolicy);
+  assert.equal((await p.snapshot()).commit,includedIdentity,'Exact include or nested automatic provenance changed on identical rerun');
+  await openSetup(p);await inspect(p,'.vite/cache.js',cacheMarker);
   assertLocalRequests(harness.requests.slice(afterPendingSave),origin);
   const included=await save({p,harness,origin,request,checked,expected:includedPolicy,paths:includedPaths,markers:[markerA,cacheMarker]});
   assert.notEqual(included.captureId,pending.captureId);
   const afterIncludedSave=harness.requests.length;
   const beforePostSave=await quietState(p,harness);
-  await p.click(checkbox('.vite'));
-  assert.deepEqual(await quietState(p,harness),beforePostSave,'Post-Save checkbox edit performed work');
+  await togglePath(p,'.vite');
+  assert.deepEqual(await quietState(p,harness),beforePostSave,'Post-Save list edit performed work');
   const unchanged=await readSnapshot({origin,request,checked,...included});
   assert.deepEqual(unchanged.bytes,included.bytes,'Pending next-Analyze settings mutated the recorded snapshot');
+  start=harness.events.length;await analyze(p);
+  await terminal({p,harness,checked,start,paths:localPaths,label:'local readded root excludes again'});
+  await assertApplied(harness,start,policy(editedManual,[],defaultDetected,['.vite','.yarn/cache',...editedManual]));
+  await openSetup(p);
+  const beforeTabs=await quietState(p,harness);
+  await p.click('[data-source-github]');
+  assert.equal(await p.evaluate(`document.querySelector('[data-github-setup]').checkVisibility()&&!document.querySelector('[data-local-setup]').checkVisibility()`),true);
+  await p.evaluate(`document.querySelector('[data-source-github]').focus();true`);
+  await checked(cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Home',code:'Home',windowsVirtualKeyCode:36},p.sessionId));
+  await checked(cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Home',code:'Home',windowsVirtualKeyCode:36},p.sessionId));
+  assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-source-local]')&&document.querySelector('[data-source-local]').getAttribute('aria-selected')==='true'&&document.querySelector('[data-local-setup]').checkVisibility()&&!document.querySelector('[data-github-setup]').checkVisibility()`),true);
+  assert.deepEqual(await quietState(p,harness),beforeTabs,'Source tab pointer/keyboard changes performed work or changed current city/camera/GPU');
+  assert.deepEqual(await rows(p),editedManual,'Source change retained auto-only rows');
   await checked(cdp.send('Target.closeTarget',{targetId:p.targetId}));
 
   const all=await page({localPicker:true,observation:automaticExclusionObservation});
@@ -155,15 +185,15 @@ export async function exerciseAutomaticExclusions({page,cdp,harness,origin,reque
   assert.equal(failed.value.category,'No supported modules');
   const empty=await all.wait(s=>s.progress===null&&s.status.includes('No supported'));
   assert.equal(empty.canvases,0);assert.equal(empty.setup,true);assert.equal(empty.analyzed,0);assert.equal(empty.failed,0);
-  assert.equal(await all.evaluate(`document.querySelector('[data-exclusions]').open&&document.querySelector(${JSON.stringify(checkbox(excludedRoot))}).checkVisibility()`),true);
+  assert.equal(await all.evaluate(`document.querySelector('[data-exclusions]').open&&document.querySelector(${JSON.stringify(editor)}).checkVisibility()`),true);
   assert.equal(harness.events.slice(start).filter(e=>e.kind==='local-read').length,0);
   await assertRows(all,[[excludedRoot,'cache:.vite']]);
   await checked(cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},all.sessionId));
-  const layout=await all.evaluate(`(()=>{const input=document.querySelector(${JSON.stringify(checkbox(excludedRoot))}),box=input.getBoundingClientRect();return {width:box.width,height:box.height,label:input.parentElement.getBoundingClientRect().height,scroll:document.documentElement.scrollWidth,viewport:innerWidth};})()`);
-  assert.ok(layout.width>=12&&layout.width<=32&&layout.height<=32,JSON.stringify(layout));
-  assert.ok(layout.label>=44&&layout.scroll<=layout.viewport+1,JSON.stringify(layout));
+  const layout=await all.evaluate(`(()=>{const input=document.querySelector(${JSON.stringify(editor)}),box=input.getBoundingClientRect();return {width:box.width,height:box.height,scroll:document.documentElement.scrollWidth,viewport:innerWidth};})()`);
+  assert.ok(layout.width>=250&&layout.width<=layout.viewport&&layout.height>=70,JSON.stringify(layout));
+  assert.ok(layout.scroll<=layout.viewport+1,JSON.stringify(layout));
   process.stdout.write(`Automatic exclusion table: local all excluded: 0 analyzed, 0 canvas, editable exclusions (${failed.value.type})\n`);
-  await all.click(checkbox(excludedRoot));start=harness.events.length;await analyze(all);
+  await togglePath(all,excludedRoot);start=harness.events.length;await analyze(all);
   await terminal({p:all,harness,checked,start,paths:[`${excludedRoot}/cache.ts`],label:'local all-excluded recovery'});
   await inspect(all,`${excludedRoot}/cache.ts`,cacheMarker);
   assertLocalRequests(harness.requests.slice(afterIncludedSave),origin);
@@ -172,16 +202,18 @@ export async function exerciseAutomaticExclusions({page,cdp,harness,origin,reque
   process.stdout.write('Browser evidence: GitHub automatic exclusions, actual admission/projector/raw reads\n');
   harness.setMode('automatic-exclusions');
   const github=await page({observation:automaticExclusionObservation});
-  // Select GitHub once. Further Analyze submissions deliberately do NOT dispatch
-  // input-kind change, which would correctly reset the staged include exception.
-  await github.evaluate(`(()=>{const kind=document.querySelector('select[name=input-kind]');kind.value='github';kind.dispatchEvent(new Event('change'));document.querySelector('input[name=repository]').value='https://github.com/fixture/standalone';return true;})()`);
+  // Use the real source tab, not a hidden compatibility input.
+  await github.click('[data-source-github]');
+  await github.evaluate(`document.querySelector('input[name=repository]').value='https://github.com/fixture/standalone';true`);
   const githubCases=[
     {label:'github default',paths:githubPaths,included:[],manual:[],detected:defaultDetected,effective:['.vite','.yarn/cache']},
     {label:'github include',paths:['.vite/cache.js',...githubPaths],included:['.vite'],manual:[],detected:includedDetected,effective:['.vite/node_modules','.yarn/cache'],toggle:true},
-    {label:'github manual wins',paths:githubPaths,included:['.vite'],manual:['.vite'],detected:defaultDetected,effective:['.vite','.yarn/cache']},
+    {label:'github readd excludes',paths:githubPaths,included:[],manual:[],detected:defaultDetected,effective:['.vite','.yarn/cache'],toggle:true},
+    {label:'github manual ancestor/file wins',paths:['.vite/cache.js','packages/owned.js'],included:['.vite'],manual:['.yarn','owned.js'],detected:includedDetected.filter(([path])=>!path.startsWith('.yarn/')),effective:['.vite/node_modules','.yarn','owned.js'],toggle:true},
   ];
   for(const test of githubCases){
-    await openSetup(github);if(test.toggle)await github.click(checkbox('.vite'));await manual(github,test.manual);
+    await openSetup(github);if(test.toggle)await togglePath(github,'.vite');
+    if(test.manual.length)await manual(github,[...await rows(github),...test.manual]);
     start=harness.events.length;const networkStart=harness.requests.length;await analyze(github);
     const result=await terminal({p:github,harness,checked,start,paths:test.paths,label:test.label});
     await assertApplied(harness,start,policy(test.manual,test.included,test.detected,test.effective));
@@ -190,7 +222,7 @@ export async function exerciseAutomaticExclusions({page,cdp,harness,origin,reque
     const workerRequests=harness.requests.slice(networkStart).filter(r=>r.sessionId===result.sessionId&&r.method==='GET');
     assert.deepEqual(sort(workerRequests.filter(r=>new URL(r.url).origin==='https://raw.githubusercontent.com').map(r=>new URL(r.url).pathname.split('/').slice(4).map(decodeURIComponent).join('/'))),sort(test.paths),'Full worker Network metadata differs from admitted raw reads');
     assert.equal(workerRequests.filter(r=>new URL(r.url).origin==='https://api.github.com').length,3,'Provider metadata inventory/resolution was skipped');
-    if(test.toggle)await inspect(github,'.vite/cache.js',cacheMarker);
+    if(test.included.includes('.vite'))await inspect(github,'.vite/cache.js',cacheMarker);
   }
   await checked(cdp.send('Target.closeTarget',{targetId:github.targetId}));
   harness.setMode('no-provider');
@@ -209,7 +241,7 @@ export async function reopenAutomaticExclusions({page,cdp,harness,origin,request
     assert.equal((await p.snapshot()).commit,record.captureId);assert.equal(await p.evaluate('window.__cityFingerprint'),record.fingerprint);
     assert.equal(await p.evaluate(`document.querySelector('[data-folder-name]').textContent`),'No folder selected');
     await openSetup(p);await assertRows(p,record.expected.detected,record.expected.included,record.expected.manual);
-    assert.equal(await p.evaluate(`document.querySelector('textarea[name=additional-exclusions]').value`),record.expected.manual.join('\n'));
+    assert.deepEqual(await rows(p),record.expected.effective);
     await inspect(p,'src/app.ts',markerA);
     if(record.expected.included.length)await inspect(p,'.vite/cache.js',cacheMarker);
     assertLocalRequests(harness.requests.slice(start),origin,{savedId:record.id,forbidParser:true});
@@ -227,7 +259,7 @@ export async function reopenAutomaticExclusions({page,cdp,harness,origin,request
       const beforeSelection=await quietState(p,harness);await selectFolder(p);
       assert.deepEqual(await quietState(p,harness),beforeSelection,'Restored folder selection scanned or changed the city');
       await assertRows(p,record.expected.detected,record.expected.included,record.expected.manual);
-      assert.equal(await p.evaluate(`document.querySelector('textarea[name=additional-exclusions]').value`),editedManual.join('\n'),'Required folder selection lost restored manual settings');
+      assert.deepEqual(await rows(p),record.expected.effective,'Required folder selection lost restored effective list');
       harness.setMode('automatic-exclusions-local');const attemptStart=harness.events.length;await analyze(p);
       await terminal({p,harness,checked,start:attemptStart,paths:record.paths,label:'restored include survives explicit folder selection'});
       await assertApplied(harness,attemptStart,includedPolicy);await inspect(p,'.vite/cache.js','AUTOMATIC_RESELECTED_CACHE');

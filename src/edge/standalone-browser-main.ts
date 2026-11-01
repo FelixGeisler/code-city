@@ -1,6 +1,4 @@
-import { AUTOMATIC_EXCLUSION_RULES } from "../domain/exclusion-policy";
-import { createAutomaticExclusionsView } from "./automatic-exclusions-view";
-import { parseAdditionalExclusions } from "../domain/source-admission";
+import { createExclusionsEditor } from "./exclusions-editor";
 import { validWorkingTreeName } from "../application/investigation-origin";
 import {
   createStandaloneBrowserController,
@@ -20,7 +18,18 @@ function requiredElement<T extends Element>(selector: string): T {
 
 const form = requiredElement<HTMLFormElement>("form");
 const repository = requiredElement<HTMLInputElement>("input[name=repository]");
-const inputKind = requiredElement<HTMLSelectElement>("select[name=input-kind]");
+const localTab = requiredElement<HTMLButtonElement>("[data-source-local]");
+const githubTab = requiredElement<HTMLButtonElement>("[data-source-github]");
+let inputKind: "working-tree" | "github" = "working-tree";
+function selectSource(kind: typeof inputKind): void {
+  inputKind = kind;
+  for (const [tab, selected] of [[localTab, kind === "working-tree"], [githubTab, kind === "github"]] as const) {
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  localSetup.hidden = kind !== "working-tree";
+  githubSetup.hidden = kind !== "github";
+}
 const localSetup = requiredElement<HTMLElement>("[data-local-setup]");
 const githubSetup = requiredElement<HTMLElement>("[data-github-setup]");
 const chooseFolder = requiredElement<HTMLButtonElement>("[data-choose-folder]");
@@ -30,13 +39,12 @@ const originLabel = requiredElement<HTMLElement>("[data-origin-label]");
 let selectedFolder: { root: unknown; name: string } | undefined;
 let folderPickerEpoch = 0;
 const exclusions = requiredElement<HTMLTextAreaElement>("textarea[name=additional-exclusions]");
-requiredElement<HTMLElement>("[data-automatic-rules]").textContent = `Automatic directory conventions: ${AUTOMATIC_EXCLUSION_RULES.map(rule => rule.path).join(", ")}.`;
-const automaticExclusions = createAutomaticExclusionsView(requiredElement<HTMLElement>("[data-automatic-exclusions]"));
+const exclusionsEditor = createExclusionsEditor(exclusions);
 let sourceSettingsEpoch = 0, attemptSettingsEpoch = 0;
 let retainRestoredFolderSettings = false;
-const resetSourceSettings = (): void => { sourceSettingsEpoch++; retainRestoredFolderSettings = false; automaticExclusions.reset(); };
-exclusions.addEventListener("input", () => { automaticExclusions.manual(parseAdditionalExclusions(exclusions.value) ?? []); });
-repository.addEventListener("input", resetSourceSettings);
+const resetSourceSettings = (): void => { sourceSettingsEpoch++; folderPickerEpoch++; retainRestoredFolderSettings = false; exclusionsEditor.reset(); };
+let repositorySettingsUrl = repository.value;
+repository.addEventListener("input", () => { repositorySettingsUrl = repository.value; resetSourceSettings(); });
 const feedback = requiredElement<HTMLElement>("[data-feedback]");
 const status = requiredElement<HTMLElement>("[data-status]");
 const commit = requiredElement<HTMLOutputElement>("[data-commit]");
@@ -187,11 +195,11 @@ const view: StandaloneBrowserView = Object.freeze({
     presentation.clear();
   },
   exclusionPolicy(policy, complete) {
-    if (sourceSettingsEpoch === attemptSettingsEpoch) automaticExclusions.report(policy, complete);
+    if (sourceSettingsEpoch === attemptSettingsEpoch) exclusionsEditor.report(policy, complete);
   },
   working(cancel) {
     attemptSettingsEpoch = sourceSettingsEpoch;
-    automaticExclusions.begin();
+    exclusionsEditor.begin();
     showAttempt(true);
     replaceWorkingStatus(cancel);
   },
@@ -275,30 +283,44 @@ function showSaved(record: SavedRecord): void {
 const controller = createStandaloneBrowserController(createBrowserWorkerTransport(undefined, (origin, record, savedPolicy) => {
   if (sourceSettingsEpoch !== attemptSettingsEpoch) return;
   view.origin?.(origin);
-  inputKind.value = origin.kind;
+  selectSource(origin.kind);
   // Reopening a capture never reopens a filesystem capability.
   selectedFolder = undefined;
   folderName.textContent = "No folder selected";
+  folderStatus.textContent = "";
   repository.value = origin.kind === "github" ? origin.repositoryUrl : "";
-  localSetup.hidden = origin.kind !== "working-tree"; githubSetup.hidden = origin.kind !== "github";
-  exclusions.value = savedPolicy.manual.join("\n");
-  automaticExclusions.restore(savedPolicy);
+  repositorySettingsUrl = repository.value;
+  exclusionsEditor.restore(savedPolicy);
   retainRestoredFolderSettings = origin.kind === "working-tree";
   showSaved(record);
 }), view);
 const secureAnalysis = window.isSecureContext && globalThis.crypto?.subtle !== undefined;
-function submitAnalysis(repositoryUrl: string, additionalExclusions: string): void {
+function submitAnalysis(repositoryUrl: string): void {
   if (!secureAnalysis) { replaceStatus("Browser analysis requires HTTPS or localhost."); return; }
+  if (repositoryUrl !== repositorySettingsUrl) {
+    repositorySettingsUrl = repositoryUrl;
+    resetSourceSettings();
+  }
   history.replaceState(null, "", "/");
   capturedRepositoryUrl = repositoryUrl; originLabel.textContent = "Commit";
-  controller.submit(repositoryUrl, additionalExclusions, automaticExclusions.included());
+  const settings = exclusionsEditor.settings();
+  controller.submit(repositoryUrl, settings.manualText, settings.included);
 }
-inputKind.addEventListener("change", () => {
-  resetSourceSettings();
-  folderPickerEpoch++;
-  localSetup.hidden = inputKind.value !== "working-tree";
-  githubSetup.hidden = inputKind.value !== "github";
-});
+for (const [tab, kind] of [[localTab, "working-tree"], [githubTab, "github"]] as const) {
+  tab.addEventListener("click", () => {
+    if (inputKind === kind) return;
+    resetSourceSettings();
+    selectSource(kind);
+  });
+  tab.addEventListener("keydown", event => {
+    const target = event.key === "Home" ? localTab : event.key === "End" ? githubTab
+      : event.key === "ArrowLeft" || event.key === "ArrowRight" ? (tab === localTab ? githubTab : localTab) : undefined;
+    if (!target) return;
+    event.preventDefault();
+    target.click(); target.focus();
+  });
+}
+selectSource("working-tree");
 const directoryPicker = (window as Window & { showDirectoryPicker?: (options: { mode: "read" }) => Promise<{ name: string }> }).showDirectoryPicker;
 chooseFolder.addEventListener("click", () => {
   if (!secureAnalysis || !directoryPicker) { folderStatus.textContent = "Read-only folder selection requires secure desktop Chromium. Public GitHub remains available."; return; }
@@ -311,7 +333,7 @@ chooseFolder.addEventListener("click", () => {
     else resetSourceSettings();
     selectedFolder = { root, name: root.name };
     folderName.textContent = root.name;
-    folderStatus.textContent = "Folder selected. Choose Analyze to capture its current files; nothing has been uploaded.";
+    folderStatus.textContent = "Folder selected.";
   }, error => {
     if (epoch !== folderPickerEpoch) return;
     folderStatus.textContent = error instanceof DOMException && error.name === "AbortError"
@@ -322,20 +344,21 @@ chooseFolder.addEventListener("click", () => {
 if (!secureAnalysis || !directoryPicker) folderStatus.textContent = "Read-only folder selection requires secure desktop Chromium. Public GitHub remains available.";
 form.addEventListener("submit", (event) => {
   event.preventDefault();
-  if (inputKind.value === "github") { submitAnalysis(repository.value, exclusions.value); return; }
+  if (inputKind === "github") { submitAnalysis(repository.value); return; }
   if (!secureAnalysis || !directoryPicker) { folderStatus.textContent = "Read-only folder selection requires secure desktop Chromium."; return; }
   if (!selectedFolder) { folderStatus.textContent = "Choose a folder before Analyze."; return; }
   folderPickerEpoch++;
   history.replaceState(null, "", "/");
   capturedRepositoryUrl = selectedFolder.name; originLabel.textContent = "Working-tree capture";
-  controller.submitWorkingTree(selectedFolder.root, selectedFolder.name, exclusions.value, automaticExclusions.included());
+  const settings = exclusionsEditor.settings();
+  controller.submitWorkingTree(selectedFolder.root, selectedFolder.name, settings.manualText, settings.included);
 });
 changeRepository.addEventListener("click", () => {
   if (!hasAttempt || isWorking) return;
   form.hidden = !form.hidden;
   changeRepository.textContent = form.hidden ? "Change source" : "Close setup";
   changeRepository.setAttribute("aria-expanded", String(!form.hidden));
-  if (!form.hidden) (inputKind.value === "github" ? repository : chooseFolder).focus();
+  if (!form.hidden) (inputKind === "github" ? repository : chooseFolder).focus();
 });
 saveButton.addEventListener("click", () => {
   if (savedRecord) {

@@ -10,9 +10,11 @@ Reasons identify recognized conventions, not certified authorship. Similar names
 
 == Interaction and precedence
 
-Folder selection alone performs no discovery. Exclusions details separate manual paths from automatic detected paths and reasons. Native checked checkboxes exclude by default; unchecking stages an exact-root include exception for the next explicit Analyze. Manual exact/ancestor exclusions always win. Siblings and nested matching roots remain independent. Rows include explicitly included roots and explain manual overlap, with 32-row pagination. Editing settings changes no current city, source, camera or GPU buffers and performs no automatic analysis or upload.
+Folder selection alone performs no discovery. One Exclusions details panel contains one editable newline-path list. Detected excluded roots join user paths in that list, without a separate catalogue, reasons, checkboxes or paging. Removing a detected root stages its exact-root include exception for the next explicit Analyze; readding it excludes again. Manual exact/ancestor exclusions always win. Siblings and nested matching roots remain independent. Editing settings changes no current city, source, camera or GPU buffers and performs no automatic analysis or upload.
 
-A new attempt snapshots settings and clears prior discovery. Failed, cancelled or all-excluded attempts keep available detections editable and identify incomplete discovery honestly. Late callbacks cannot replace newer source/attempt state. Source changes reset live include exceptions. Saved working-tree reanalysis retains restored settings through explicit folder selection, without reconnecting a folder implicitly.
+The editor retains manual/automatic provenance invisibly: unchanged populated lists never promote automatic paths to manual settings or change capture identity. Reports merge against current edits, never overwrite pending or invalid text, resurrect pending removals or move a focused editor's selection. Invalid paths remain invalid rather than being repaired silently. Submit reads programmatic text changes too.
+
+A new attempt snapshots settings before work. Partial, failed, cancelled or all-excluded attempts keep available detections editable without claiming unseen descendants. Complete discovery can remove obsolete automatic-only rows. Late reports cannot replace newer source/attempt state. Source changes clear automatic-only rows and source-bound include exceptions but retain user manual paths. Saved results restore the effective list with original manual/include settings; working-tree reanalysis retains them through required explicit folder selection, without reconnecting a folder implicitly.
 
 == Capture and Save
 
@@ -22,4 +24,4 @@ Save records applied worker settings, never pending edits. Version-4 snapshots r
 
 == Acceptance
 
-Cover catalogue boundaries and case, narrow Yarn pairs, Angular/Vite nested roots, prune-before-descent, manual precedence, exact sibling/nested independence, included source acquisition in both gateways, partial/all-excluded editing, stale callbacks, staged edits without side effects, applied-policy Save and v4 strict validation/restore.
+Cover catalogue boundaries and case, narrow Yarn pairs, Angular/Vite nested roots, prune-before-descent, manual precedence, exact sibling/nested independence, included source acquisition in both gateways, partial/all-excluded editing, pending/invalid text during reports, unchanged-rerun settings and capture identity, source reset, staged edits without side effects, applied-policy Save and v4 strict validation/restore.
