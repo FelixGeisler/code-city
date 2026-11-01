@@ -913,7 +913,9 @@ try:
         key(w, pid, 'a', 4)  # Replace the remembered directory, never append another absolute path.
         actions.append('Ctrl+A-replace-location')
         diagnose('-after-location')  # Ctrl+L result BEFORE any path typing, not shortcut success proof.
-        for char in a.fixture:
+        # A trailing slash identifies the exact directory, not a completion
+        # prefix also matching our sibling '-empty' fixture.
+        for char in a.fixture + '/':
             key(w, pid, char, typing_modifiers(char))
         actions.append('type-owned-synthetic-path')
         diagnose('-before-confirm')  # Actual owned chooser state, not an inferred default button.
