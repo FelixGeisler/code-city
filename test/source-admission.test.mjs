@@ -104,7 +104,7 @@ test("every supported kind requires complete raw tree ancestry before filtering"
 });
 
 test("fixed and additional exclusions are case-sensitive exact segment or exact-descendant matches", () => {
-  assert.deepEqual(FIXED_EXCLUDED_SEGMENTS, ["node_modules", "dist", "build", "bin", "obj"]);
+  assert.deepEqual(FIXED_EXCLUDED_SEGMENTS, ["node_modules", "dist", "build", "bin", "obj", ".angular"]);
   const entries = withParents([
     regular("node_modules/a.ts"), regular("x/dist/b.ts"), regular("Build/c.ts"), regular("packages/d.ts"),
     regular("src/e.ts"), regular("src2/f.ts"), regular("single.ts"), regular("prefix/g.ts"), regular("prefix2/h.ts"),
@@ -116,6 +116,15 @@ test("fixed and additional exclusions are case-sensitive exact segment or exact-
   assert.equal(failure(withParents([regular("src/a.ts")]), ["src"]).code, "ADM-06");
   assert.equal(failure([{ path: "visible.ts", mode: "120000", type: "blob" }], ["other"]).code, "ADM-07");
   assert.equal(failure([{ path: "excluded.ts", mode: "120000", type: "blob" }], ["excluded.ts"]).code, "ADM-06");
+});
+
+test("Angular cache exclusion uses only the exact case-sensitive segment at any depth", () => {
+  const kept = [".Angular/a.ts", ".angular-tools/a.ts", ".angular.js", "cache/a.ts", "vendor/a.ts"];
+  const excluded = [".angular/a.ts", "src/.angular/a.cs", "SYNTHETICFLOW.Hub.Web/ClientApp/.angular/cache/22.2.2/flow.hub.web/vite/deps/dependency.js"];
+  const result = prepareSourceInventory(withParents([...kept, ...excluded].map(path => regular(path))));
+  assert.equal(result.kind, "candidates");
+  assert.deepEqual(result.candidates.map(candidate => candidate.canonicalPath), kept);
+  assert.equal(failure(withParents(excluded.map(path => regular(path)))).code, "ADM-06");
 });
 
 test("all nine final-segment suffixes are ASCII-case-insensitive and order is unsigned UTF-8", () => {

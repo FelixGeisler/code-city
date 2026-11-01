@@ -42,6 +42,7 @@ test('v3 snapshots retain exactly one normalized copy, outcomes, hierarchy, unit
  assert.equal(decoded.header.files.length,3);assert.equal(decoded.header.analyzer,'f'.repeat(64));
  assert.deepEqual(decoded.header.hierarchy,['src']);
  assert.deepEqual(decoded.header.exclusions,['excluded']);
+ assert.deepEqual(decoded.header.fixedExcludedSegments,['node_modules','dist','build','bin','obj','.angular']);
  assert.equal(decoded.header.files[0].outcome,'Source text is not supported');
  assert.equal(decoded.header.version,3);assert.equal(saved.bytes.subarray(0,8).toString(),'CCSAVE3\0');
  assert.equal(decoded.header.files[0].normalized,null);assert.equal(decoded.sourceBytes.length,2);
@@ -60,6 +61,39 @@ test('v3 snapshots retain exactly one normalized copy, outcomes, hierarchy, unit
 
 function encode(header,sections){const bytes=Buffer.from(JSON.stringify(header));return Buffer.concat([snapshotPrefix(bytes),bytes,...sections]);}
 const descriptor=bytes=>({length:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});
+
+test('exact historical-five and current-six v3 policies preserve cached source/results through decode and native restart',async(t)=>{
+ const historical=['node_modules','dist','build','bin','obj'],current=[...historical,'.angular'];
+ const filePath='SYNTHETICFLOW.Hub.Web/ClientApp/.angular/cache/22.2.2/flow.hub.web/vite/deps/dependency.js';
+ const source=new TextEncoder().encode('const synthetic = ;\n'),capture=createInvestigationCapture();
+ const result={city:null,sources:[{canonicalPath:filePath,normalizedUtf8:source}],notAnalyzedFiles:[{canonicalPath:filePath,category:'Syntax could not be analyzed'}]};
+ const original=await decodeSnapshot(new Uint8Array(await(await capture.snapshot({kind:'working-tree',name:'Synthetic historical capture',captureId:'b'.repeat(64)},[],result,'f'.repeat(64))).arrayBuffer()));
+ const data=path.join(temporary,'v3-policies');let running=await host(data);t.after(()=>terminateForCleanup(running.server));
+ const saved=[];
+ for(const policy of [historical,current]){
+  const header=structuredClone(original.header);header.fixedExcludedSegments=policy;
+  const body=encode(header,original.sourceBytes),decoded=await decodeSnapshot(body);
+  assert.deepEqual(decoded.header,header);assert.deepEqual(decoded.sourceBytes,original.sourceBytes);
+  const response=await post(running.origin,body);assert.equal(response.status,201,response.body.toString());
+  saved.push({id:JSON.parse(response.body).id,body,header});
+ }
+ for(const policy of [[],[...historical,'cache'],[...current,'vendor'],[...historical].reverse(),['dist','node_modules','build','bin','obj','.angular'],[...historical,'obj'],historical.slice(0,-1),null]){
+  const header=structuredClone(original.header);header.fixedExcludedSegments=policy;
+  const body=encode(header,original.sourceBytes);
+  await assert.rejects(()=>decodeSnapshot(body));
+  assert.equal((await post(running.origin,body)).status,422,JSON.stringify(policy));
+ }
+ await stop(running.server);running=await host(data);
+ for(const {id,body,header}of saved){
+  const reopened=await request(running.origin,'/api/investigations/'+id);
+  assert.equal(reopened.status,200);assert.deepEqual(reopened.body,body);
+  const decoded=await decodeSnapshot(reopened.body);assert.deepEqual(decoded.header,header);
+  assert.equal(decoded.header.files[0].path,filePath);assert.equal(decoded.header.files[0].outcome,'Syntax could not be analyzed');
+  assert.deepEqual(decoded.sourceBytes,[source]);
+ }
+ assert.equal(JSON.parse((await request(running.origin,'/api/investigations')).body).length,2);
+ await stop(running.server);
+});
 
 test('syntax and metric failures retain normalized source with local identity and no raw capture API',async(t)=>{
  const capture=createInvestigationCapture();assert.equal('wrap' in capture,false);

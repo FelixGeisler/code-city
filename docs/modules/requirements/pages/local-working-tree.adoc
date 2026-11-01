@@ -26,7 +26,9 @@ Do not fall back to recursively enumerating a complete FileList: multi-gigabyte
 checkouts require pruning excluded directories before descending into them.
 
 Include supported-suffix regular files, whether tracked, untracked or ignored,
-after the existing fixed and captured user exclusions. Do not read or interpret
+after the xref:source-and-metrics.adoc#CC-CORE-SRC-05[fixed defaults, including
+`.angular`, and captured user exclusions]. Prune excluded directories before
+entering them or reading their files. Do not read or interpret
 .gitignore or Git metadata. Skip .git files/directories at every depth with a
 case-insensitive local metadata rule. Nested checkouts and already populated
 submodule directories are ordinary physical contents after exclusions. Never

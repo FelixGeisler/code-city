@@ -53,7 +53,7 @@ export async function exerciseLocalBrowser({page,cdp,harness,origin,request,chec
   await p.evaluate(`(async()=>{const base=await navigator.storage.getDirectory();window.__localRoot=await base.getDirectoryHandle('synthetic-working-tree',{create:true});
     window.__writeLocal=async(path,text)=>{const parts=path.split('/');let dir=window.__localRoot;for(const name of parts.slice(0,-1))dir=await dir.getDirectoryHandle(name,{create:true});const file=await dir.getFileHandle(parts.at(-1),{create:true}),writer=await file.createWritable();await writer.write(text);await writer.close();};
     await window.__writeLocal('src/app.ts','export function choose(x: number) { return x; }\\r\\n');
-    for(const name of ['.git','node_modules','dist','build','bin','obj','src/.GIT','src/user-excluded'])await window.__writeLocal(name+'/sentinel.cs','THIS_IS_SYNTHETIC_EXCLUDED_INVALID_SOURCE');
+    for(const name of ['.git','node_modules','dist','build','bin','obj','.angular','SYNTHETICFLOW.Hub.Web/ClientApp/.angular/cache/22.2.2/flow.hub.web/vite/deps','src/.GIT','src/user-excluded'])await window.__writeLocal(name+'/sentinel.cs','THIS_IS_SYNTHETIC_EXCLUDED_INVALID_SOURCE');
     await window.__writeLocal('src/View.cs','class View { int Choose(int x) { if(x>0) return 1; return 0; } }\\r\\n');
     await window.__writeLocal('src/view.jsx','export const view = x => x ? <A/> : <B/>;\\n');
     await window.__writeLocal('untracked.js','export const untracked = 1;\\n');

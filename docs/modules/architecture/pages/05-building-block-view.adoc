@@ -32,6 +32,11 @@ the file store is independent of local analysis.
 File-inventory interaction creates no provider or HTTP request. Open saved
 loads receipt metadata only; selecting an entry loads its snapshot.
 
+The version-3 reader pins recognized recorded exclusion policies independently
+of current analyzer defaults. They are metadata on restore, not filters: changing
+an admission rule must not change or invalidate an existing investigation. See
+xref:requirements:saved-investigations.adoc[Saved Investigations].
+
 Parser/runtime/worker URLs are fixed same-origin public assets. GitHub origins
 are explicit CSP connections. Repository content cannot select executable URLs.
 Server implementation and package manifest remain private.

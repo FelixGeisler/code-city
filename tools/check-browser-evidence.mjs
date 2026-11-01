@@ -820,7 +820,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await cdp.send("Page.navigate", { url: `${origin}/code-city/index.html` }, sessionId);
     await waitFor("document.readyState==='complete'&&document.querySelector('form')&&globalThis.__codeCitySuccessEvidence", "canonical package startup");
 
-    const exclusionFixture = ["node_modules", "dist", "build", "bin", "obj", "<img src=x>", "\u202Eadverse"];
+    const exclusionFixture = ["node_modules", "dist", "build", "bin", "obj", ".angular", "<img src=x>", "\u202Eadverse"];
     const additionalExclusionText = "\u202Eadverse\n<img src=x>";
     const submit = `document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('textarea[name=additional-exclusions]').value=${JSON.stringify(additionalExclusionText)};document.querySelector('form').requestSubmit();true`;
     await evaluate(submit);

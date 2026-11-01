@@ -435,8 +435,8 @@ async function main() {
     empty=process.platform==='linux'?path.join(scratch,'CodeCitySynthetic-'+randomUUID()+'-empty'):fixture+'-empty';await ownDirectory(fixture);await ownDirectory(empty);
     Object.assign(result,{workspace:scratch,fixture,empty,profile});await save();
     await writeFile(path.join(scratch,'ownership.json'),JSON.stringify({fixture,empty,profile,identities:Object.fromEntries([...identities].map(([p,s])=>[p,{dev:s.dev,ino:s.ino}]))}));
-    for(const dir of ['.git','node_modules','dist','build','bin','obj','user-excluded','src','src/.GIT','src/user-excluded','acl-directory']) {
-      await mkdir(path.join(fixture,dir));await writeFile(path.join(fixture,dir,'sentinel.cs'),'// synthetic excluded or ordinary '+dir+'\nclass Synthetic {}\n');
+    for(const dir of ['.git','node_modules','dist','build','bin','obj','.angular','SYNTHETICFLOW.Hub.Web/ClientApp/.angular/cache/22.2.2/flow.hub.web/vite/deps','user-excluded','src','src/.GIT','src/user-excluded','acl-directory']) {
+      await mkdir(path.join(fixture,dir),{recursive:true});await writeFile(path.join(fixture,dir,'sentinel.cs'),'// synthetic excluded or ordinary '+dir+'\nclass Synthetic {}\n');
     }
     for(const name of ['edited.cs','mutate.cs','delete.cs','denied.cs'])await writeFile(path.join(fixture,name),'// synthetic original\r\nclass Synthetic {}\r\n');
     await writeFile(path.join(fixture,'edited.cs'),'// synthetic edited before native capture\r\nclass Edited {}\r\n');
@@ -511,8 +511,8 @@ async function main() {
     assert.equal(files.find(f=>f.canonicalPath==='edited.cs')?.normalizedSource,'// synthetic edited before native capture\nclass Edited {}\n');
     for(const n of ['space name.cs','épreuve.cs','😀.cs'])assert(files.some(f=>f.canonicalPath==='src/'+n));
     assert(!files.some(f=>f.canonicalPath.includes('outward')||f.canonicalPath.includes('loop')||JSON.stringify(f).includes('SYNTHETIC_OUTSIDE')),'Link escaped native boundary');
-    for(const e of result.capture.log)if(e.op!=='entry')assert(!e.path.split('/').some(n=>['.git','node_modules','dist','build','bin','obj','user-excluded'].includes(n.toLowerCase())),'Excluded native operation '+JSON.stringify(e));
-    for(const excluded of ['.git','node_modules','dist','build','bin','obj','user-excluded','src/.GIT','src/user-excluded'])assert(result.capture.log.some(e=>e.op==='entry'&&e.path===excluded),'Expected native excluded entry '+excluded);
+    for(const e of result.capture.log)if(e.op!=='entry')assert(!e.path.split('/').some(n=>['.git','node_modules','dist','build','bin','obj','.angular','user-excluded'].includes(n.toLowerCase())),'Excluded native operation '+JSON.stringify(e));
+    for(const excluded of ['.git','node_modules','dist','build','bin','obj','.angular','SYNTHETICFLOW.Hub.Web/ClientApp/.angular','user-excluded','src/.GIT','src/user-excluded'])assert(result.capture.log.some(e=>e.op==='entry'&&e.path===excluded),'Expected native excluded entry '+excluded);
     result.directLinks=await worker('links');
     for(const [name,info]of Object.entries(result.links))if(info.created)assert.equal(result.directLinks[name].ok,false,'Native link lookup escaped: '+name);
     result.inventory=await worker('inventory');assert.equal(result.inventory.kind,'inventory');result.before=await worker('snapshot');

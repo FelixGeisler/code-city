@@ -56,6 +56,11 @@ execute source, compute/certify metrics, verify a claimed build identity or
 certify GitHub/local provenance. Hash consistency is not proof that a client
 actually used the claimed inputs or analyzer.
 
+Version-3 saves with either the original five fixed exclusions or the updated
+six including `.angular` remain readable. Reopen preserves their recorded source
+and results without reapplying current exclusions. Analyze again to omit Angular
+cache code from an existing investigation.
+
 Only version 3 payloads are supported under the accepted pre-production policy.
 Older payloads fail explicitly with no acquisition, parser fallback, migration,
 rewrite, implicit relayout or deletion. Older seven-field receipt metadata stays
