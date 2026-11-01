@@ -753,7 +753,7 @@ def key(w, pid, name, modifiers=0):
 
 # Minimal diagnostic image: only this already-proved private Xvfb root. No desktop,
 # filesystem/source inspection or profile contents. Downsample to bound work/size.
-def diagnostic_png():
+def diagnostic_png(suffix=''):
     windows = owned_windows()
     browser = next(window for window in candidate_windows(windows, 'inspect', a.chrome_pid))
     scope.verify(browser['window'], a.chrome_pid)
@@ -782,16 +782,18 @@ def diagnostic_png():
             return struct.pack('!I', len(data)) + kind + data + struct.pack('!I', zlib.crc32(kind + data))
         png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', (width + step - 1) // step,
               (height + step - 1) // step, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b'')
-        with open(a.diagnostic_png, 'xb') as output:
+        image_path = a.diagnostic_png.removesuffix('.png') + suffix + '.png'
+        with open(image_path, 'xb') as output:
             output.write(png)
-        evidence['diagnosticPng'] = a.diagnostic_png
+        evidence['diagnosticPng'] = image_path
+        evidence.setdefault('diagnosticPngs', []).append(image_path)
     finally:
         destroy_image(image)
 
 
-def diagnose():
+def diagnose(suffix=''):
     try:
-        diagnostic_png()
+        diagnostic_png(suffix)
     except Exception as error:
         evidence['diagnosticError'] = str(error)
 
@@ -827,6 +829,7 @@ try:
         for char in a.fixture:
             key(w, pid, char, typing_modifiers(char))
         actions.append('type-owned-synthetic-path')
+        diagnose('-before-confirm')  # Actual owned chooser state, not an inferred default button.
         key(w, pid, 'Return')
         actions.append('Return-navigate-or-select')
         time.sleep(.6)

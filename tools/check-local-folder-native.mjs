@@ -564,7 +564,17 @@ async function main() {
     }
     for(const [name,p]of Object.entries({workspace:scratch,fixture,empty}))if(p)result[name+'Status']=await absent(p)?'removed':'retained';
     if(result.shutdownError||denied.size||result.cleanup.some(x=>x.status==='retained')||result.workspaceStatus==='retained'||result.fixtureStatus==='retained'||result.emptyStatus==='retained'||result.serverClosed===false)result.status='failed';
-    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,shutdownError:result.shutdownError,linuxProcesses:process.platform==='linux'&&result.status==='failed'?{launcher:result.chrome?.launchedProcess,actual:result.chrome?.actualProcess,observedDisplayEntries:result.chrome?.observedDisplayEntries,displayProof:result.linuxDisplayProof,helperFailure:result.linuxHelperFailure,pickerPhase:result.linuxPickerPhase,actions:result.actions}:undefined,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
+    // Failure-only, bounded images of the independently proved synthetic Xvfb.
+    // No CI artifact publication, user DISPLAY, repository source or environment dump.
+    const diagnosticImages=[];
+    if(process.platform==='linux'&&result.status==='failed') {
+      let budget=256*1024;
+      for(const name of (await readdir(evidence)).filter(name=>/^linux-native-\d+-[a-z-]+\.png$/.test(name)).sort().slice(0,2)) {
+        const p=path.join(evidence,name),s=await lstat(p);
+        if(s.isFile()&&!s.isSymbolicLink()&&s.size<=budget){const bytes=await readFile(p);budget-=bytes.length;diagnosticImages.push({name,base64:bytes.toString('base64')});}
+      }
+    }
+    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,diagnosticImages,shutdownError:result.shutdownError,linuxProcesses:process.platform==='linux'&&result.status==='failed'?{launcher:result.chrome?.launchedProcess,actual:result.chrome?.actualProcess,observedDisplayEntries:result.chrome?.observedDisplayEntries,displayProof:result.linuxDisplayProof,helperFailure:result.linuxHelperFailure,pickerPhase:result.linuxPickerPhase,actions:result.actions}:undefined,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
     if(result.status!=='qualified')process.exitCode=1;
   }
 }
