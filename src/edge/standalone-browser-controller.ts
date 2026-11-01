@@ -3,8 +3,7 @@ import { PRESENTATION_KIND } from "../domain/city-model";
 import type { InspectionQuery, InspectionResult } from "../application/unit-inspection";
 import type { SavedRecord } from "../application/saved-investigation";
 import { validateCityPayload, type ValidatedCity } from "../application/city-payload";
-import { SOURCE_PAGE_BYTES } from "../application/unit-inspection";
-import { compareUnsignedUtf8, isCanonicalSourcePath, MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES } from "../domain/source-admission";
+import { compareUnsignedUtf8, isCanonicalSourcePath, MAX_ADMITTED_MODULES } from "../domain/source-admission";
 
 export type FailedFileCategory =
   | "Source text is not supported"
@@ -68,9 +67,6 @@ export type BrowserSessionObserver = Readonly<{
   lost(): void;
 }>;
 
-export type BrowserFileSourceQuery = Readonly<{ path: string; cursor: number }>;
-export type BrowserFileSource = Readonly<{ path: string; cursor: number; next: number | null; text: string }>;
-
 export type BrowserCommand = Readonly<{ sessionId: string; generation: number }>;
 export type BrowserAnalyzeCommand = Readonly<BrowserCommand & (
   | { repositoryUrl: string; additionalExclusions: string; savedId?: string; inputKind?: never }
@@ -87,7 +83,6 @@ export interface BrowserSessionOwner {
   close(): void;
   save?(): Promise<SavedRecord>;
   inspect?(query: InspectionQuery): Promise<InspectionResult>;
-  fileSource?(query: BrowserFileSourceQuery): Promise<BrowserFileSource>;
 }
 
 export type BrowserSessionTransport = Readonly<{
@@ -116,7 +111,6 @@ export type StandaloneBrowserController = Readonly<{
   openSaved(id: string): void;
   save(): Promise<SavedRecord>;
   inspect(query: InspectionQuery): Promise<InspectionResult>;
-  fileSource(query: BrowserFileSourceQuery): Promise<BrowserFileSource>;
   dispose(): void;
 }>;
 
@@ -174,21 +168,6 @@ function exactArray(value: unknown): unknown[] | undefined {
     result.push(descriptor.value);
   }
   return result;
-}
-
-export function parseBrowserFileSourceQuery(value: unknown): BrowserFileSourceQuery {
-  const row = exactRecord(value, ["path", "cursor"]);
-  if (!row || typeof row.path !== "string" || !isCanonicalSourcePath(row.path)
-    || typeof row.cursor !== "number" || !Number.isSafeInteger(row.cursor) || row.cursor < 0 || row.cursor > MAX_NORMALIZED_MODULE_BYTES) throw new Error("Source unavailable");
-  return row as BrowserFileSourceQuery;
-}
-export function parseBrowserFileSource(value: unknown, query: BrowserFileSourceQuery): BrowserFileSource {
-  const row = exactRecord(value, ["path", "cursor", "next", "text"]);
-  if (!row || row.path !== query.path || row.cursor !== query.cursor || typeof row.text !== "string" || !row.text.isWellFormed()
-    || new TextEncoder().encode(row.text).length > SOURCE_PAGE_BYTES
-    || (row.next !== null && (typeof row.next !== "number" || !Number.isSafeInteger(row.next) || row.next <= query.cursor
-      || row.next > MAX_NORMALIZED_MODULE_BYTES || row.next !== query.cursor + new TextEncoder().encode(row.text).length))) throw new Error("Source unavailable");
-  return row as BrowserFileSource;
 }
 
 function validSessionId(value: unknown): value is string {
@@ -324,7 +303,7 @@ export function parseBrowserSessionEvent(value: unknown): BrowserSessionEvent | 
     && validGeneration(localStarted.generation) && validWorkingTreeName(localStarted.name)) return localStarted as WorkingTreeEvent;
   const localProgress = exactRecord(value, ["type", "sessionId", "generation", "completed", "total"]);
   if (localProgress?.type === "WORKING_TREE_PROGRESS" && validSessionId(localProgress.sessionId)
-    && validGeneration(localProgress.generation) && ((localProgress.completed === 0 && localProgress.total === 0) || validProgressCount(localProgress.completed, localProgress.total))) return localProgress as WorkingTreeEvent;
+    && validGeneration(localProgress.generation) && validProgressCount(localProgress.completed, localProgress.total)) return localProgress as WorkingTreeEvent;
   const localCaptured = exactRecord(value, ["type", "sessionId", "generation", "origin"]);
   if (localCaptured?.type === "WORKING_TREE_CAPTURED" && validSessionId(localCaptured.sessionId) && validGeneration(localCaptured.generation)) {
     try { const origin = parseInvestigationOrigin(localCaptured.origin); if (origin.kind === "working-tree") return { ...localCaptured, origin } as WorkingTreeEvent; } catch { /* Invalid frame. */ }
@@ -547,7 +526,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       return;
     }
     if (event.type === "WORKING_TREE_PROGRESS") {
-      if (!state.local || !state.localStarted || state.terminal || state.revision !== undefined || state.stage > 1
+      if (!validProgressCount(event.completed, event.total) || !state.local || !state.localStarted || state.terminal || state.revision !== undefined || state.stage > 1
         || (state.acquisitionTotal === undefined ? event.completed !== 0 : event.total !== state.acquisitionTotal || event.completed <= state.acquisitionCompleted!)) { lose(epoch); return; }
       state.acquisitionTotal = event.total; state.acquisitionCompleted = event.completed; state.stage = 1;
       view.progress(`Acquiring files ${event.completed} of ${event.total}`, event.completed, 2 * event.total + 3);
@@ -782,10 +761,6 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     async inspect(query) {
       if (disposed || currentGeneration === undefined || !owner?.inspect) throw new Error("Unit inspection unavailable");
       return owner.inspect(query);
-    },
-    async fileSource(query) {
-      if (disposed || currentGeneration === undefined || !owner?.fileSource) throw new Error("Source unavailable");
-      return owner.fileSource(parseBrowserFileSourceQuery(query));
     },
     async save() {
       if (disposed || currentGeneration === undefined || !owner?.save) throw new Error("No completed investigation is available");

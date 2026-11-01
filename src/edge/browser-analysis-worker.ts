@@ -1,6 +1,5 @@
 import { createSourceColoring } from "./shiki-source-highlighting";
-import { isCanonicalSourcePath } from "../domain/source-admission";
-import { SOURCE_PAGE_BYTES, createFileInspection, validateInspectionQuery, type InspectionEvidence } from "../application/unit-inspection";
+import { createFileInspection, validateInspectionQuery, type InspectionEvidence } from "../application/unit-inspection";
 import { analyzeRepository } from "../application/analyze-repository";
 import { analyzeProjectSources, type ProjectAnalysis } from "../application/project-analysis";
 import { investigationIdentity, validWorkingTreeName, type InvestigationOrigin } from "../application/investigation-origin";
@@ -128,29 +127,12 @@ async function inspect(requestId: number, queryValue: unknown): Promise<void> {
     if (ownsReply()) send("INSPECTION_RESULT", { requestId, revision, ok: true, value: result });
   } catch { if (ownsReply()) send("INSPECTION_RESULT", { requestId, revision, ok: false }); }
 }
-function fileSource(requestId: number, value: unknown): void {
-  try {
-    if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype
-      || Object.keys(value).sort().join(",") !== "cursor,path") throw new Error("Invalid source query");
-    const { path, cursor } = value as { path: unknown; cursor: unknown };
-    if (typeof path !== "string" || !isCanonicalSourcePath(path) || typeof cursor !== "number" || !Number.isSafeInteger(cursor) || cursor < 0) throw new Error("Invalid source query");
-    const bytes = current?.sources.find(source => source.canonicalPath === path)?.normalizedUtf8;
-    if (!bytes || cursor > bytes.length || (cursor < bytes.length && (bytes[cursor]! & 0xc0) === 0x80)) throw new Error("Source unavailable");
-    let end = Math.min(bytes.length, cursor + SOURCE_PAGE_BYTES), lines = 0;
-    while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
-    for (let offset = cursor; offset < end; offset++) if (bytes[offset] === 10 && ++lines === 80) { end = offset + 1; break; }
-    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(cursor, end));
-    send("FILE_SOURCE_RESULT", { requestId, revision: selectedRevision, ok: true, value: { path, cursor, next: end < bytes.length ? end : null, text } });
-  } catch { send("FILE_SOURCE_RESULT", { requestId, revision: selectedRevision, ok: false }); }
-}
 let retainedSnapshot: Awaited<ReturnType<typeof decodeSnapshot>> | undefined;
 scope.addEventListener("message", (event: MessageEvent<unknown>) => {
   const value = event.data as Record<string, unknown> | null;
   if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) return;
   const exact = (keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
   if (value.type === "INSPECT" && exact(["type", "sessionId", "generation", "requestId", "query"]) && identity && value.sessionId === identity.sessionId && value.generation === identity.generation && typeof value.requestId === "number" && Number.isSafeInteger(value.requestId) && value.requestId > 0) { void inspect(value.requestId, value.query); return; }
-  if (value.type === "FILE_SOURCE" && exact(["type", "sessionId", "generation", "requestId", "query"]) && identity && value.sessionId === identity.sessionId && value.generation === identity.generation
-    && typeof value.requestId === "number" && Number.isSafeInteger(value.requestId) && value.requestId > 0) { fileSource(value.requestId, value.query); return; }
   if (value.type === "SAVE" && exact(["type", "sessionId", "generation", "requestId"]) && identity && value.sessionId === identity.sessionId && value.generation === identity.generation && typeof value.requestId === "number" && Number.isSafeInteger(value.requestId) && value.requestId > 0) { void save(value.requestId); return; }
   if (value.type === "STOP" && exact(["type", "sessionId", "generation"]) && identity && value.sessionId === identity.sessionId && value.generation === identity.generation) {
     controller?.abort(); if (current) { current = undefined; retainedSnapshot = undefined; scope.close(); } return;

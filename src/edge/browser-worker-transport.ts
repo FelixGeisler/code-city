@@ -4,7 +4,7 @@ import { parseSavedRecord } from "./browser-saved-investigations";
 import { validSavedId, type SavedRecord } from "../application/saved-investigation";
 import { parseRepositoryReference } from "../domain/repository-reference";
 import { parseAdditionalExclusions } from "../domain/source-admission";
-import { parseBrowserSessionEvent, parseBrowserFileSource, parseBrowserFileSourceQuery, type BrowserFileSource, type BrowserFileSourceQuery, type BrowserAnalyzeCommand, type BrowserCommand, type BrowserSessionTransport } from "./standalone-browser-controller";
+import { parseBrowserSessionEvent, type BrowserAnalyzeCommand, type BrowserCommand, type BrowserSessionTransport } from "./standalone-browser-controller";
 
 type OwnedWorker = {
   worker: Worker;
@@ -14,7 +14,6 @@ type OwnedWorker = {
   revision?: string;
   inspections: Map<InspectionQuery["type"], { id: number; query: InspectionQuery; resolve(value: InspectionResult): void; reject(error: Error): void }>;
   saveRequest?: { id: number; resolve(record: SavedRecord): void; reject(error: Error): void };
-  sourceRequest?: { id: number; query: BrowserFileSourceQuery; resolve(source: BrowserFileSource): void; reject(error: Error): void };
   stop?: Promise<void>;
   releaseStop?: () => void;
   dispose(): void;
@@ -72,7 +71,6 @@ export function createBrowserWorkerTransport(
                 for (const pending of owned.inspections.values()) pending.reject(new Error("Inspection changed"));
                 owned.inspections.clear();
                 owned.saveRequest?.reject(new Error("Investigation changed")); owned.saveRequest = undefined;
-                owned.sourceRequest?.reject(new Error("Investigation changed")); owned.sourceRequest = undefined;
                 worker.removeEventListener("message", message);
                 worker.removeEventListener("error", error);
                 worker.removeEventListener("messageerror", error);
@@ -97,18 +95,6 @@ export function createBrowserWorkerTransport(
                         || Object.keys(raw).sort().join(",") !== "generation,ok,requestId,revision,sessionId,type,value") throw new Error("Unit inspection unavailable");
                       entry[1].resolve(parseInspectionResult(raw.value, entry[1].query));
                     } catch { entry[1].reject(new Error("Unit inspection unavailable")); }
-                  }
-                  return;
-                }
-                if (raw.type === "FILE_SOURCE_RESULT") {
-                  const pending = owned.sourceRequest;
-                  if (pending && raw.requestId === pending.id) {
-                    owned.sourceRequest = undefined;
-                    try {
-                      if (raw.ok !== true || raw.revision !== owned.revision
-                        || Object.keys(raw).sort().join(",") !== "generation,ok,requestId,revision,sessionId,type,value") throw new Error("Source unavailable");
-                      pending.resolve(parseBrowserFileSource(raw.value, pending.query));
-                    } catch { pending.reject(new Error("Source unavailable")); }
                   }
                   return;
                 }
@@ -190,17 +176,6 @@ export function createBrowserWorkerTransport(
             const id = ++saveId; owned.inspections.set(query.type, { id, query, resolve, reject });
             try { owned.worker.postMessage({ type: "INSPECT", sessionId, generation: owned.generation, requestId: id, query }); }
             catch { owned.inspections.delete(query.type); reject(new Error("Unit inspection unavailable")); }
-          });
-        },
-        fileSource(query: BrowserFileSourceQuery) {
-          const owned = active;
-          if (closed || !owned?.finished || !owned.revision) return Promise.reject(new Error("Source unavailable"));
-          try { parseBrowserFileSourceQuery(query); } catch { return Promise.reject(new Error("Source unavailable")); }
-          owned.sourceRequest?.reject(new Error("Source changed"));
-          return new Promise<BrowserFileSource>((resolve, reject) => {
-            const id = ++saveId; owned.sourceRequest = { id, query, resolve, reject };
-            try { owned.worker.postMessage({ type: "FILE_SOURCE", sessionId, generation: owned.generation, requestId: id, query }); }
-            catch { owned.sourceRequest = undefined; reject(new Error("Source unavailable")); }
           });
         },
         save() {

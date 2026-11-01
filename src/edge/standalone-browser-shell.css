@@ -73,11 +73,6 @@ input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-
 [data-failed-rows] li { border-block-start: 1px solid var(--border); display: grid; gap: 0.2rem; padding-block-start: 0.55rem; }
 [data-failed-rows] bdi { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; unicode-bidi: isolate; }
 [data-failed-rows] span { color: var(--muted); }
-[data-failed-source] { background: var(--surface); border: 1px solid var(--border); border-radius: 0.75rem; color: var(--text); max-height: 90dvh; max-width: calc(100% - 1rem); overflow: auto; padding: 1rem; width: 70rem; }
-[data-failed-source]::backdrop { background: rgb(0 0 0 / 0.65); }
-[data-failed-source] header, [data-failed-source] nav { align-items: center; display: flex; gap: 1rem; justify-content: space-between; }
-[data-failed-source-title] { font-size: 1rem; overflow-wrap: anywhere; }
-[data-failed-source-code] { border: 1px solid var(--border); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; max-height: 58dvh; min-height: 6rem; overflow: auto; padding: 0.75rem; tab-size: 4; unicode-bidi: plaintext; white-space: pre; }
 [data-presentation] { margin-block-start: 0.75rem; }
 [data-city-tools] { align-items: start; display: grid; gap: 0.75rem; grid-template-columns: minmax(0, 1fr) auto auto; margin-block-end: 0.5rem; }
 [data-analyzed] { border: 1px solid transparent; border-radius: 0.65rem; min-width: 0; }

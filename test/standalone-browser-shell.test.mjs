@@ -28,7 +28,6 @@ async function fixture(picker) {
     openSaved(...args) { state.calls.push(["open", ...args]); },
     save() { state.calls.push(["save"]); return Promise.resolve(state.records[0]); },
     inspect() { throw new Error("Not used"); },
-    fileSource(query) { state.calls.push(["fileSource", query]); return state.sourceReader?.(query) ?? Promise.reject(new Error("Source unavailable")); },
     dispose() {},
   };
   state.controller = controller;
@@ -119,43 +118,30 @@ test("late picker completion cannot overwrite changed input or start work", asyn
   } finally { f.close(); }
 });
 
-test("valid-text failures expose bounded source without fabricated units; unsupported text has no source action", async () => {
+test("failed-file rows remain inert path/category evidence, never a source activation", async () => {
+  const html = await readFile(new URL("../standalone.html", import.meta.url), "utf8");
+  assert.doesNotMatch(html, /data-failed-source/u);
   const f = await fixture(undefined);
   try {
-    const failures = [{ canonicalPath: "broken.ts", category: "Syntax could not be analyzed" }, { canonicalPath: "metric.ts", category: "Metrics could not be computed" }, { canonicalPath: "unsupported.ts", category: "Source text is not supported" }];
-    const text = "<script>not executed</script>😀";
-    const next = new TextEncoder().encode(text).length;
-    f.state.sourceReader = async query => ({ ...query, next: query.cursor === 0 ? next : null, text });
-    f.state.view.allFilesFailed(1, failures, "c".repeat(64));
-    const rows = f.node("[data-failed-rows]").children;
-    assert.equal(rows[0].children[2].textContent, "View source");
-    assert.equal(rows[1].children[2].textContent, "View source"); assert.equal(rows[2].children.length, 2);
-    rows[0].children[2].dispatchEvent(new Event("click")); await flush();
-    assert.deepEqual(f.state.calls.at(-1), ["fileSource", { path: "broken.ts", cursor: 0 }]);
-    assert.equal(f.node("[data-failed-source-code]").textContent, text);
-    f.click("[data-failed-source-next]"); await flush();
-    assert.deepEqual(f.state.calls.at(-1), ["fileSource", { path: "broken.ts", cursor: next }]);
-    assert.equal(f.node("[data-failed-source-next]").disabled, true);
-    f.click("[data-failed-source-previous]"); await flush();
-    assert.deepEqual(f.state.calls.at(-1), ["fileSource", { path: "broken.ts", cursor: 0 }]);
-    assert.equal(f.state.calls.some(([name]) => name === "save"), false);
-    f.state.view.clear();
-    const before = f.state.calls.length;
-    rows[0].children[2].dispatchEvent(new Event("click"));
-    assert.equal(f.state.calls.length, before, "detached failure action is stale");
-  } finally { f.close(); }
-});
-
-test("late failed-source replies cannot repaint a closed or replaced investigation", async () => {
-  const f = await fixture(undefined);
-  try {
-    let resolve;
-    f.state.sourceReader = () => new Promise(accepted => { resolve = accepted; });
-    f.state.view.allFilesFailed(1, [{ canonicalPath: "broken.ts", category: "Syntax could not be analyzed" }], "c".repeat(64));
-    f.node("[data-failed-rows]").children[0].children[2].dispatchEvent(new Event("click"));
-    f.state.view.clear(); resolve({ path: "broken.ts", cursor: 0, next: null, text: "stale private text" }); await flush();
-    assert.equal(f.node("[data-failed-source-code]").textContent, "");
-    assert.equal(f.node("[data-failed-source]").open, false);
+    const failures = [{ canonicalPath: "<script>broken.ts", category: "Syntax could not be analyzed" }, { canonicalPath: "metric.ts", category: "Metrics could not be computed" }, { canonicalPath: "unsupported.ts", category: "Source text is not supported" }];
+    for (const publish of [() => f.state.view.allFilesFailed(1, failures, "c".repeat(64)), () => f.state.view.succeeded(2, {}, failures, "a".repeat(40))]) {
+      publish();
+      assert.equal(f.node("[data-failed]").hidden, false);
+      const rows = f.node("[data-failed-rows]").children;
+      assert.equal(rows.length, failures.length);
+      rows.forEach((row, index) => {
+        assert.equal(row.children.length, 2);
+        assert.equal(row.children[0].textContent, failures[index].canonicalPath);
+        assert.equal(row.children[0].attributes.get("dir"), "auto");
+        assert.equal(row.children[1].textContent, failures[index].category);
+        row.dispatchEvent(new Event("click"));
+      });
+      assert.deepEqual(f.state.calls, [["start"]], "rendering or clicking failures performs no inspection or Save");
+      assert.equal(f.node("[data-save]").hidden, false);
+      f.state.view.clear();
+      assert.equal(f.node("[data-failed]").hidden, true);
+      assert.equal(f.node("[data-failed-rows]").children.length, 0);
+    }
   } finally { f.close(); }
 });
 

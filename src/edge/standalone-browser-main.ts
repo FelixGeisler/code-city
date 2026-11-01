@@ -33,14 +33,6 @@ const commit = requiredElement<HTMLOutputElement>("[data-commit]");
 const failed = requiredElement<HTMLDetailsElement>("[data-failed]");
 const failedSummary = requiredElement<HTMLElement>("[data-failed-summary]");
 const failedRows = requiredElement<HTMLUListElement>("[data-failed-rows]");
-const failedSource = requiredElement<HTMLDialogElement>("[data-failed-source]");
-const failedSourceTitle = requiredElement<HTMLElement>("[data-failed-source-title]");
-const failedSourceCode = requiredElement<HTMLElement>("[data-failed-source-code]");
-const failedSourceStatus = requiredElement<HTMLElement>("[data-failed-source-status]");
-const failedSourcePrevious = requiredElement<HTMLButtonElement>("[data-failed-source-previous]");
-const failedSourceNext = requiredElement<HTMLButtonElement>("[data-failed-source-next]");
-let sourceEpoch = 0;
-let sourcePage: { path: string; cursors: number[]; next: number | null } | undefined;
 const presentationRoot = requiredElement<HTMLElement>("[data-presentation]");
 const investigation = requiredElement<HTMLElement>("[data-investigation]");
 const repositoryName = requiredElement<HTMLElement>("[data-repository]");
@@ -119,25 +111,6 @@ function updateWorkingProgress(label: string, completed?: number, total?: number
   progress.removeAttribute("aria-valuenow");
 }
 
-async function readFailedSource(path: string, cursors: number[]): Promise<void> {
-  const epoch = ++sourceEpoch, cursor = cursors.at(-1)!;
-  sourcePage = undefined;
-  failedSourceCode.textContent = ""; failedSourceStatus.textContent = "Loading source";
-  failedSourcePrevious.disabled = true; failedSourceNext.disabled = true;
-  try {
-    const page = await controller.fileSource({ path, cursor });
-    if (epoch !== sourceEpoch || !failedSource.open) return;
-    sourcePage = { path, cursors, next: page.next };
-    failedSourceCode.textContent = page.text;
-    failedSourceStatus.textContent = `Normalized source · byte ${cursor + 1}${page.next === null ? " · last page" : ""}`;
-    failedSourcePrevious.disabled = cursors.length === 1; failedSourceNext.disabled = page.next === null;
-  } catch { if (epoch === sourceEpoch && failedSource.open) failedSourceStatus.textContent = "Source unavailable. The investigation is unchanged."; }
-}
-requiredElement<HTMLButtonElement>("[data-close-failed-source]").addEventListener("click", () => failedSource.close());
-failedSource.addEventListener("close", () => { sourceEpoch++; sourcePage = undefined; failedSourceCode.textContent = ""; });
-failedSourcePrevious.addEventListener("click", () => { if (sourcePage && sourcePage.cursors.length > 1) void readFailedSource(sourcePage.path, sourcePage.cursors.slice(0, -1)); });
-failedSourceNext.addEventListener("click", () => { if (sourcePage && sourcePage.next !== null) void readFailedSource(sourcePage.path, [...sourcePage.cursors, sourcePage.next]); });
-
 function renderFailures(rows: readonly BrowserFailedFile[]): void {
   failed.open = false;
   failedSummary.textContent = rows.length === 0 ? "" : `${rows.length} ${rows.length === 1 ? "file" : "files"} not analyzed`;
@@ -146,7 +119,6 @@ function renderFailures(rows: readonly BrowserFailedFile[]): void {
     failed.hidden = true;
     return;
   }
-  const attemptEpoch = uiEpoch;
   const items = rows.map(({ canonicalPath, category }) => {
     const item = document.createElement("li");
     const path = document.createElement("bdi");
@@ -155,16 +127,6 @@ function renderFailures(rows: readonly BrowserFailedFile[]): void {
     const detail = document.createElement("span");
     detail.textContent = category;
     item.append(path, detail);
-    if (category !== "Source text is not supported") {
-      const button = document.createElement("button"); button.type = "button"; button.textContent = "View source";
-      button.addEventListener("click", () => {
-        if (attemptEpoch !== uiEpoch) return;
-        failedSourceTitle.textContent = canonicalPath;
-        failedSource.showModal();
-        void readFailedSource(canonicalPath, [0]);
-      });
-      item.append(button);
-    }
     return item;
   });
   failedRows.replaceChildren(...items);
@@ -186,7 +148,6 @@ const presentation = createStandalonePresentationCoordinator({
 
 const view: StandaloneBrowserView = Object.freeze({
   clear() {
-    sourceEpoch++; sourcePage = undefined; failedSource.close(); failedSourceCode.textContent = "";
     uiEpoch++;
     savedRecord = undefined;
     saveButton.hidden = true;
@@ -395,7 +356,7 @@ requiredElement<HTMLButtonElement>("[data-open-saved]").addEventListener("click"
 requiredElement<HTMLButtonElement>("[data-close-saved]").addEventListener("click", () => savedPicker.close());
 savedPicker.addEventListener("close", () => { pickerEpoch++; savedProjects.replaceChildren(); });
 window.addEventListener("pagehide", () => {
-  folderPickerEpoch++; selectedFolder = undefined; sourceEpoch++; failedSource.close();
+  folderPickerEpoch++; selectedFolder = undefined;
   controller.dispose();
   presentation.dispose();
 }, { once: true });

@@ -201,29 +201,15 @@ test("local capture switches to terminable parser ownership and binds bounded in
   } finally { f.owner.close(); }
 });
 
-test("source-only RPC supports all-failed live and reopened captures with identity and stale guards", async () => {
-  for (const reopened of [false, true]) {
-    const f = await fixture();
-    try {
-      await f.owner.analyze(reopened ? { ...f.command(1), savedId: "S".repeat(43) } : localCommand(f));
-      const worker = f.workers[0];
-      f.emit(worker, "WORKING_TREE_CAPTURED", 1, { origin: localOrigin });
-      f.emit(worker, "ANALYSIS_ALL_FILES_FAILED", 1, { revision: captureId, notAnalyzedFiles: [{ canonicalPath: "broken.ts", category: "Syntax could not be analyzed" }] });
-      const query = { path: "broken.ts", cursor: 0 };
-      const first = f.owner.fileSource(query), changed = assert.rejects(first, /Source changed/u);
-      const current = f.owner.fileSource(query); await changed;
-      const request = worker.messages.at(-1); assert.equal(request.type, "FILE_SOURCE");
-      f.emit(worker, "FILE_SOURCE_RESULT", 1, { requestId: request.requestId, revision: captureId, ok: true, value: { ...query, next: null, text: "not valid syntax 😀" } });
-      assert.equal((await current).text, "not valid syntax 😀");
-      const malformed = f.owner.fileSource(query), bad = worker.messages.at(-1);
-      f.emit(worker, "FILE_SOURCE_RESULT", 1, { requestId: bad.requestId, revision: "b".repeat(64), ok: true, value: { ...query, next: null, text: "wrong capture" } });
-      await assert.rejects(malformed, /Source unavailable/u);
-      const pending = f.owner.fileSource(query), rejected = assert.rejects(pending, /Investigation changed/u);
-      await f.owner.analyze(localCommand(f, 2)); await rejected;
-      f.emit(worker, "FILE_SOURCE_RESULT", 1, { requestId: worker.messages.at(-1).requestId, revision: captureId, ok: true, value: { ...query, next: null, text: "stale" } });
-      assert.equal(f.losses(), 0);
-    } finally { f.owner.close(); }
-  }
+test("fabricated zero-candidate progress is rejected before observer delivery", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.analyze(localCommand(f)); const worker = f.workers[0];
+    f.emit(worker, "WORKING_TREE_STARTED", 1, { name: localOrigin.name });
+    f.emit(worker, "WORKING_TREE_PROGRESS", 1, { completed: 0, total: 0 });
+    assert.equal(f.losses(), 1); assert.equal(worker.terminated, 1);
+    assert.deepEqual(f.events.map(event => event.type), ["WORKING_TREE_STARTED"]);
+  } finally { f.owner.close(); }
 });
 
 test("a pre-capture local failure is terminal and unavailable capability cloning is sanitized", async () => {
