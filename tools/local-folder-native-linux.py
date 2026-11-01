@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Bounded X11 chooser automation on this test's OWN Xvfb only; no user DISPLAY.
 
-Python stdlib + ctypes/libX11, no xdotool/desktop session/dependencies. No portal
-fallback: chooser must belong to the recorded Chrome PID or its Chrome children.
-English GTK chooser: Ctrl+L, synthetic absolute path, Return (navigate), Return
+Qualification-only Python stdlib + ctypes/libX11/libXtst; no user desktop APIs.
+No portal fallback: chooser must belong to the recorded Chrome PID or its children.
+English GTK chooser: real XTEST Ctrl+L, synthetic absolute path, Return (navigate), Return
 (default Open/Select). Chrome's read prompt: Tab from default Cancel, Return.
 The JS driver requires a real selected handle and granted permission afterwards;
 UI differences fail the native gate, never imply success or an OPFS fallback.
@@ -19,6 +19,7 @@ import stat
 import struct
 import sys
 import time
+import zlib
 from pathlib import Path
 
 
@@ -169,14 +170,70 @@ class ScopedX11:
         return action()
 
 
-def scoped_key(scope, w, pid, emit):
-    # One ownership check per logical key. Queue press/release together before
-    # XSync: a chooser may close on the press, so a round-trip recheck between
-    # events would spuriously fail after a successful Escape/Return.
-    def pair():
-        for event_type, mask in ((2, 1), (3, 2)):
-            require(emit(event_type, mask), 'Scoped XSendEvent failed')
-    scope.act(w, pid, pair)
+def scoped_key(scope, w, pid, codes, emit, grab, ungrab, sync, focus, release_focus):
+    """One chord on a positively owned server, never a system-wide keyboard API.
+
+    Grab only that server and hold it across target/focus proof and the paired
+    releases. Other clients cannot steal focus mid-chord. Cleanup releases only
+    keys pressed by this chord, with fresh full target/focus proof; loss of that
+    proof forbids even a release. The driver then tears down its private Xvfb.
+    """
+    scope.verify(w, pid)
+    grab()
+    try:
+        scope.verify(w, pid)
+        focus()
+        pressed = []
+        try:
+            for code in codes:
+                pressed.append(code)  # also clean up an emit that raises after queueing
+                require(emit(code, True), 'Owned XTEST key press failed')
+        finally:
+            if pressed:
+                scope.verify(w, pid)  # no unchecked release on server/window/identity loss
+                release_focus()
+                errors = []
+                for code in reversed(pressed):
+                    try:
+                        require(emit(code, False), 'Owned XTEST key release failed')
+                    except Exception as error:
+                        errors.append(error)
+                if errors:
+                    raise errors[0]
+    finally:
+        try:
+            sync()
+        finally:
+            ungrab()
+
+
+def verified_focus(top, focused, parent, pids, viewable, pid):
+    """GTK may focus a descendant with no PID property, not an unrelated window."""
+    require_viewable(viewable(top))
+    seen = set()
+    while focused != top:
+        require(focused not in (0, 1) and focused not in seen and len(seen) < 32,
+                'Focus is outside the exact owned target')
+        seen.add(focused)
+        require_viewable(viewable(focused))
+        require(pids(focused) in (None, [pid]), 'Focused descendant PID mismatch')
+        focused = parent(focused)
+    return True
+
+
+def require_chooser_closed(windows):
+    # Absence of a viewable chooser is not proof of closure: an extant unmapped
+    # chooser may be transitioning. Fail closed rather than send Allow behind it.
+    require(not any(window['dialog'] for window in windows),
+            'Owned native chooser still present; refusing browser Allow input')
+
+
+def candidate_windows(windows, mode, chrome_pid):
+    viewable = [window for window in windows if window['mapState'] == 'IsViewable']
+    if mode in ('select', 'cancel'):
+        return [window for window in viewable if window['dialog']]
+    return [window for window in viewable if not window['dialog'] and window['pid'] == chrome_pid
+            and 'Code City synthetic native qualification' in window['title']]
 
 
 def key_symbol(name, lookup):
@@ -313,25 +370,83 @@ if sys.argv[1:] == ['--self-test']:
         state.update(change)
         refuses(lambda: guard.act(502, 102, lambda: sent.append('forbidden-key')))
         require(sent == ['focus'], 'Server/browser/window not rechecked before key')
-    # Real logical-key boundary: teardown on a press must not force a round-trip
-    # proof for its queued release; any subsequent key still requires fresh proof.
+    # Exercise real chord orchestration, including modifier and failure cleanup.
+    def chord(guard, emit=None, focus=lambda: None):
+        scoped_key(guard, 502, 102, [37, 46], emit or (lambda code, down: sent.append((code, down)) or 1),
+                   lambda: sent.append('grab'), lambda: sent.append('ungrab'),
+                   lambda: sent.append('sync'), focus, focus)
+
     guard = reset()
-
-    def closing_key(event_type, mask):
-        sent.append((event_type, mask))
-        if event_type == 2:
-            state['top'] = [501]
-        return 1
-
-    scoped_key(guard, 502, 102, closing_key)
-    require(sent == [(2, 1), (3, 2)], 'A closing chooser must receive one queued key pair')
-    refuses(lambda: scoped_key(guard, 502, 102, closing_key))
-    require(sent == [(2, 1), (3, 2)], 'A subsequent key reached a closed window')
+    chord(guard)
+    require(sent == ['grab', (37, True), (46, True), (46, False), (37, False), 'sync', 'ungrab'],
+            'XTEST chord must pair and reverse-release actual modifier keys')
+    for failing in [(37, True), (46, True), (46, False)]:
+        guard = reset()
+        def fail_emit(code, down):
+            sent.append((code, down))
+            if (code, down) == failing:
+                raise RuntimeError('injected XTEST failure')
+            return 1
+        refuses(lambda: chord(guard, fail_emit))
+        require((37, False) in sent and sent[-2:] == ['sync', 'ungrab'], 'Modifier cleanup/grab leaked')
+        if failing != (37, True):
+            require((46, False) in sent, 'Main key cleanup missing')
     for change in [{'peer': (91, 42)}, {'pids': {501: [101], 502: [999]}}, {'top': [502]}]:
         guard = reset()
         state.update(change)
-        refuses(lambda: scoped_key(guard, 502, 102, closing_key))
-        require(not sent, 'Unproved server/window received part of a key pair')
+        refuses(lambda: chord(guard))
+        require(not sent, 'Unproved server/window received part of a chord')
+    guard = reset()
+    refuses(lambda: chord(guard, focus=lambda: require(False, 'wrong focus')))
+    require(sent == ['grab', 'sync', 'ungrab'], 'Focus refusal emitted keys or leaked grab')
+    guard = reset()
+    def changed_at_grab():
+        sent.append('grab')
+        state['peer'] = (91, 42)
+    refuses(lambda: scoped_key(guard, 502, 102, [37, 46], lambda *_: sent.append('forbidden'),
+                               changed_at_grab, lambda: sent.append('ungrab'), lambda: sent.append('sync'), lambda: None, lambda: None))
+    require(sent == ['grab', 'sync', 'ungrab'], 'Proof not refreshed after grabbing owned server')
+    guard = reset()
+    def lost_server(code, down):
+        sent.append((code, down))
+        state['peer'] = (91, 42)
+        raise RuntimeError('server proof lost')
+    refuses(lambda: chord(guard, lost_server))
+    require(sent == ['grab', (37, True), 'sync', 'ungrab'], 'Lost server received unchecked release')
+    for change in [{'top': [501]}, {'pids': {501: [101], 502: [999]}},
+                   {'target': {**chrome, 'pid': 102, 'start': '999'}}]:
+        guard = reset()
+        def lost_target(code, down):
+            sent.append((code, down))
+            state.update(change)
+            raise RuntimeError('target proof lost')
+        refuses(lambda: chord(guard, lost_target))
+        require(sent == ['grab', (37, True), 'sync', 'ungrab'], 'Lost target received unchecked release')
+    guard = reset()
+    def focus_lost_after_press():
+        require(not any(isinstance(event, tuple) and event[1] for event in sent), 'injected focus loss')
+    refuses(lambda: chord(guard, focus=focus_lost_after_press))
+    require(sent == ['grab', (37, True), (46, True), 'sync', 'ungrab'], 'Lost focus received unchecked release')
+    for focused in [502, 503, 504]:
+        require(verified_focus(502, focused, lambda w: {503: 502, 504: 503}[w],
+                               lambda w: [102] if w == 503 else None, lambda w: 2, 102),
+                'Owned GTK descendant focus rejected')
+    for focused, parents, pids, maps in [
+            (0, {}, {}, {}), (1, {}, {}, {}), (501, {501: 0}, {}, {}),
+            (503, {503: 503}, {}, {}), (503, {503: 502}, {503: [999]}, {}),
+            (503, {503: 502}, {}, {503: 1}), (502, {}, {}, {502: 0})]:
+        refuses(lambda: verified_focus(502, focused, lambda w: parents[w],
+                                       lambda w: pids.get(w), lambda w: maps.get(w, 2), 102))
+    require_chooser_closed([{'dialog': False}])
+    refuses(lambda: require_chooser_closed([{'dialog': False}, {'dialog': True}]))
+    for map_state in ['IsUnmapped', 'IsUnviewable', 'IsViewable']:
+        dialog = {'window': 502, 'pid': 102, 'dialog': True, 'mapState': map_state, 'title': 'Select Folder'}
+        browser = {'window': 501, 'pid': 101, 'dialog': False, 'mapState': 'IsViewable',
+                   'title': 'Code City synthetic native qualification'}
+        require(candidate_windows([browser, dialog], 'select', 101) == ([dialog] if map_state == 'IsViewable' else []),
+                'Premapped chooser selected for focus/input')
+        require(candidate_windows([browser, dialog], 'inspect', 101) == [browser], 'Browser inspection target regression')
+        refuses(lambda: require_chooser_closed([browser, dialog]))
     # Complete rewritten argv[0] from CI 41263489673; byte parser remains strict.
     a.profile = '/tmp/code-city-native-o8tUex/profile'
     expected_arguments = ['--remote-debugging-port=0', '--user-data-dir=' + a.profile,
@@ -390,7 +505,7 @@ if sys.argv[1:] == ['--self-test']:
     for change in [{'uid': 43}, {'pgid': 90}, {'start': '202'}]:
         refuses(lambda change=change: check_flat(l={**flat_linux, 'launcher': {**launcher, **change}}))
     refuses(lambda: check_flat(env=b'DISPLAY=:70\0'))
-    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, DISPLAY contradiction/source guards and DISPLAY-only evidence; empty metadata defers to exact connected-Xvfb/CDP top-level window proof; focus/key action boundary and identity rechecks; raw/empty argv preservation, ASCII/named keysyms and Shift masks; no X11/native runtime'}))
+    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, DISPLAY contradiction/source guards and DISPLAY-only evidence; empty metadata defers to exact connected-Xvfb/CDP top-level window proof; focus/key action boundary and identity rechecks; raw/empty argv preservation, ASCII/named keysyms and Shift masks; viewable map states, XTEST modifier/key cleanup, lost-proof release refusal, exact/descendant focus refusals and chooser-before-Allow guard; no X11/native runtime'}))
     sys.exit(0)
 
 
@@ -400,11 +515,13 @@ parser.add_argument('--xvfb-pid', type=int, required=True)
 parser.add_argument('--chrome-pid', type=int, required=True)
 parser.add_argument('--profile', required=True)
 parser.add_argument('--ownership', required=True)
-parser.add_argument('--mode', choices=['select', 'allow-read', 'cancel'], required=True)
+parser.add_argument('--mode', choices=['select', 'allow-read', 'cancel', 'inspect'], required=True)
 parser.add_argument('--fixture', required=True)
+parser.add_argument('--diagnostic-png', required=True)
 a = parser.parse_args()
 require(re.fullmatch(r':\d+', a.display), 'Only a local isolated display number is allowed')
-evidence = {'display': a.display, 'displayProof': {'status': 'process-check-pending', 'displayQualified': False}}
+evidence = {'display': a.display, 'mode': a.mode, 'actions': [], 'phase': 'process-check',
+            'displayProof': {'status': 'process-check-pending', 'displayQualified': False}}
 
 
 def failure_json(kind, error, traceback):
@@ -453,29 +570,55 @@ query_tree = bind('XQueryTree', C.c_int, [Display, Window, C.POINTER(Window), C.
 atom = bind('XInternAtom', C.c_ulong, [Display, C.c_char_p, C.c_int])
 get_property = bind('XGetWindowProperty', C.c_int, [Display, Window, C.c_ulong, C.c_long, C.c_long, C.c_int, C.c_ulong, C.POINTER(C.c_ulong), C.POINTER(C.c_int), C.POINTER(C.c_ulong), C.POINTER(C.c_ulong), C.POINTER(C.POINTER(C.c_ubyte))])
 free = bind('XFree', C.c_int, [C.c_void_p])
-flush = bind('XSync', C.c_int, [Display, C.c_int])
+x_sync = bind('XSync', C.c_int, [Display, C.c_int])
+
+
+class XError(C.Structure):
+    _fields_ = [('type', C.c_int), ('display', Display), ('resource', C.c_ulong), ('serial', C.c_ulong),
+                ('code', C.c_ubyte), ('request', C.c_ubyte), ('minor', C.c_ubyte)]
+
+
+x_errors = []
+XErrorHandler = C.CFUNCTYPE(C.c_int, Display, C.POINTER(XError))
+
+
+@XErrorHandler
+def record_x_error(_display, event):
+    if len(x_errors) < 8:
+        x_errors.append({'code': event.contents.code, 'request': event.contents.request,
+                         'resource': event.contents.resource})
+    return 0
+
+
+bind('XSetErrorHandler', C.c_void_p, [XErrorHandler])(record_x_error)
+
+
+def flush(display, discard):
+    x_sync(display, discard)
+    if x_errors:
+        evidence['xErrors'] = list(x_errors)
+        x_errors.clear()
+        raise RuntimeError('Owned X11 request failed: ' + json.dumps(evidence['xErrors']))
 set_focus = bind('XSetInputFocus', C.c_int, [Display, Window, C.c_int, C.c_ulong])
 get_focus = bind('XGetInputFocus', C.c_int, [Display, C.POINTER(Window), C.POINTER(C.c_int)])
 keysym = bind('XStringToKeysym', C.c_ulong, [C.c_char_p])
-keycode = bind('XKeysymToKeycode', C.c_uint, [Display, C.c_ulong])
+keycode = bind('XKeysymToKeycode', C.c_ubyte, [Display, C.c_ulong])
 
 
-class KeyEvent(C.Structure):
-    _fields_ = [('type', C.c_int), ('serial', C.c_ulong), ('send_event', C.c_int),
-                ('display', Display), ('window', Window), ('root', Window), ('subwindow', Window),
-                ('time', C.c_ulong), ('x', C.c_int), ('y', C.c_int), ('x_root', C.c_int),
-                ('y_root', C.c_int), ('state', C.c_uint), ('keycode', C.c_uint), ('same_screen', C.c_int)]
-
-
-class Event(C.Union):
-    _fields_ = [('key', KeyEvent), ('pad', C.c_long * 24)]
-
-
-send = bind('XSendEvent', C.c_int, [Display, Window, C.c_int, C.c_long, C.POINTER(Event)])
+grab_server = bind('XGrabServer', C.c_int, [Display])
+ungrab_server = bind('XUngrabServer', C.c_int, [Display])
+query_keymap = bind('XQueryKeymap', C.c_int, [Display, C.c_void_p])
+xtst_lib = ctypes.util.find_library('Xtst')
+require(xtst_lib, 'libXtst is required only for real native Linux qualification')
+xtst = C.CDLL(xtst_lib)
+query_xtest = xtst.XTestQueryExtension
+query_xtest.restype, query_xtest.argtypes = C.c_int, [Display] + [C.POINTER(C.c_int)] * 4
+fake_key = xtst.XTestFakeKeyEvent
+fake_key.restype, fake_key.argtypes = C.c_int, [Display, C.c_uint, C.c_int, C.c_ulong]
 d = open_display(a.display.encode())
 require(d, 'Owned Xvfb display unavailable (never falling back to user DISPLAY)')
 root = root_window(d)
-actions = []
+actions = evidence['actions']
 
 
 def property_value(w, name):
@@ -495,14 +638,18 @@ def property_value(w, name):
             free(data)
 
 
-def children(w):
+def window_tree(w):
     r, parent, count, data = Window(), Window(), C.c_uint(), C.POINTER(Window)()
     require(query_tree(d, w, C.byref(r), C.byref(parent), C.byref(data), C.byref(count)), 'X11 tree read failed')
     try:
-        return list(data[:count.value])
+        return parent.value, list(data[:count.value])
     finally:
         if data:
             free(data)
+
+
+def children(w):
+    return window_tree(w)[1]
 
 
 def owned(pid):
@@ -527,27 +674,27 @@ def window_map_state(w):
     return attributes.map_state
 
 
-def candidates():
+def owned_windows():
+    scope.server()
     found = []
     for w in children(root):
         pids = property_value(w, '_NET_WM_PID')
-        if not pids or not owned(pids[0]):
+        if not pids or len(pids) != 1 or not owned(pids[0]):
             continue
-        # GTK publishes transient/PID properties before mapping its chooser.
-        # Wait within the existing readiness deadline; never force-map a window.
-        if window_map_state(w) != 2:
-            continue
+        # Include premapped/hidden windows in diagnostics/closure checks, but
+        # candidate_windows never allows them to receive focus or input.
+        map_state = window_map_state(w)
+        scope.verify(w, pids[0])
         role = property_value(w, 'WM_WINDOW_ROLE') or ''
         title = property_value(w, '_NET_WM_NAME') or property_value(w, 'WM_NAME') or ''
         transient = property_value(w, 'WM_TRANSIENT_FOR')
         types = property_value(w, '_NET_WM_WINDOW_TYPE') or []
         dialog = (atom(d, b'_NET_WM_WINDOW_TYPE_DIALOG', 0) in types
                   or 'file' in role.lower() or bool(transient))
-        # Chrome's main top-level is not a native GTK file chooser.
-        if a.mode in ('select', 'cancel') and dialog:
-            found.append((w, pids[0], role, title))
-        if a.mode == 'allow-read' and not dialog and 'Code City synthetic native qualification' in title:
-            found.append((w, pids[0], role, title))
+        found.append({'window': w, 'pid': pids[0], 'role': role, 'title': title,
+                      'dialog': dialog, 'mapState': {0: 'IsUnmapped', 1: 'IsUnviewable', 2: 'IsViewable'}.get(map_state, 'unknown')})
+    evidence['windows'] = found
+    evidence['chooserClosed'] = not any(window['dialog'] for window in found)
     return found
 
 
@@ -563,64 +710,145 @@ scope = ScopedX11(a, lambda: verify_processes(a, owner, evidence=evidence), conn
                   lambda: children(root), lambda w: property_value(w, '_NET_WM_PID'), proc, owned, evidence)
 
 
-def focus_target(w, pid):
-    def focus():
-        require_viewable(window_map_state(w))
-        return set_focus(d, w, 1, 0)
-    scope.act(w, pid, focus)  # Connected, owned and mapped Xvfb/window only.
-    flush(d, 0)
+def require_focus(w, pid):
     focused, revert = Window(), C.c_int()
     get_focus(d, C.byref(focused), C.byref(revert))
-    require(focused.value == w, 'Could not focus the owned Xvfb window')
+    verified_focus(w, focused.value, lambda child: window_tree(child)[0],
+                   lambda child: property_value(child, '_NET_WM_PID'), window_map_state, pid)
+    evidence['focus'] = {'target': w, 'actual': focused.value, 'verifiedDescendant': focused.value != w}
+
+
+def focus_target(w, pid):
+    scope.verify(w, pid)
+    grab_server(d)
+    try:
+        scope.verify(w, pid)
+        require_viewable(window_map_state(w))
+        set_focus(d, w, 1, 0)
+        flush(d, 0)
+        require_focus(w, pid)
+    finally:
+        ungrab_server(d)
+        flush(d, 0)
 
 
 def key(w, pid, name, modifiers=0):
-    code = keycode(d, key_symbol(name, keysym))
-    require(code != 0, 'Key unavailable on isolated X11 keyboard: ' + name)
-    def emit(event_type, mask):
-        require_viewable(window_map_state(w))
-        event = Event()
-        event.key = KeyEvent(event_type, 0, 1, d, w, root, 0, 0, 1, 1, 1, 1, modifiers, code, 1)
-        return send(d, w, 1, mask, C.byref(event))
-    scoped_key(scope, w, pid, emit)
-    flush(d, 0)
+    require(modifiers in (0, 1, 4), 'Unsupported XTEST modifiers')
+    names = (['Shift_L'] if modifiers == 1 else ['Control_L'] if modifiers == 4 else []) + [name]
+    codes = [keycode(d, key_symbol(n, keysym)) for n in names]
+    require(all(codes) and len(set(codes)) == len(codes), 'Key unavailable/ambiguous on isolated X11 keyboard: ' + name)
+    def focus():
+        require_focus(w, pid)
+        if a.mode == 'allow-read':
+            require_chooser_closed(owned_windows())  # recheck under grab before EVERY chord
+        keymap = (C.c_ubyte * 32)()
+        query_keymap(d, keymap)
+        require(not any(keymap), 'Owned Xvfb already has depressed keys; refusing input')
+    scoped_key(scope, w, pid, codes, lambda code, down: fake_key(d, code, int(down), 0),
+               lambda: grab_server(d), lambda: (ungrab_server(d), flush(d, 0)), lambda: flush(d, 0),
+               focus, lambda: require_focus(w, pid))
+    evidence['input']['chordsCompleted'] += 1
+    evidence['input']['lastKey'] = name
+
+
+# Minimal diagnostic image: only this already-proved private Xvfb root. No desktop,
+# filesystem/source inspection or profile contents. Downsample to bound work/size.
+def diagnostic_png():
+    windows = owned_windows()
+    browser = next(window for window in candidate_windows(windows, 'inspect', a.chrome_pid))
+    scope.verify(browser['window'], a.chrome_pid)
+    # libX11 Macros.c exports these callable equivalents for non-C clients.
+    # Bind inside the optional diagnostic so an unusual library cannot turn an
+    # unavailable image into an input/qualification-path initialization failure.
+    get_image = bind('XGetImage', C.c_void_p, [Display, Window, C.c_int, C.c_int, C.c_uint, C.c_uint, C.c_ulong, C.c_int])
+    get_pixel = bind('XGetPixel', C.c_ulong, [C.c_void_p, C.c_int, C.c_int])
+    destroy_image = bind('XDestroyImage', C.c_int, [C.c_void_p])
+    attributes = WindowAttributes()
+    require(get_attributes(d, root, C.byref(attributes)), 'Owned root attributes unavailable')
+    width, height = attributes.width, attributes.height
+    require(0 < width <= 1920 and 0 < height <= 1200 and attributes.depth == 24,
+            'Diagnostic requires bounded 24-bit owned Xvfb root')
+    image = get_image(d, root, 0, 0, width, height, C.c_ulong(-1).value, 2)
+    require(image, 'Owned root image unavailable')
+    try:
+        step = max(1, (max(width, height) + 639) // 640)
+        rows = bytearray()
+        for y in range(0, height, step):
+            rows.append(0)
+            for x_pos in range(0, width, step):
+                pixel = get_pixel(image, x_pos, y)
+                rows.extend(((pixel >> 16) & 255, (pixel >> 8) & 255, pixel & 255))
+        def chunk(kind, data):
+            return struct.pack('!I', len(data)) + kind + data + struct.pack('!I', zlib.crc32(kind + data))
+        png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', (width + step - 1) // step,
+              (height + step - 1) // step, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b'')
+        with open(a.diagnostic_png, 'xb') as output:
+            output.write(png)
+        evidence['diagnosticPng'] = a.diagnostic_png
+    finally:
+        destroy_image(image)
+
+
+def diagnose():
+    try:
+        diagnostic_png()
+    except Exception as error:
+        evidence['diagnosticError'] = str(error)
 
 
 try:
+    scope.server()  # No XTEST query/input or screenshot before connected-server proof.
+    extension = [C.c_int() for _ in range(4)]
+    require(query_xtest(d, *(C.byref(value) for value in extension)), 'Owned Xvfb lacks XTEST extension')
+    evidence['input'] = {'transport': 'XTEST', 'version': [extension[2].value, extension[3].value], 'chordsCompleted': 0}
+    evidence['phase'] = 'find-owned-viewable-window'
     end = time.monotonic() + 8
     while True:
-        scope.server()  # Refuse a wrong X11 peer before even searching its windows.
-        found = candidates()
+        windows = owned_windows()
+        if a.mode == 'allow-read':
+            require_chooser_closed(windows)
+        found = candidate_windows(windows, a.mode, a.chrome_pid)
         if found:
             break
         require(time.monotonic() < end, 'Owned native chooser/browser window unavailable within 8s; portal/user windows are forbidden')
         time.sleep(.1)
     require(len(found) == 1, 'Expected exactly one owned chooser/browser window: ' + repr(found))
-    w, pid, role, title = found[0]
-    focus_target(w, pid)
+    target = found[0]
+    w, pid = target['window'], target['pid']
+    evidence['target'] = target
+    if a.mode != 'inspect':
+        evidence['phase'] = 'focus-owned-target'
+        focus_target(w, pid)
+    evidence['phase'] = a.mode
     if a.mode == 'select':
-        key(w, pid, 'l', 4)  # ControlMask
+        key(w, pid, 'l', 4)
+        actions.append('Ctrl+L')
         time.sleep(.2)
         for char in a.fixture:
             key(w, pid, char, typing_modifiers(char))
+        actions.append('type-owned-synthetic-path')
         key(w, pid, 'Return')
+        actions.append('Return-navigate-or-select')
         time.sleep(.6)
-        actions = ['Ctrl+L', 'type-owned-synthetic-path', 'Return-navigate-or-select']
-        # GTK variants may accept an absolute directory on the first Return.
-        # Never send the second key to a now-destroyed/reused chooser window.
-        if w in children(root):
+        # GTK variants may select on the first Return. Never send another key to
+        # a destroyed, hidden or reused chooser (nor to the browser behind it).
+        windows = owned_windows()
+        if any(window['window'] == w and window['dialog'] and window['mapState'] == 'IsViewable' for window in windows):
             key(w, pid, 'Return')
             actions.append('Return-Open/Select')
     elif a.mode == 'cancel':
         key(w, pid, 'Escape')
-        actions = ['Escape-native-chooser']
-    else:
+        actions.append('Escape-native-chooser')
+    elif a.mode == 'allow-read':
         key(w, pid, 'Tab')
+        actions.append('Tab-assuming-default-Cancel')
         key(w, pid, 'Return')
-        actions = ['Tab-from-default-Cancel', 'Return-read-Allow']
-    print(json.dumps({'display': a.display, 'xvfbPid': a.xvfb_pid, 'chromePid': a.chrome_pid,
-                      'window': w, 'windowPid': pid, 'role': role, 'title': title,
-                      'mode': a.mode, 'actions': actions, 'observedDisplayEntries': evidence['observedDisplayEntries'],
-                      'displayProof': evidence['displayProof']}))
+        actions.append('Return-attempt-read-Allow')
+    evidence['phase'] = 'after-' + a.mode
+    diagnose()
+    print(json.dumps(evidence))
+except Exception:
+    diagnose()
+    raise
 finally:
     close_display(d)

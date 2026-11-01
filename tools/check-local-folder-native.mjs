@@ -1,6 +1,6 @@
 // Real external File System Access qualification, NOT OPFS, FileList or application/Save acceptance.
 // Node 24+, installed Google Chrome; Windows: PowerShell/UIAutomation, English Chrome UI.
-// Linux: non-root user, Xvfb (-displayfd), python3, libX11. Never uses the caller's DISPLAY.
+// Linux qualification only: non-root, Xvfb (-displayfd), python3, libX11/libXtst. Never caller DISPLAY.
 // Run: node tools/check-local-folder-native.mjs --evidence <directory>
 // Windows additionally requires: --allow-public-documents-synthetic
 // Each run writes a unique evidence subdirectory; failure is nonzero, never a native-gate skip.
@@ -307,7 +307,7 @@ async function main() {
   const args = process.argv.slice(2);
   if (args.length === 1 && args[0] === '--self-test') return selfTest();
   if (args.length === 1 && args[0] === '--help') {
-    console.log('node tools/check-local-folder-native.mjs --evidence <directory> [--allow-public-documents-synthetic]\nWindows: installed English Chrome, PowerShell/UIAutomation. Linux: installed Chrome, non-root, Xvfb, python3, libX11; own display only. --self-test runs non-browser cleanup/compiler regressions.'); return;
+    console.log('node tools/check-local-folder-native.mjs --evidence <directory> [--allow-public-documents-synthetic]\nWindows: installed English Chrome, PowerShell/UIAutomation. Linux: installed Chrome, non-root, Xvfb, python3, libX11/libXtst (qualification only); own display only. --self-test runs non-browser cleanup/compiler regressions.'); return;
   }
   let evidenceRoot, authorized = false;
   for (let i=0;i<args.length;i++) {
@@ -333,12 +333,13 @@ async function main() {
     const x=await ps(['-File',path.join(tools,'local-folder-native-windows.ps1'),'-OwnedPid',String(chrome.child.pid),'-Executable',discovery.executable,'-Profile',profile,'-Mode',mode,'-Fixture',target,'-ExpectedOrigin',result.origin,'-OwnershipFile',path.join(scratch,'ownership.json'),...(ticks?['-CreationTicks',ticks]:[])]);
     const data=JSON.parse(x.stdout.trim()); ticks??=data.creationTicks; result.actions.push(data); await save(); return data;
   }
+  let linuxDialogCount=0;
   async function linuxDialog(mode, target=fixture) {
     result.linuxDisplayProof={status:'awaiting-x11-proof', displayQualified:false, mode};
     result.linuxHelperSpawn=linuxSpawnDisplay(linuxEnvironment,result.display,xvfb.child.pid,'python3 spawn env');
     await save();
     try {
-      const x=await execFile('python3',[path.join(tools,'local-folder-native-linux.py'),'--display',result.display,'--xvfb-pid',String(xvfb.child.pid),'--chrome-pid',String(linuxBrowser.pid),'--profile',profile,'--ownership',path.join(scratch,'ownership.json'),'--mode',mode,'--fixture',target],{env:linuxEnvironment,timeout:15000});
+      const x=await execFile('python3',[path.join(tools,'local-folder-native-linux.py'),'--display',result.display,'--xvfb-pid',String(xvfb.child.pid),'--chrome-pid',String(linuxBrowser.pid),'--profile',profile,'--ownership',path.join(scratch,'ownership.json'),'--mode',mode,'--fixture',target,'--diagnostic-png',path.join(evidence,`linux-native-${++linuxDialogCount}-${mode}.png`)],{env:linuxEnvironment,timeout:15000});
       const data=JSON.parse(x.stdout);
       assert.equal(data.displayProof?.status,'x11-owned-window-proved');
       assert.equal(data.displayProof.displayQualified,true);
@@ -368,9 +369,23 @@ async function main() {
       }
     } else {
       await linuxDialog('select',target); await delay(800);
-      if((await evaluate('pickerState'))==='pending') await linuxDialog('allow-read',target);
+      if((await evaluate('pickerState'))==='pending') {
+        const ui=await linuxDialog('inspect',target); // no input; pending alone is not prompt evidence
+        assert.equal(ui.chooserClosed,true,'Owned native chooser still open after selection; no browser Allow input sent');
+        result.linuxPickerPhase='chooser-closed-picker-pending-not-yet-qualified';await save();
+        await linuxDialog('allow-read',target);
+      }
     }
-    await until(async()=>(await evaluate('pickerState'))!=='pending','Native picker resolution');
+    try {
+      await until(async()=>(await evaluate('pickerState'))!=='pending','Native picker resolution');
+    } catch(error) {
+      if(process.platform==='linux') {
+        result.linuxPickerPhase='picker-resolution-failed';
+        try {await linuxDialog('inspect',target);}catch(diagnosticError){result.linuxInspectionError=diagnosticError.message;}
+        await save();
+      }
+      throw error;
+    }
     const state=await evaluate('({state:pickerState,error:window.pickerError,root:window.root?{name:root.name,native:root instanceof FileSystemDirectoryHandle}:null})');
     assert.equal(state.state,'selected',JSON.stringify(state));assert.equal(state.root.native,true);assert.equal(state.root.name,path.basename(target));return state;
   }
@@ -549,7 +564,7 @@ async function main() {
     }
     for(const [name,p]of Object.entries({workspace:scratch,fixture,empty}))if(p)result[name+'Status']=await absent(p)?'removed':'retained';
     if(result.shutdownError||denied.size||result.cleanup.some(x=>x.status==='retained')||result.workspaceStatus==='retained'||result.fixtureStatus==='retained'||result.emptyStatus==='retained'||result.serverClosed===false)result.status='failed';
-    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,shutdownError:result.shutdownError,linuxProcesses:process.platform==='linux'&&result.status==='failed'?{launcher:result.chrome?.launchedProcess,actual:result.chrome?.actualProcess,observedDisplayEntries:result.chrome?.observedDisplayEntries,displayProof:result.linuxDisplayProof,helperFailure:result.linuxHelperFailure}:undefined,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
+    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,shutdownError:result.shutdownError,linuxProcesses:process.platform==='linux'&&result.status==='failed'?{launcher:result.chrome?.launchedProcess,actual:result.chrome?.actualProcess,observedDisplayEntries:result.chrome?.observedDisplayEntries,displayProof:result.linuxDisplayProof,helperFailure:result.linuxHelperFailure,pickerPhase:result.linuxPickerPhase,actions:result.actions}:undefined,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
     if(result.status!=='qualified')process.exitCode=1;
   }
 }

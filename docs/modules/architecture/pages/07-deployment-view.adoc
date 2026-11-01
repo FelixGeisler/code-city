@@ -24,6 +24,13 @@ drives the actual packaged server/worker/parser/browser, verifies signal
 shutdown, validates the immutable retirement evidence, and builds the docs. It
 does not publish.
 
+Linux native qualification additionally requires Python 3, Xvfb, libX11 and
+libXtst (XTEST extension). These are test-machine dependencies, not packaged or
+production runtime dependencies. Keyboard input is confined to the gate's own
+verified Xvfb server and owned Chrome/chooser focus; it never uses the caller's
+`DISPLAY`. Qualification still requires a real native directory handle, granted
+read permission and successful acquisition, not merely completed UI actions.
+
 == Main publication path
 
 A protected-main push repeats the same gates and creates a publication record
