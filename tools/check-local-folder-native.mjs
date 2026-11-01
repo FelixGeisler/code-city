@@ -77,12 +77,16 @@ function linuxStat(text) {
   const fields = text.slice(text.lastIndexOf(')') + 1).trim().split(/\s+/);
   return { ppid: Number(fields[1]), pgid: Number(fields[2]), start: fields[19] };
 }
+function linuxCommandLine(text) {
+  // Remove only the terminator, not meaningful empty argv entries.
+  return text.split('\0').filter((v, i, all) => i < all.length - 1 || v !== '');
+}
 async function linuxProcess(pid) {
   assert(Number.isSafeInteger(pid) && pid > 0, 'Invalid Linux process PID');
   const base = '/proc/' + pid;
   const before = linuxStat(await readFile(base + '/stat', 'utf8'));
   const record = { pid, ...before, uid: (await lstat(base)).uid,
-    exe: await readlink(base + '/exe'), args: (await readFile(base + '/cmdline', 'utf8')).split('\0').filter((v, i, all) => i < all.length - 1 || v !== '') };
+    exe: await readlink(base + '/exe'), args: linuxCommandLine(await readFile(base + '/cmdline', 'utf8')) };
   assert.equal(linuxStat(await readFile(base + '/stat', 'utf8')).start, before.start, 'Linux PID changed during snapshot');
   return record;
 }
@@ -102,14 +106,24 @@ function linuxBrowserPid(processInfo) {
   assert(Number.isSafeInteger(pid) && pid > 0, 'Invalid CDP browser PID');
   return pid;
 }
-function bindLinuxBrowser(launcher, browser, profile, display, environment, uid) {
+function linuxBrowserArguments(browser, expectedArguments) {
+  assert(expectedArguments.length > 0 && expectedArguments.every(arg =>
+    typeof arg === 'string' && arg.length > 0 && !/[\s\u0085\u001c-\u001f\0]/u.test(arg)),
+  'Expected Chrome arguments must be nonempty and whitespace/NUL-free');
+  if (browser.args.length !== 1) return browser.args;
+  // Chrome can rewrite argv to one process title. Never parse that title: only
+  // an exact match of our complete launch vector proves the original arguments.
+  assert.equal(browser.args[0], browser.exe + ' ' + expectedArguments.join(' '), 'Chrome flattened argv mismatch');
+  return [browser.exe, ...expectedArguments];
+}
+function bindLinuxBrowser(launcher, browser, profile, display, environment, uid, expectedArguments) {
   assert.equal(launcher.uid, uid, 'Launcher UID mismatch');
   assert.equal(launcher.pgid, launcher.pid, 'Launcher does not own a new process group');
   assert.equal(browser.uid, uid, 'Browser UID mismatch');
   assert.equal(browser.pgid, launcher.pgid, 'CDP browser outside owned launch process group');
   assert(BigInt(browser.start) >= BigInt(launcher.start), 'Browser predates launch');
   if (browser.pid === launcher.pid) assert.equal(browser.start, launcher.start, 'Launcher PID reused');
-  assert.deepEqual(linuxProfileValues(browser.args), [profile], 'CDP browser profile mismatch');
+  assert.deepEqual(linuxProfileValues(linuxBrowserArguments(browser, expectedArguments)), [profile], 'CDP browser profile mismatch');
   assert(environment.split('\0').includes('DISPLAY=' + display), 'CDP browser not on owned Xvfb');
   return browser;
 }
@@ -193,7 +207,7 @@ async function selfTest() {
   try {
     const launcher = {pid: 100, ppid: 90, pgid: 100, start: '200', uid: 42, exe: '/bin/sh', args: ['sh', '/usr/bin/google-chrome']};
     const browser = {pid: 101, ppid: 100, pgid: 100, start: '201', uid: 42, exe: '/opt/google/chrome/chrome', args: ['chrome', '--user-data-dir=/tmp/owned']};
-    const bind = (p = browser, l = launcher, env = 'DISPLAY=:7\0', profile = '/tmp/owned') => bindLinuxBrowser(l, p, profile, ':7', env, 42);
+    const bind = (p = browser, l = launcher, env = 'DISPLAY=:7\0', profile = '/tmp/owned') => bindLinuxBrowser(l, p, profile, ':7', env, 42, ['--user-data-dir=/tmp/owned']);
     assert.deepEqual(linuxStat('100 (a name with ) parentheses) ' + ['S', '90', '100', ...Array(16).fill('0'), '200'].join(' ')), {ppid:90, pgid:100, start:'200'});
     assert.equal(linuxBrowserPid([{type:'renderer', id:102}, {type:'browser', id:101}]), 101);
     for (const info of [[], [{type:'browser',id:0}], [{type:'browser',id:'101'}], [{type:'browser',id:101},{type:'browser',id:102}]]) assert.throws(() => linuxBrowserPid(info));
@@ -206,6 +220,37 @@ async function selfTest() {
     assert.throws(() => bind(browser,{...launcher,uid:43}));
     assert.throws(() => bind(browser,launcher,'DISPLAY=:70\0'));
     for (const args of [[], ['--user-data-dir=/tmp/owned-extra'], ['--user-data-directory=/tmp/owned'], ['--other=--user-data-dir=/tmp/owned'], ['--user-data-dir'], ['--user-data-dir='], ['--','--user-data-dir=/tmp/owned'], ['--user-data-dir=/tmp/owned','--user-data-dir=/tmp/owned'], ['--user-data-dir=/wrong','--user-data-dir','/tmp/owned']]) assert.throws(() => bind({...browser,args:['chrome',...args]}));
+    // Reproduce CI 41263489673's complete rewritten argv[0], not a profile-only title.
+    const profile = '/tmp/code-city-native-o8tUex/profile';
+    const expectedArguments = ['--remote-debugging-port=0', '--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', '--disable-default-apps', '--disable-sync', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--disable-features=CalculateNativeWinOcclusion', '--lang=en-US', '--ozone-platform=x11', '--disable-gpu', '--window-size=900,650', 'about:blank'];
+    const title = browser.exe + ' ' + expectedArguments.join(' ');
+    const flat = {...direct, args: linuxCommandLine(title + '\0')};
+    const bindFlat = (p = flat, expected = expectedArguments, env = 'DISPLAY=:7\0', l = launcher) => bindLinuxBrowser(l, p, profile, ':7', env, 42, expected);
+    assert.equal(bindFlat(), flat);
+    assert.equal(bindFlat({...flat, pid:101, start:'201'}).pid, 101);
+    assert.deepEqual(linuxBrowserArguments(flat, expectedArguments), [browser.exe, ...expectedArguments]);
+    assert.deepEqual(flat.args, [title], 'Raw failure evidence must not be rewritten');
+    assert.deepEqual(linuxCommandLine(''), []);
+    assert.deepEqual(linuxCommandLine('\0'), ['']);
+    assert.deepEqual(linuxCommandLine('chrome\0\0'), ['chrome', '']);
+    assert.deepEqual(linuxCommandLine('\0chrome\0\0arg\0'), ['', 'chrome', '', 'arg']);
+    assert.deepEqual(linuxCommandLine('chrome\0arg'), ['chrome', 'arg']);
+    for (const changedTitle of [title.replace('--no-first-run', '--no-first-rum'), title.replace(profile, profile + '-wrong'), title.replace('--user-data-dir=' + profile + ' ', ''), title.replace('--user-data-dir=' + profile, '--user-data-dir=' + profile + ' --user-data-dir=' + profile), title + ' --extra', title + ' ', title.replace(' --no-first-run', '\t--no-first-run'), title.replace(' --no-first-run', '\0--no-first-run'), title.replace(browser.exe, browser.exe + '-spoof'), title.replace(browser.exe, '/wrong/chrome'), title.replace(' --no-first-run', '  --no-first-run')]) {
+      assert.throws(() => bindFlat({...flat, args:linuxCommandLine(changedTitle + '\0')}));
+    }
+    assert.throws(() => bindFlat({...flat, args:[title, '']}), 'Meaningful empty argv must not become a flattened title');
+    assert.throws(() => bindFlat({...flat, exe:browser.exe + '-changed'}));
+    for (const arg of ['', 'a b', 'a\tb', 'a\nb', 'a\rb', 'a\u00a0b', 'a\u0085b', 'a\ufeffb', 'a\u001cb', 'a\u001fb', 'a\0b']) {
+      const expected = [...expectedArguments, arg];
+      assert.throws(() => bindFlat({...flat, args:[browser.exe + ' ' + expected.join(' ')]}, expected));
+    }
+    for (const expected of [expectedArguments.filter(arg => !arg.startsWith('--user-data-dir=')), [...expectedArguments, '--user-data-dir=' + profile], expectedArguments.map(arg => arg === '--user-data-dir=' + profile ? '--user-data-dir=/wrong' : arg)]) {
+      assert.throws(() => bindFlat({...flat, args:[browser.exe + ' ' + expected.join(' ')]}, expected), 'Exact title must still pass the strict profile parser');
+    }
+    for (const changed of [{uid:43}, {pgid:90}, {start:'199'}, {start:'201'}]) assert.throws(() => bindFlat({...flat,...changed}));
+    assert.throws(() => bindFlat(flat, expectedArguments, 'DISPLAY=:70\0'));
+    assert.throws(() => bindFlat(flat, expectedArguments, 'DISPLAY=:7\0', {...launcher,uid:43}));
+    assert.throws(() => bindFlat(flat, expectedArguments, 'DISPLAY=:7\0', {...launcher,pgid:90}));
     assert(ownedLinuxGroupMember(browser,launcher,browser,42));
     assert(ownedLinuxGroupMember(launcher,launcher,browser,42));
     for (const changed of [{uid:43},{pgid:90},{start:'199'},{exe:'/unrelated'}]) assert(!ownedLinuxGroupMember({...browser,...changed},launcher,browser,42));
@@ -232,7 +277,7 @@ async function selfTest() {
     await assert.rejects(closeNativeDisplay(display,40),/Xvfb close timed out/);
     assert(display.child.exitCode!==null||display.child.signalCode!==null,'Display timeout left the owned child alive');
     assert(display.child.stderr.destroyed&&display.child.stdio[3].destroyed,'Display pipes remain referenced');
-    console.log(JSON.stringify({ status: 'passed', checks: ['unexpected link refusal', 'changed link target refusal', 'verified link unlink preserves target', 'actual TS graph compilation', 'stalled close terminates child and awaits streams', 'stalled display terminates child and closes both pipes', 'CDP browser PID cardinality and type', 'direct and wrapper browser binding', 'UID/start/group/profile/display refusals', 'owned launch group cleanup identities'], modules: [...modules.keys()] }));
+    console.log(JSON.stringify({ status: 'passed', checks: ['unexpected link refusal', 'changed link target refusal', 'verified link unlink preserves target', 'actual TS graph compilation', 'stalled close terminates child and awaits streams', 'stalled display terminates child and closes both pipes', 'CDP browser PID cardinality and type', 'direct and wrapper browser binding', 'UID/start/group/profile/display refusals', 'exact full flattened argv and spoof refusals; raw evidence and empty argv preserved', 'owned launch group cleanup identities'], modules: [...modules.keys()] }));
   } finally { await remove(scratch); }
 }
 
@@ -371,11 +416,11 @@ async function main() {
       linuxCandidate=await linuxProcess(linuxBrowserPid(info.processInfo));
       result.chrome.actualProcess=linuxCandidate;await save(); // preserve args even when a guard rejects them
       const environment=await readFile('/proc/'+linuxCandidate.pid+'/environ','utf8');
-      linuxBrowser=bindLinuxBrowser(linuxLauncher,linuxCandidate,profile,result.display,environment,process.getuid());
+      linuxBrowser=bindLinuxBrowser(linuxLauncher,linuxCandidate,profile,result.display,environment,process.getuid(),arguments_);
       const ownership=JSON.parse(await readFile(path.join(scratch,'ownership.json'),'utf8'));
       ownership.linux={display:result.display,xvfbPid:xvfb.child.pid,xvfbStart:(await linuxProcess(xvfb.child.pid)).start,
         launcher:linuxLauncher,chromePid:linuxBrowser.pid,chromeStart:linuxBrowser.start,chromeExe:linuxBrowser.exe,
-        chromeUid:linuxBrowser.uid,chromePgid:linuxBrowser.pgid};result.linuxOwnership=ownership.linux;
+        chromeUid:linuxBrowser.uid,chromePgid:linuxBrowser.pgid,expectedArguments:arguments_};result.linuxOwnership=ownership.linux;
       await writeFile(path.join(scratch,'ownership.json'),JSON.stringify(ownership));await save();
     }
     const target=(await cdp.send('Target.getTargets')).targetInfos.find(t=>t.type==='page');

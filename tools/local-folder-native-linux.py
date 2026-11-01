@@ -25,11 +25,19 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def command_line(raw):
+    # Strip only the terminator; extra NULs represent meaningful empty arguments.
+    args = raw.split(b'\0')
+    if args[-1] == b'':
+        args.pop()
+    return args
+
+
 def proc(pid):
     base = Path('/proc') / str(pid)
     fields = (base / 'stat').read_text().rsplit(')', 1)[1].split()
     return {'pid': pid, 'ppid': int(fields[1]), 'pgid': int(fields[2]), 'start': fields[19],
-            'args': (base / 'cmdline').read_bytes().split(b'\0'),
+            'args': command_line((base / 'cmdline').read_bytes()),
             'exe': os.readlink(base / 'exe'), 'uid': base.stat().st_uid}
 
 
@@ -47,6 +55,18 @@ def profile_matches(args, profile):
             return False
         i += 1
     return values == [expected]
+
+
+def browser_arguments(chrome, expected_arguments):
+    require(len(expected_arguments) > 0 and all(
+        isinstance(arg, str) and arg and not any(c.isspace() or c in '\0\ufeff' for c in arg)
+        for arg in expected_arguments), 'Expected Chrome arguments must be nonempty and whitespace/NUL-free')
+    if len(chrome['args']) != 1:
+        return chrome['args']
+    # No shell/process-title parsing: recover only our exact complete launch vector.
+    require(chrome['args'][0] == os.fsencode(chrome['exe'] + ' ' + ' '.join(expected_arguments)),
+            'Chrome flattened argv mismatch')
+    return [os.fsencode(chrome['exe']), *map(os.fsencode, expected_arguments)]
 
 
 def verify_processes(a, owner, lookup=proc, uid=None, environment=None):
@@ -68,7 +88,7 @@ def verify_processes(a, owner, lookup=proc, uid=None, environment=None):
             and int(chrome['start']) >= int(launcher['start']), 'Chrome launch group mismatch')
     if chrome['pid'] == launcher['pid']:
         require(chrome['start'] == launcher['start'], 'Launcher PID identity changed')
-    require(profile_matches(chrome['args'], a.profile), 'Chrome profile mismatch')
+    require(profile_matches(browser_arguments(chrome, linux['expectedArguments']), a.profile), 'Chrome profile mismatch')
     if environment is None:
         environment = (Path('/proc') / str(a.chrome_pid) / 'environ').read_bytes()
     require(os.fsencode('DISPLAY=' + a.display) in environment.split(b'\0'), 'Chrome not on our Xvfb')
@@ -115,7 +135,8 @@ if sys.argv[1:] == ['--self-test']:
               'args': [b'chrome', b'--user-data-dir=/tmp/owned']}
     launcher = {'pid': 100, 'pgid': 100, 'start': '200', 'uid': 42}
     linux = {'xvfbPid': 90, 'xvfbStart': '100', 'chromePid': 101, 'chromeStart': '201',
-             'chromeExe': chrome['exe'], 'chromeUid': 42, 'chromePgid': 100, 'launcher': launcher}
+             'chromeExe': chrome['exe'], 'chromeUid': 42, 'chromePgid': 100, 'launcher': launcher,
+             'expectedArguments': ['--user-data-dir=/tmp/owned']}
 
     def check(c=chrome, x=xvfb, l=linux, env=b'DISPLAY=:7\0'):
         return verify_processes(a, {'linux': l}, lambda pid: x if pid == 90 else c, 42, env)
@@ -141,7 +162,65 @@ if sys.argv[1:] == ['--self-test']:
                    {'launcher': {**launcher, 'pgid': 99}}, {'launcher': {**launcher, 'uid': 43}}]:
         refuses(lambda change=change: check(l={**linux, **change}))
     refuses(lambda: check(env=b'DISPLAY=:70\0'))
-    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, ASCII/named keysyms and Shift masks; no X11/native runtime'}))
+    # Complete rewritten argv[0] from CI 41263489673; byte parser remains strict.
+    a.profile = '/tmp/code-city-native-o8tUex/profile'
+    expected_arguments = ['--remote-debugging-port=0', '--user-data-dir=' + a.profile,
+                          '--no-first-run', '--no-default-browser-check', '--disable-background-networking',
+                          '--disable-component-update', '--disable-default-apps', '--disable-sync',
+                          '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
+                          '--disable-features=CalculateNativeWinOcclusion', '--lang=en-US',
+                          '--ozone-platform=x11', '--disable-gpu', '--window-size=900,650', 'about:blank']
+    title = chrome['exe'] + ' ' + ' '.join(expected_arguments)
+    flat = {**chrome, 'args': command_line(os.fsencode(title) + b'\0')}
+    flat_linux = {**linux, 'expectedArguments': expected_arguments}
+
+    def check_flat(c=flat, l=flat_linux, env=b'DISPLAY=:7\0'):
+        return check(c=c, l=l, env=env)
+
+    check_flat()
+    # Model same-PID exec using the CDP PID already checked by verify_processes.
+    direct_linux = {**flat_linux, 'launcher': {**launcher, 'pid': 101, 'pgid': 101, 'start': '201'},
+                    'chromePgid': 101}
+    check_flat(c={**flat, 'pgid': 101}, l=direct_linux)
+    check_flat(c={**flat, 'args': [b'chrome', *map(os.fsencode, expected_arguments)]})
+    require(browser_arguments(flat, expected_arguments) == [os.fsencode(chrome['exe']), *map(os.fsencode, expected_arguments)],
+            'Exact title did not recover the launch vector')
+    require(flat['args'] == [os.fsencode(title)], 'Raw failure evidence must not be rewritten')
+    for raw, parsed in [(b'', []), (b'\0', [b'']), (b'chrome\0\0', [b'chrome', b'']),
+                        (b'\0chrome\0\0arg\0', [b'', b'chrome', b'', b'arg']),
+                        (b'chrome\0arg', [b'chrome', b'arg'])]:
+        require(command_line(raw) == parsed, 'Meaningful argv entries lost')
+    switch = '--user-data-dir=' + a.profile
+    for changed_title in [title.replace('--no-first-run', '--no-first-rum'),
+                          title.replace(a.profile, a.profile + '-wrong'), title.replace(switch + ' ', ''),
+                          title.replace(switch, switch + ' ' + switch), title + ' --extra', title + ' ',
+                          title.replace(' --no-first-run', '\t--no-first-run'),
+                          title.replace(' --no-first-run', '\0--no-first-run'),
+                          title.replace(chrome['exe'], chrome['exe'] + '-spoof'),
+                          title.replace(chrome['exe'], '/wrong/chrome'),
+                          title.replace(' --no-first-run', '  --no-first-run')]:
+        refuses(lambda changed_title=changed_title: check_flat(c={**flat, 'args': command_line(os.fsencode(changed_title) + b'\0')}))
+    refuses(lambda: check_flat(c={**flat, 'args': [os.fsencode(title), b'']}))
+    refuses(lambda: check_flat(c={**flat, 'exe': chrome['exe'] + '-changed'}))
+    for arg in ['', 'a b', 'a\tb', 'a\nb', 'a\rb', 'a\u00a0b', 'a\u0085b', 'a\ufeffb', 'a\u001cb', 'a\u001fb', 'a\0b']:
+        expected = [*expected_arguments, arg]
+        refuses(lambda expected=expected: check_flat(
+            c={**flat, 'args': [os.fsencode(chrome['exe'] + ' ' + ' '.join(expected))]},
+            l={**flat_linux, 'expectedArguments': expected}))
+    for expected in [[arg for arg in expected_arguments if not arg.startswith('--user-data-dir=')],
+                     [*expected_arguments, switch],
+                     ['--user-data-dir=/wrong' if arg == switch else arg for arg in expected_arguments]]:
+        refuses(lambda expected=expected: check_flat(
+            c={**flat, 'args': [os.fsencode(chrome['exe'] + ' ' + ' '.join(expected))]},
+            l={**flat_linux, 'expectedArguments': expected}))
+    for change in [{'uid': 43}, {'pgid': 90}, {'start': '199'}, {'start': '202'}]:
+        refuses(lambda change=change: check_flat(c={**flat, **change}))
+    refuses(lambda: check_flat(c={**flat, 'pgid': 101, 'start': '202'},
+                              l={**direct_linux, 'chromeStart': '202'}))
+    for change in [{'uid': 43}, {'pgid': 90}, {'start': '202'}]:
+        refuses(lambda change=change: check_flat(l={**flat_linux, 'launcher': {**launcher, **change}}))
+    refuses(lambda: check_flat(env=b'DISPLAY=:70\0'))
+    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, raw/empty argv preservation, ASCII/named keysyms and Shift masks; no X11/native runtime'}))
     sys.exit(0)
 
 
