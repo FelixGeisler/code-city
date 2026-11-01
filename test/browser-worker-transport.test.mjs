@@ -148,6 +148,97 @@ test("replacement rejects pending inspection and stale replies cannot reach the 
   } finally { f.owner.close(); }
 });
 
+const captureId = "c".repeat(64);
+const localOrigin = { kind: "working-tree", name: "Synthetic folder", captureId };
+const localCommand = (f, generation = 1, root = {}) => ({ sessionId: f.sessionId, generation, inputKind: "working-tree", root, name: localOrigin.name, additionalExclusions: "" });
+
+test("folder capability stays in process and is posted unchanged only to the dedicated worker", async () => {
+  const f = await fixture();
+  const root = { toJSON() { throw new Error("No JSON serialization"); }, values() { throw new Error("No UI filesystem reads"); } };
+  try {
+    assert.equal(await f.owner.analyze(localCommand(f, 1, root)), 202);
+    assert.equal(f.workers[0].messages[0].root, root);
+    assert.equal(f.workers[0].messages[0].inputKind, "working-tree");
+    assert.equal(Object.hasOwn(f.workers[0].messages[0], "repositoryUrl"), false);
+    f.emit(f.workers[0], "WORKING_TREE_STARTED", 1, { name: localOrigin.name });
+    f.emit(f.workers[0], "WORKING_TREE_PROGRESS", 1, { completed: 0, total: 1 });
+    assert.deepEqual(f.events.map(event => event.type), ["WORKING_TREE_STARTED", "WORKING_TREE_PROGRESS"]);
+    assert.equal(f.losses(), 0);
+  } finally { f.owner.close(); }
+});
+
+test("local read cancellation and replacement drain before termination; stale capture is suppressed", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.analyze(localCommand(f)); const old = f.workers[0];
+    f.emit(old, "WORKING_TREE_STARTED", 1, { name: localOrigin.name });
+    f.emit(old, "WORKING_TREE_PROGRESS", 1, { completed: 0, total: 2 });
+    const replacement = f.owner.analyze(localCommand(f, 2));
+    assert.equal(old.messages.at(-1).type, "STOP"); assert.equal(old.terminated, 0);
+    f.emit(old, "ANALYSIS_CANCELLED"); await replacement;
+    assert.equal(old.terminated, 1); assert.equal(f.workers.length, 2);
+    const before = f.events.length;
+    f.emit(old, "WORKING_TREE_CAPTURED", 1, { origin: localOrigin });
+    assert.equal(f.events.length, before); assert.equal(f.losses(), 0);
+  } finally { f.owner.close(); }
+});
+
+test("local capture switches to terminable parser ownership and binds bounded inspection to capture", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.analyze(localCommand(f)); const worker = f.workers[0];
+    f.emit(worker, "WORKING_TREE_CAPTURED", 1, { origin: localOrigin });
+    f.emit(worker, "ANALYSIS_ALL_FILES_FAILED", 1, { revision: captureId, notAnalyzedFiles: [{ canonicalPath: "bad.js", category: "Syntax could not be analyzed" }] });
+    const pending = f.owner.inspect({ type: "units", path: "file.js", offset: 0 });
+    const request = worker.messages.at(-1);
+    f.emit(worker, "INSPECTION_RESULT", 1, { requestId: request.requestId, revision: captureId, ok: true, value: { type: "units", path: "file.js", offset: 0, total: 0, rows: [] } });
+    assert.equal((await pending).total, 0);
+    await f.owner.analyze(localCommand(f, 2)); const parserWorker = f.workers[1];
+    f.emit(parserWorker, "WORKING_TREE_CAPTURED", 2, { origin: localOrigin });
+    assert.equal(await f.owner.cancel(localCommand(f, 2)), 204);
+    assert.equal(parserWorker.messages.some(message => message.type === "STOP"), false);
+    assert.equal(parserWorker.terminated, 1);
+  } finally { f.owner.close(); }
+});
+
+test("source-only RPC supports all-failed live and reopened captures with identity and stale guards", async () => {
+  for (const reopened of [false, true]) {
+    const f = await fixture();
+    try {
+      await f.owner.analyze(reopened ? { ...f.command(1), savedId: "S".repeat(43) } : localCommand(f));
+      const worker = f.workers[0];
+      f.emit(worker, "WORKING_TREE_CAPTURED", 1, { origin: localOrigin });
+      f.emit(worker, "ANALYSIS_ALL_FILES_FAILED", 1, { revision: captureId, notAnalyzedFiles: [{ canonicalPath: "broken.ts", category: "Syntax could not be analyzed" }] });
+      const query = { path: "broken.ts", cursor: 0 };
+      const first = f.owner.fileSource(query), changed = assert.rejects(first, /Source changed/u);
+      const current = f.owner.fileSource(query); await changed;
+      const request = worker.messages.at(-1); assert.equal(request.type, "FILE_SOURCE");
+      f.emit(worker, "FILE_SOURCE_RESULT", 1, { requestId: request.requestId, revision: captureId, ok: true, value: { ...query, next: null, text: "not valid syntax 😀" } });
+      assert.equal((await current).text, "not valid syntax 😀");
+      const malformed = f.owner.fileSource(query), bad = worker.messages.at(-1);
+      f.emit(worker, "FILE_SOURCE_RESULT", 1, { requestId: bad.requestId, revision: "b".repeat(64), ok: true, value: { ...query, next: null, text: "wrong capture" } });
+      await assert.rejects(malformed, /Source unavailable/u);
+      const pending = f.owner.fileSource(query), rejected = assert.rejects(pending, /Investigation changed/u);
+      await f.owner.analyze(localCommand(f, 2)); await rejected;
+      f.emit(worker, "FILE_SOURCE_RESULT", 1, { requestId: worker.messages.at(-1).requestId, revision: captureId, ok: true, value: { ...query, next: null, text: "stale" } });
+      assert.equal(f.losses(), 0);
+    } finally { f.owner.close(); }
+  }
+});
+
+test("a pre-capture local failure is terminal and unavailable capability cloning is sanitized", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.analyze(localCommand(f));
+    f.emit(f.workers[0], "WORKING_TREE_FAILED", 1, { category: "Local working tree unavailable" });
+    assert.equal(f.events.at(-1).type, "WORKING_TREE_FAILED"); assert.equal(f.workers[0].terminated, 1); assert.equal(f.losses(), 0);
+    await assert.rejects(f.owner.save(), /unavailable/u);
+  } finally { f.owner.close(); }
+  const failed = await fixture(() => { const worker = new FakeWorker(); worker.postMessage = () => { throw new DOMException("private folder", "DataCloneError"); }; return worker; });
+  try { assert.equal(await failed.owner.analyze(localCommand(failed)), 202); assert.equal(failed.losses(), 1); assert.deepEqual(failed.events, []); }
+  finally { failed.owner.close(); }
+});
+
 test("startup, crash, and malformed-worker errors release owned resources and expose no raw error", async () => {
   const failed = await fixture(() => { throw new Error("private startup detail"); });
   await failed.owner.analyze(failed.command(1));

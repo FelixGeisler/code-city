@@ -10,8 +10,20 @@
   <main>
     <header data-app-bar><h1>Code City</h1><button type="button" data-open-saved>Open saved</button></header>
     <form id="repository-setup" novalidate>
-      <label for="repository">GitHub repository, branch, or release URL</label>
-      <input id="repository" name="repository" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repository">
+      <label for="input-kind">Source</label>
+      <select id="input-kind" name="input-kind">
+        <option value="working-tree" selected>Local working tree</option>
+        <option value="github">Public GitHub</option>
+      </select>
+      <div data-local-setup>
+        <button type="button" data-choose-folder>Choose folder</button>
+        <bdi data-folder-name dir="auto">No folder selected</bdi>
+        <p data-folder-status role="status">Read-only folder access requires secure desktop Chromium. Selection does not start analysis.</p>
+      </div>
+      <div data-github-setup hidden>
+        <label for="repository">Public GitHub repository, branch, or release URL</label>
+        <input id="repository" name="repository" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repository">
+      </div>
       <button type="submit">Analyze</button>
       <details data-exclusions>
         <summary>Additional exclusions (optional)</summary>
@@ -22,18 +34,27 @@
     <header data-investigation hidden>
       <div data-investigation-identity>
         <bdi data-repository dir="auto"></bdi>
+        <span data-origin-label>Commit</span>
         <output data-commit aria-live="polite"></output>
       </div>
       <div data-investigation-controls>
-        <button type="button" data-change-repository aria-controls="repository-setup" aria-expanded="false">Change repository</button>
-        <button type="button" data-save hidden>Save</button>
+        <button type="button" data-change-repository aria-controls="repository-setup" aria-expanded="false">Change source</button>
+        <button type="button" data-save aria-describedby="shared-save-info" hidden>Save</button>
       </div>
     </header>
+    <p id="shared-save-info" data-shared-save>Analyze and inspection stay in your browser. Only Save uploads all admitted normalized source and results. No login: everyone reaching this instance can read saved investigations and code.</p>
     <p data-save-status role="status"></p>
     <dialog data-saved-picker aria-labelledby="saved-picker-title">
       <header><h2 id="saved-picker-title">Saved investigations</h2><button type="button" data-close-saved>Close</button></header>
       <p data-saved-message role="status"></p>
       <div data-saved-projects></div>
+    </dialog>
+    <dialog data-failed-source aria-labelledby="failed-source-title">
+      <header><h2 id="failed-source-title" data-failed-source-title></h2><button type="button" data-close-failed-source>Close</button></header>
+      <p>No metric or unit evidence is available for this file. Read-only normalized source.</p>
+      <p data-failed-source-status role="status"></p>
+      <pre data-failed-source-code tabindex="0"></pre>
+      <nav aria-label="Source pages"><button type="button" data-failed-source-previous>Previous</button><button type="button" data-failed-source-next>Next</button></nav>
     </dialog>
     <p data-feedback role="alert" aria-live="polite"></p>
     <section data-status aria-live="polite"></section>
