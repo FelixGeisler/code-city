@@ -14,7 +14,9 @@ import ctypes.util
 import json
 import os
 import re
+import socket
 import stat
+import struct
 import sys
 import time
 from pathlib import Path
@@ -69,10 +71,19 @@ def browser_arguments(chrome, expected_arguments):
     return [os.fsencode(chrome['exe']), *map(os.fsencode, expected_arguments)]
 
 
-def verify_processes(a, owner, lookup=proc, uid=None, environment=None):
+def display_entries(environment):
+    # Decode ONLY observed DISPLAY entries; never disclose the rest of environ.
+    return [entry.decode('utf-8', errors='replace') for entry in environment.split(b'\0')
+            if entry.startswith(b'DISPLAY=')]
+
+
+def verify_processes(a, owner, lookup=proc, uid=None, environment=None, evidence=None):
     """Fail before loading X11 unless the actual CDP browser is still our process."""
     uid = os.getuid() if uid is None else uid
     linux = owner['linux']
+    require(re.fullmatch(r':\d+', a.display) and a.display == linux['display'], 'Display ownership mismatch')
+    require(linux['chromeSpawn'] == {'source': 'Chrome spawn env', 'display': a.display,
+                                    'xvfbPid': a.xvfb_pid}, 'Chrome launch DISPLAY source mismatch')
     require(a.xvfb_pid == linux['xvfbPid'], 'Xvfb PID ownership mismatch')
     require(a.chrome_pid == linux['chromePid'], 'Chrome PID ownership mismatch')
     xvfb, chrome = lookup(a.xvfb_pid), lookup(a.chrome_pid)
@@ -91,8 +102,66 @@ def verify_processes(a, owner, lookup=proc, uid=None, environment=None):
     require(profile_matches(browser_arguments(chrome, linux['expectedArguments']), a.profile), 'Chrome profile mismatch')
     if environment is None:
         environment = (Path('/proc') / str(a.chrome_pid) / 'environ').read_bytes()
-    require(os.fsencode('DISPLAY=' + a.display) in environment.split(b'\0'), 'Chrome not on our Xvfb')
+    entries = display_entries(environment)
+    if evidence is not None:
+        evidence['observedDisplayEntries'] = entries
+    require(all(entry in ('DISPLAY=', 'DISPLAY=' + a.display) for entry in entries),
+            'Observed Chrome DISPLAY contradicts owned Xvfb: ' + json.dumps(entries))
+    # An absent/empty DISPLAY is NOT proof. Only ScopedX11's positive server and
+    # exact CDP-browser top-level window checks can qualify the target display.
     return xvfb, chrome
+
+
+class ScopedX11:
+    """All focus/key actions require fresh process, connected-server and window proof.
+
+    Callbacks let the embedded self-test exercise the real action boundary without
+    loading libX11 or touching any display. Runtime peer is Linux SO_PEERCRED on
+    XConnectionNumber, not an assertion about a requested display string.
+    """
+    def __init__(self, a, processes, peer, windows, window_pids, lookup, owned, evidence):
+        self.a, self.processes, self.peer = a, processes, peer
+        self.windows, self.window_pids, self.lookup, self.owned = windows, window_pids, lookup, owned
+        self.evidence, self.targets = evidence, {}
+
+    def server(self):
+        self.evidence['displayProof'] = {'status': 'awaiting-x11-proof', 'displayQualified': False}
+        xvfb, chrome = self.processes()
+        peer_pid, peer_uid = self.peer()
+        self.evidence['connectedServer'] = {'pid': peer_pid, 'uid': peer_uid}
+        require((peer_pid, peer_uid) == (xvfb['pid'], xvfb['uid']), 'Connected X11 server is not owned Xvfb')
+        self.evidence['displayProof']['status'] = 'server-bound-awaiting-browser-window'
+        return xvfb, chrome
+
+    def verify(self, w, pid):
+        xvfb, chrome = self.server()
+        top = self.windows()
+        browser_windows = [window for window in top if self.window_pids(window) == [chrome['pid']]]
+        require(browser_windows, 'No exact CDP Chrome top-level window on owned Xvfb')
+        require(w in top and self.window_pids(w) == [pid] and self.owned(pid),
+                'Target is not an owned top-level window on owned Xvfb')
+        target = self.lookup(pid)
+        identity = {key: target[key] for key in ('pid', 'start', 'exe', 'uid', 'pgid')}
+        require(target['exe'] == chrome['exe'] and target['uid'] == chrome['uid'], 'Target executable/UID changed')
+        require(identity == self.targets.setdefault((w, pid), identity), 'Target process identity changed')
+        self.evidence['displayProof'] = {'status': 'x11-owned-window-proved', 'displayQualified': True,
+                                         'display': self.a.display, 'serverPid': xvfb['pid'], 'serverUid': xvfb['uid'],
+                                         'browserPid': chrome['pid'], 'browserWindows': browser_windows,
+                                         'window': w, 'windowProcess': identity}
+
+    def act(self, w, pid, action):
+        self.verify(w, pid)
+        return action()
+
+
+def scoped_key(scope, w, pid, emit):
+    # One ownership check per logical key. Queue press/release together before
+    # XSync: a chooser may close on the press, so a round-trip recheck between
+    # events would spuriously fail after a successful Escape/Return.
+    def pair():
+        for event_type, mask in ((2, 1), (3, 2)):
+            require(emit(event_type, mask), 'Scoped XSendEvent failed')
+    scope.act(w, pid, pair)
 
 
 def key_symbol(name, lookup):
@@ -136,7 +205,8 @@ if sys.argv[1:] == ['--self-test']:
     launcher = {'pid': 100, 'pgid': 100, 'start': '200', 'uid': 42}
     linux = {'xvfbPid': 90, 'xvfbStart': '100', 'chromePid': 101, 'chromeStart': '201',
              'chromeExe': chrome['exe'], 'chromeUid': 42, 'chromePgid': 100, 'launcher': launcher,
-             'expectedArguments': ['--user-data-dir=/tmp/owned']}
+             'expectedArguments': ['--user-data-dir=/tmp/owned'], 'display': ':7',
+             'chromeSpawn': {'source': 'Chrome spawn env', 'display': ':7', 'xvfbPid': 90}}
 
     def check(c=chrome, x=xvfb, l=linux, env=b'DISPLAY=:7\0'):
         return verify_processes(a, {'linux': l}, lambda pid: x if pid == 90 else c, 42, env)
@@ -162,6 +232,84 @@ if sys.argv[1:] == ['--self-test']:
                    {'launcher': {**launcher, 'pgid': 99}}, {'launcher': {**launcher, 'uid': 43}}]:
         refuses(lambda change=change: check(l={**linux, **change}))
     refuses(lambda: check(env=b'DISPLAY=:70\0'))
+    for env in [b'', b'OTHER=not-recorded\0', b'DISPLAY=\0', b'DISPLAY=:7\0DISPLAY=\0']:
+        check(env=env)
+    for env in [b'DISPLAY=:7-extra\0', b'DISPLAY=:7\0DISPLAY=:8\0', b'DISPLAY=localhost:7\0']:
+        refuses(lambda env=env: check(env=env))
+    require(display_entries(b'SECRET=not-recorded\0DISPLAY=:70\0DISPLAY=\0') == ['DISPLAY=:70', 'DISPLAY='],
+            'Evidence must contain only observed DISPLAY entries')
+    for change in [{'display': ':70'}, {'chromeSpawn': {'source': '/proc/environ', 'display': ':7', 'xvfbPid': 90}},
+                   {'chromeSpawn': {'source': 'Chrome spawn env', 'display': ':70', 'xvfbPid': 90}},
+                   {'chromeSpawn': {'source': 'Chrome spawn env', 'display': ':7', 'xvfbPid': 91}}]:
+        refuses(lambda change=change: check(l={**linux, **change}))
+    # Exercise the actual focus/key action gate. Empty proc metadata alone must
+    # never permit actions; server and exact CDP top-level window are mandatory.
+    state = {}
+    evidence, sent = {}, []
+
+    def reset():
+        state.update(peer=(90, 42), top=[501, 502], pids={501: [101], 502: [102]}, chrome=chrome,
+                     xvfb=xvfb, target={**chrome, 'pid': 102, 'start': '202'}, env=b'', owned=True)
+        evidence.clear()
+        sent.clear()
+        return ScopedX11(a, lambda: check(c=state['chrome'], x=state['xvfb'], env=state['env']),
+                         lambda: state['peer'], lambda: state['top'], lambda w: state['pids'].get(w),
+                         lambda pid: state['chrome'] if pid == 101 else state['target'],
+                         lambda pid: state['owned'] and pid in (101, 102), evidence)
+
+    for env in [b'', b'DISPLAY=\0', b'DISPLAY=:7\0']:
+        guard = reset()
+        state['env'] = env
+        require('displayProof' not in evidence, 'Process binding must not qualify display')
+        guard.act(502, 102, lambda: sent.append('focus'))
+        guard.act(502, 102, lambda: sent.append('key'))
+        require(sent == ['focus', 'key'] and evidence['displayProof']['displayQualified'], 'Positive X11 proof rejected')
+    guard = reset()
+    state['top'] = [501]
+    guard.act(501, 101, lambda: sent.append('browser-focus'))
+    require(sent == ['browser-focus'], 'Exact CDP browser target rejected')
+    for change in [{'peer': (91, 42)}, {'peer': (90, 43)}, {'top': []}, {'top': [502]}, {'owned': False},
+                   {'pids': {501: [1010], 502: [102]}}, {'pids': {501: [101, 999], 502: [102]}},
+                   {'pids': {501: [101], 502: [999]}}, {'pids': {501: [101], 502: [102, 999]}},
+                   {'target': {**chrome, 'pid': 102, 'exe': '/wrong', 'start': '202'}},
+                   {'chrome': {**chrome, 'start': '999'}}, {'xvfb': {**xvfb, 'start': '999'}},
+                   {'env': b'DISPLAY=:70\0'}, {'env': b'DISPLAY=:7\0DISPLAY=:8\0'}]:
+        guard = reset()
+        state.update(change)
+        refuses(lambda: guard.act(502, 102, lambda: sent.append('forbidden')))
+        require(not sent and not evidence['displayProof']['displayQualified'], 'UI action without own X11 proof')
+    for change in [{'start': '999'}, {'exe': '/wrong'}, {'uid': 43}, {'pgid': 999}]:
+        guard = reset()
+        guard.act(502, 102, lambda: sent.append('focus'))
+        state['target'] = {**state['target'], **change}
+        refuses(lambda: guard.act(502, 102, lambda: sent.append('forbidden-key')))
+        require(sent == ['focus'] and not evidence['displayProof']['displayQualified'], 'Target identity not rechecked before key')
+    for change in [{'peer': (91, 42)}, {'pids': {501: [101], 502: [999]}}, {'top': [502]},
+                   {'chrome': {**chrome, 'exe': '/wrong'}}, {'xvfb': {**xvfb, 'uid': 43}}]:
+        guard = reset()
+        guard.act(502, 102, lambda: sent.append('focus'))
+        state.update(change)
+        refuses(lambda: guard.act(502, 102, lambda: sent.append('forbidden-key')))
+        require(sent == ['focus'], 'Server/browser/window not rechecked before key')
+    # Real logical-key boundary: teardown on a press must not force a round-trip
+    # proof for its queued release; any subsequent key still requires fresh proof.
+    guard = reset()
+
+    def closing_key(event_type, mask):
+        sent.append((event_type, mask))
+        if event_type == 2:
+            state['top'] = [501]
+        return 1
+
+    scoped_key(guard, 502, 102, closing_key)
+    require(sent == [(2, 1), (3, 2)], 'A closing chooser must receive one queued key pair')
+    refuses(lambda: scoped_key(guard, 502, 102, closing_key))
+    require(sent == [(2, 1), (3, 2)], 'A subsequent key reached a closed window')
+    for change in [{'peer': (91, 42)}, {'pids': {501: [101], 502: [999]}}, {'top': [502]}]:
+        guard = reset()
+        state.update(change)
+        refuses(lambda: scoped_key(guard, 502, 102, closing_key))
+        require(not sent, 'Unproved server/window received part of a key pair')
     # Complete rewritten argv[0] from CI 41263489673; byte parser remains strict.
     a.profile = '/tmp/code-city-native-o8tUex/profile'
     expected_arguments = ['--remote-debugging-port=0', '--user-data-dir=' + a.profile,
@@ -220,7 +368,7 @@ if sys.argv[1:] == ['--self-test']:
     for change in [{'uid': 43}, {'pgid': 90}, {'start': '202'}]:
         refuses(lambda change=change: check_flat(l={**flat_linux, 'launcher': {**launcher, **change}}))
     refuses(lambda: check_flat(env=b'DISPLAY=:70\0'))
-    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, raw/empty argv preservation, ASCII/named keysyms and Shift masks; no X11/native runtime'}))
+    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, DISPLAY contradiction/source guards and DISPLAY-only evidence; empty metadata defers to exact connected-Xvfb/CDP top-level window proof; focus/key action boundary and identity rechecks; raw/empty argv preservation, ASCII/named keysyms and Shift masks; no X11/native runtime'}))
     sys.exit(0)
 
 
@@ -234,11 +382,25 @@ parser.add_argument('--mode', choices=['select', 'allow-read', 'cancel'], requir
 parser.add_argument('--fixture', required=True)
 a = parser.parse_args()
 require(re.fullmatch(r':\d+', a.display), 'Only a local isolated display number is allowed')
+evidence = {'display': a.display, 'displayProof': {'status': 'process-check-pending', 'displayQualified': False}}
+
+
+def failure_json(kind, error, traceback):
+    evidence.update(status='failed', error=str(error))
+    evidence['displayProof'] = {**evidence['displayProof'], 'status': 'failed', 'displayQualified': False}
+    print(json.dumps(evidence))
+    sys.__excepthook__(kind, error, traceback)
+
+
+sys.excepthook = failure_json
+evidence['helperDisplayEntries'] = ['DISPLAY=' + os.environ['DISPLAY']] if 'DISPLAY' in os.environ else []
+require(os.environ.get('DISPLAY') == a.display, 'Helper spawn DISPLAY must be exactly owned Xvfb')
 owner = json.loads(Path(a.ownership).read_text())
 require(a.fixture in (owner['fixture'], owner['empty']), 'Not an owned fixture')
 require(a.profile == owner['profile'], 'Profile ownership mismatch')
 require(a.display == owner['linux']['display'], 'Display ownership mismatch')
-xvfb, chrome = verify_processes(a, owner)
+xvfb, chrome = verify_processes(a, owner, evidence=evidence)
+evidence['displayProof'] = {'status': 'process-bound-awaiting-x11-proof', 'displayQualified': False}
 s = os.lstat(a.fixture)
 expected = owner['identities'][a.fixture]
 require(stat.S_ISDIR(s.st_mode) and not stat.S_ISLNK(s.st_mode)
@@ -262,6 +424,7 @@ def bind(name, restype, args):
 
 open_display = bind('XOpenDisplay', Display, [C.c_char_p])
 close_display = bind('XCloseDisplay', C.c_int, [Display])
+connection_number = bind('XConnectionNumber', C.c_int, [Display])
 root_window = bind('XDefaultRootWindow', Window, [Display])
 query_tree = bind('XQueryTree', C.c_int, [Display, Window, C.POINTER(Window), C.POINTER(Window), C.POINTER(C.POINTER(Window)), C.POINTER(C.c_uint)])
 atom = bind('XInternAtom', C.c_ulong, [Display, C.c_char_p, C.c_int])
@@ -355,15 +518,20 @@ def candidates():
     return found
 
 
-def verify_window(w, pid):
-    require(proc(a.chrome_pid)['start'] == chrome['start'], 'Chrome identity changed')
-    require(proc(a.xvfb_pid)['start'] == xvfb['start'], 'Xvfb identity changed')
-    require(owned(pid) and property_value(w, '_NET_WM_PID') == [pid], 'Window process ownership changed')
+def connected_server():
+    # Duplicate only the already-open X11 connection; never open another display.
+    with socket.fromfd(connection_number(d), socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        pid, uid, _gid = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                                struct.calcsize('3i')))
+        return pid, uid
+
+
+scope = ScopedX11(a, lambda: verify_processes(a, owner, evidence=evidence), connected_server,
+                  lambda: children(root), lambda w: property_value(w, '_NET_WM_PID'), proc, owned, evidence)
 
 
 def focus_target(w, pid):
-    verify_window(w, pid)
-    set_focus(d, w, 1, 0)  # Only on the independently created Xvfb, never user's display.
+    scope.act(w, pid, lambda: set_focus(d, w, 1, 0))  # Connected owned Xvfb/window only.
     flush(d, 0)
     focused, revert = Window(), C.c_int()
     get_focus(d, C.byref(focused), C.byref(revert))
@@ -371,19 +539,20 @@ def focus_target(w, pid):
 
 
 def key(w, pid, name, modifiers=0):
-    verify_window(w, pid)
     code = keycode(d, key_symbol(name, keysym))
     require(code != 0, 'Key unavailable on isolated X11 keyboard: ' + name)
-    for event_type, mask in ((2, 1), (3, 2)):
+    def emit(event_type, mask):
         event = Event()
         event.key = KeyEvent(event_type, 0, 1, d, w, root, 0, 0, 1, 1, 1, 1, modifiers, code, 1)
-        require(send(d, w, 1, mask, C.byref(event)), 'Scoped XSendEvent failed')
+        return send(d, w, 1, mask, C.byref(event))
+    scoped_key(scope, w, pid, emit)
     flush(d, 0)
 
 
 try:
     end = time.monotonic() + 8
     while True:
+        scope.server()  # Refuse a wrong X11 peer before even searching its windows.
         found = candidates()
         if found:
             break
@@ -414,6 +583,7 @@ try:
         actions = ['Tab-from-default-Cancel', 'Return-read-Allow']
     print(json.dumps({'display': a.display, 'xvfbPid': a.xvfb_pid, 'chromePid': a.chrome_pid,
                       'window': w, 'windowPid': pid, 'role': role, 'title': title,
-                      'mode': a.mode, 'actions': actions}))
+                      'mode': a.mode, 'actions': actions, 'observedDisplayEntries': evidence['observedDisplayEntries'],
+                      'displayProof': evidence['displayProof']}))
 finally:
     close_display(d)

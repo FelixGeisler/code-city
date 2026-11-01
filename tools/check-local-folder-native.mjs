@@ -116,6 +116,22 @@ function linuxBrowserArguments(browser, expectedArguments) {
   assert.equal(browser.args[0], browser.exe + ' ' + expectedArguments.join(' '), 'Chrome flattened argv mismatch');
   return [browser.exe, ...expectedArguments];
 }
+// /proc/environ is mutable process-title storage, not authoritative launch evidence.
+// Log only DISPLAY entries, never unrelated environment values. Missing/scrubbed
+// metadata defers qualification to the helper's positive X11 server/window proof.
+function linuxDisplayEntries(environment) {
+  return environment.split('\0').filter(entry => entry.startsWith('DISPLAY='));
+}
+function checkLinuxDisplay(display, entries) {
+  assert(/^:\d+$/.test(display), 'Not an owned local display number');
+  assert(entries.every(entry => entry === 'DISPLAY=' || entry === 'DISPLAY=' + display),
+    'Observed Chrome DISPLAY contradicts owned Xvfb: ' + JSON.stringify(entries));
+}
+function linuxSpawnDisplay(environment, display, xvfbPid, source) {
+  checkLinuxDisplay(display, ['DISPLAY=' + environment.DISPLAY]);
+  assert.equal(environment.DISPLAY, display, 'Spawn DISPLAY must be exactly the owned Xvfb');
+  return { source, display: environment.DISPLAY, xvfbPid };
+}
 function bindLinuxBrowser(launcher, browser, profile, display, environment, uid, expectedArguments) {
   assert.equal(launcher.uid, uid, 'Launcher UID mismatch');
   assert.equal(launcher.pgid, launcher.pid, 'Launcher does not own a new process group');
@@ -124,7 +140,7 @@ function bindLinuxBrowser(launcher, browser, profile, display, environment, uid,
   assert(BigInt(browser.start) >= BigInt(launcher.start), 'Browser predates launch');
   if (browser.pid === launcher.pid) assert.equal(browser.start, launcher.start, 'Launcher PID reused');
   assert.deepEqual(linuxProfileValues(linuxBrowserArguments(browser, expectedArguments)), [profile], 'CDP browser profile mismatch');
-  assert(environment.split('\0').includes('DISPLAY=' + display), 'CDP browser not on owned Xvfb');
+  checkLinuxDisplay(display, linuxDisplayEntries(environment)); // still pending actual X11 proof
   return browser;
 }
 function ownedLinuxGroupMember(p, launcher, browser, uid) {
@@ -212,6 +228,12 @@ async function selfTest() {
     assert.equal(linuxBrowserPid([{type:'renderer', id:102}, {type:'browser', id:101}]), 101);
     for (const info of [[], [{type:'browser',id:0}], [{type:'browser',id:'101'}], [{type:'browser',id:101},{type:'browser',id:102}]]) assert.throws(() => linuxBrowserPid(info));
     assert.equal(bind(), browser);
+    for (const env of ['', 'OTHER=not-recorded\0', 'DISPLAY=\0', 'DISPLAY=:7\0DISPLAY=\0']) assert.equal(bind(browser, launcher, env), browser);
+    for (const env of ['DISPLAY=:70\0', 'DISPLAY=:7-extra\0', 'DISPLAY=:7\0DISPLAY=:8\0', 'DISPLAY=localhost:7\0']) assert.throws(() => bind(browser, launcher, env), /DISPLAY contradicts/);
+    assert.deepEqual(linuxDisplayEntries('SECRET=not-recorded\0DISPLAY=:70\0DISPLAY=\0'), ['DISPLAY=:70', 'DISPLAY=']);
+    assert.deepEqual(linuxDisplayEntries('NOT_DISPLAY=:7\0'), []);
+    assert.deepEqual(linuxSpawnDisplay({DISPLAY:':7'}, ':7', 90, 'test'), {source:'test', display:':7', xvfbPid:90});
+    for (const DISPLAY of [undefined, '', ':70', ':7-extra']) assert.throws(() => linuxSpawnDisplay({DISPLAY}, ':7', 90, 'test'));
     const direct = {...browser, pid:100, start:'200'};
     assert.equal(bind(direct), direct);
     assert.equal(bind({...browser,args:['chrome','--user-data-dir','/tmp/owned']}).pid,101);
@@ -277,7 +299,7 @@ async function selfTest() {
     await assert.rejects(closeNativeDisplay(display,40),/Xvfb close timed out/);
     assert(display.child.exitCode!==null||display.child.signalCode!==null,'Display timeout left the owned child alive');
     assert(display.child.stderr.destroyed&&display.child.stdio[3].destroyed,'Display pipes remain referenced');
-    console.log(JSON.stringify({ status: 'passed', checks: ['unexpected link refusal', 'changed link target refusal', 'verified link unlink preserves target', 'actual TS graph compilation', 'stalled close terminates child and awaits streams', 'stalled display terminates child and closes both pipes', 'CDP browser PID cardinality and type', 'direct and wrapper browser binding', 'UID/start/group/profile/display refusals', 'exact full flattened argv and spoof refusals; raw evidence and empty argv preserved', 'owned launch group cleanup identities'], modules: [...modules.keys()] }));
+    console.log(JSON.stringify({ status: 'passed', checks: ['unexpected link refusal', 'changed link target refusal', 'verified link unlink preserves target', 'actual TS graph compilation', 'stalled close terminates child and awaits streams', 'stalled display terminates child and closes both pipes', 'CDP browser PID cardinality and type', 'direct and wrapper browser binding', 'UID/start/group/profile and contradictory DISPLAY refusals; scrubbed DISPLAY defers to X11 proof', 'exact spawn DISPLAY source and DISPLAY-only evidence', 'exact full flattened argv and spoof refusals; raw evidence and empty argv preserved', 'owned launch group cleanup identities'], modules: [...modules.keys()] }));
   } finally { await remove(scratch); }
 }
 
@@ -312,8 +334,20 @@ async function main() {
     const data=JSON.parse(x.stdout.trim()); ticks??=data.creationTicks; result.actions.push(data); await save(); return data;
   }
   async function linuxDialog(mode, target=fixture) {
-    const x=await execFile('python3',[path.join(tools,'local-folder-native-linux.py'),'--display',result.display,'--xvfb-pid',String(xvfb.child.pid),'--chrome-pid',String(linuxBrowser.pid),'--profile',profile,'--ownership',path.join(scratch,'ownership.json'),'--mode',mode,'--fixture',target],{env:linuxEnvironment,timeout:15000});
-    const data=JSON.parse(x.stdout);result.actions.push(data);await save();return data;
+    result.linuxDisplayProof={status:'awaiting-x11-proof', displayQualified:false, mode};
+    result.linuxHelperSpawn=linuxSpawnDisplay(linuxEnvironment,result.display,xvfb.child.pid,'python3 spawn env');
+    await save();
+    try {
+      const x=await execFile('python3',[path.join(tools,'local-folder-native-linux.py'),'--display',result.display,'--xvfb-pid',String(xvfb.child.pid),'--chrome-pid',String(linuxBrowser.pid),'--profile',profile,'--ownership',path.join(scratch,'ownership.json'),'--mode',mode,'--fixture',target],{env:linuxEnvironment,timeout:15000});
+      const data=JSON.parse(x.stdout);
+      assert.equal(data.displayProof?.status,'x11-owned-window-proved');
+      assert.equal(data.displayProof.displayQualified,true);
+      result.linuxDisplayProof=data.displayProof;result.actions.push(data);await save();return data;
+    } catch(error) {
+      if(error.stdout)try{result.linuxHelperFailure=JSON.parse(error.stdout);}catch{} // only helper's bounded JSON, not environ
+      result.linuxDisplayProof={...result.linuxDisplayProof,status:'failed',displayQualified:false};
+      await save();throw error;
+    }
   }
   async function evaluate(expression, awaitPromise=false, userGesture=false) {
     const r=await bounded(cdp.send('Runtime.evaluate',{expression,awaitPromise,userGesture,returnByValue:true},sessionId),15000,'Browser evaluation');
@@ -398,6 +432,11 @@ async function main() {
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve)});
     assert.notEqual(server.address().port,55583);result.origin='http://127.0.0.1:'+server.address().port;
     const arguments_=['--remote-debugging-port=0','--user-data-dir='+profile,'--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update','--disable-default-apps','--disable-sync','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows','--disable-features=CalculateNativeWinOcclusion','--lang=en-US',...(process.platform==='win32'?['--window-position=-22000,-22000']:['--ozone-platform=x11','--disable-gpu']),'--window-size=900,650','about:blank'];
+    // Snapshot the actual spawn option at source, before Chrome can rewrite proc metadata.
+    if(process.platform==='linux') {
+      result.linuxChromeSpawn=linuxSpawnDisplay(linuxEnvironment,result.display,xvfb.child.pid,'Chrome spawn env');
+      result.linuxDisplayProof={status:'launch-env-recorded',displayQualified:false};await save();
+    }
     // Explicit headed launch here only; chrome-cdp's default headless arguments and closed barrier remain unchanged.
     chrome=processHandle(discovery.executable,arguments_,{detached:process.platform==='linux',env:process.platform==='linux'?linuxEnvironment:process.env});
     result.chrome.pid=chrome.child.pid;result.chrome.arguments=arguments_;
@@ -416,11 +455,13 @@ async function main() {
       linuxCandidate=await linuxProcess(linuxBrowserPid(info.processInfo));
       result.chrome.actualProcess=linuxCandidate;await save(); // preserve args even when a guard rejects them
       const environment=await readFile('/proc/'+linuxCandidate.pid+'/environ','utf8');
+      result.chrome.observedDisplayEntries=linuxDisplayEntries(environment);await save();
       linuxBrowser=bindLinuxBrowser(linuxLauncher,linuxCandidate,profile,result.display,environment,process.getuid(),arguments_);
       const ownership=JSON.parse(await readFile(path.join(scratch,'ownership.json'),'utf8'));
       ownership.linux={display:result.display,xvfbPid:xvfb.child.pid,xvfbStart:(await linuxProcess(xvfb.child.pid)).start,
         launcher:linuxLauncher,chromePid:linuxBrowser.pid,chromeStart:linuxBrowser.start,chromeExe:linuxBrowser.exe,
-        chromeUid:linuxBrowser.uid,chromePgid:linuxBrowser.pgid,expectedArguments:arguments_};result.linuxOwnership=ownership.linux;
+        chromeUid:linuxBrowser.uid,chromePgid:linuxBrowser.pgid,expectedArguments:arguments_,chromeSpawn:result.linuxChromeSpawn};result.linuxOwnership=ownership.linux;
+      result.linuxDisplayProof={status:'process-bound-awaiting-x11-proof',displayQualified:false};
       await writeFile(path.join(scratch,'ownership.json'),JSON.stringify(ownership));await save();
     }
     const target=(await cdp.send('Target.getTargets')).targetInfos.find(t=>t.type==='page');
@@ -508,7 +549,7 @@ async function main() {
     }
     for(const [name,p]of Object.entries({workspace:scratch,fixture,empty}))if(p)result[name+'Status']=await absent(p)?'removed':'retained';
     if(result.shutdownError||denied.size||result.cleanup.some(x=>x.status==='retained')||result.workspaceStatus==='retained'||result.fixtureStatus==='retained'||result.emptyStatus==='retained'||result.serverClosed===false)result.status='failed';
-    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,shutdownError:result.shutdownError,linuxProcesses:process.platform==='linux'&&result.status==='failed'?{launcher:result.chrome?.launchedProcess,actual:result.chrome?.actualProcess}:undefined,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
+    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,shutdownError:result.shutdownError,linuxProcesses:process.platform==='linux'&&result.status==='failed'?{launcher:result.chrome?.launchedProcess,actual:result.chrome?.actualProcess,observedDisplayEntries:result.chrome?.observedDisplayEntries,displayProof:result.linuxDisplayProof,helperFailure:result.linuxHelperFailure}:undefined,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
     if(result.status!=='qualified')process.exitCode=1;
   }
 }
