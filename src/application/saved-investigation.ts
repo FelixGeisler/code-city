@@ -1,11 +1,12 @@
 import { validateCityPayload, type CityPayload } from "./city-payload";
 import { isCanonicalSourcePath, compareUnsignedUtf8, MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES, MAX_NORMALIZED_TOTAL_BYTES, FIXED_EXCLUDED_SEGMENTS } from "../domain/source-admission";
-// Version-2 wire vocabulary is pinned, not silently widened by future analyzers.
+import { parseInvestigationOrigin, type InvestigationOrigin } from "./investigation-origin";
+// Version-3 wire vocabulary is pinned, not silently widened by future analyzers.
 const EXPLICIT_UNIT_FORMS = ["function", "arrow", "method", "constructor", "getter", "setter", "static-block"];
 const DECISION_KINDS = ["if", "loop", "case", "catch", "ternary", "logical-and", "logical-or", "nullish", "logical-and-assign", "logical-or-assign", "nullish-assign"];
 import { parseRepositoryReference } from "../domain/repository-reference";
 
-export const SAVE_LIMITS = Object.freeze({ header: 16 * 1_048_576, raw: 128 * 1_048_576, snapshot: 192 * 1_048_576, storage: 2 * 1_073_741_824, count: 1024, operationMs: 120_000 });
+export const SAVE_LIMITS = Object.freeze({ header: 16 * 1_048_576, snapshot: 192 * 1_048_576, storage: 2 * 1_073_741_824, count: 1024, operationMs: 120_000 });
 export async function sourceSha256(bytes: Uint8Array): Promise<string> {
   if (bytes.length === 0) return "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes).buffer)), byte => byte.toString(16).padStart(2, "0")).join("");
@@ -14,17 +15,17 @@ export function hasSaveCapacity(count: number, usedBytes: number, uploadBytes: n
   return [count, usedBytes, uploadBytes].every(value => Number.isSafeInteger(value) && value >= 0)
     && count < SAVE_LIMITS.count && uploadBytes <= SAVE_LIMITS.snapshot && usedBytes + uploadBytes + 16384 <= SAVE_LIMITS.storage;
 }
-export const SNAPSHOT_MAGIC = new Uint8Array([67, 67, 83, 65, 86, 69, 2, 0]);
+export const SNAPSHOT_MAGIC = new Uint8Array([67, 67, 83, 65, 86, 69, 51, 0]);
 export type SavedUnit = [string, number, number, number[], number];
 export type SavedContribution = [number, string, number, number];
 export type SourceSection = { length: number; sha256: string };
 export type SavedFile = {
-  path: string; rawPath: string; blob: string; raw: SourceSection; normalized: SourceSection | null;
+  path: string; normalized: SourceSection | null;
   outcome: string; fact: { canonicalPath: string; S: number; U: number; M: number } | null;
   units: SavedUnit[]; contributions: SavedContribution[];
 };
-export type SavedHeader = { version: 2; analyzer: string; repositoryUrl: string; revision: string; exclusions: string[]; fixedExcludedSegments: string[]; hierarchy: string[]; files: SavedFile[]; city: unknown };
-export type SavedRecord = { id: string; savedAt: string; repository: string; ref: string; revision: string; bytes: number; sha256: string };
+export type SavedHeader = { version: 3; analyzer: string; origin: InvestigationOrigin; exclusions: string[]; fixedExcludedSegments: string[]; hierarchy: string[]; files: SavedFile[]; city: unknown };
+export type SavedRecord = { kind?: InvestigationOrigin["kind"]; id: string; savedAt: string; repository: string; ref: string; revision: string; bytes: number; sha256: string };
 export const validSavedId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value);
 const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
 function requireValue(condition: unknown): asserts condition { if (!condition) throw new Error("Invalid saved investigation"); }
@@ -40,13 +41,21 @@ function section(value: unknown, max: number): SourceSection {
   requireValue(integer(entry.length, max) && typeof entry.sha256 === "string" && /^[0-9a-f]{64}$/u.test(entry.sha256));
   return entry as SourceSection;
 }
-export function snapshotIdentity(header: Pick<SavedHeader, "repositoryUrl" | "revision">): Pick<SavedRecord, "repository" | "ref" | "revision"> {
-  const repository = parseRepositoryReference(header.repositoryUrl);
+export function snapshotIdentity(header: Pick<SavedHeader, "origin">): Required<Pick<SavedRecord, "kind" | "repository" | "ref" | "revision">> {
+  const origin = parseInvestigationOrigin(header.origin);
+  if (origin.kind === "working-tree") return { kind: origin.kind, repository: origin.name, ref: "working tree", revision: origin.captureId };
+  const repository = parseRepositoryReference(origin.repositoryUrl);
   requireValue(repository);
-  return { repository: `${repository.owner}/${repository.repository}`, ref: repository.tag === undefined ? repository.branch ?? "default branch" : `tag: ${repository.tag}`, revision: header.revision };
+  return { kind: origin.kind, repository: `${repository.owner}/${repository.repository}`, ref: repository.tag === undefined ? repository.branch ?? "default branch" : `tag: ${repository.tag}`, revision: origin.revision };
 }
 export function parseSavedRecord(value: unknown): SavedRecord {
-  const item = record(value, ["id", "savedAt", "repository", "ref", "revision", "bytes", "sha256"]);
+  const tagged = value !== null && typeof value === "object" && Object.hasOwn(value, "kind");
+  const item = record(value, [...(tagged ? ["kind"] : []), "id", "savedAt", "repository", "ref", "revision", "bytes", "sha256"]);
+  requireValue(!tagged || item.kind === "github" || item.kind === "working-tree");
+  if (item.kind === "working-tree") {
+    parseInvestigationOrigin({ kind: item.kind, name: item.repository, captureId: item.revision });
+    requireValue(item.ref === "working tree");
+  }
   requireValue(validSavedId(item.id) && typeof item.savedAt === "string" && item.savedAt.length <= 32 && new Date(item.savedAt).toISOString() === item.savedAt);
   for (const [key, maximum] of [["repository", 1024], ["ref", 4096]] as const) requireValue(typeof item[key] === "string" && item[key].length > 0 && item[key].length <= maximum && item[key].isWellFormed() && !/[\u0000-\u001f\u007f]/u.test(item[key]));
   requireValue(typeof item.revision === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(item.revision) && typeof item.sha256 === "string" && /^[0-9a-f]{64}$/u.test(item.sha256) && integer(item.bytes, SAVE_LIMITS.snapshot) && item.bytes > 12);
@@ -69,26 +78,24 @@ export function cityForSnapshot(city: CityPayload | null): unknown {
   return { geometry: { ...city.geometry, origins: Array.from(city.geometry.origins), sizes: Array.from(city.geometry.sizes), rgba: Array.from(city.geometry.rgba), bounds: Array.from(city.geometry.bounds) }, inspection: city.inspection };
 }
 export function validateSavedHeader(value: unknown): { header: SavedHeader; sections: SourceSection[]; payloadBytes: number } {
-  const data = record(value, ["version", "analyzer", "repositoryUrl", "revision", "exclusions", "fixedExcludedSegments", "hierarchy", "files", "city"]);
+  const data = record(value, ["version", "analyzer", "origin", "exclusions", "fixedExcludedSegments", "hierarchy", "files", "city"]);
   requireValue(typeof data.analyzer === "string" && /^[0-9a-f]{64}$/u.test(data.analyzer));
-  requireValue(data.version === 2 && typeof data.repositoryUrl === "string" && data.repositoryUrl.length <= 4096 && parseRepositoryReference(data.repositoryUrl));
-  requireValue(typeof data.revision === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(data.revision));
+  requireValue(data.version === 3);
+  parseInvestigationOrigin(data.origin);
   for (const field of ["exclusions", "hierarchy"] as const) requireValue(list(data[field], 100_000).every(path => typeof path === "string" && (field === "hierarchy" || path.length <= 4096) && path.isWellFormed()));
   requireValue(JSON.stringify(data.fixedExcludedSegments) === JSON.stringify(FIXED_EXCLUDED_SEGMENTS));
   const files = list(data.files, MAX_ADMITTED_MODULES);
   requireValue(files.length > 0);
   const sections: SourceSection[] = [];
-  let rawTotal = 0, normalizedTotal = 0, prior = "";
+  let normalizedTotal = 0, prior = "";
   const successful = new Map<string, unknown>();
   for (const file of files) {
-    const entry = record(file, ["path", "rawPath", "blob", "raw", "normalized", "outcome", "fact", "units", "contributions"]);
+    const entry = record(file, ["path", "normalized", "outcome", "fact", "units", "contributions"]);
     requireValue(typeof entry.path === "string" && isCanonicalSourcePath(entry.path) && (!prior || compareUnsignedUtf8(prior, entry.path) < 0)); prior = entry.path;
-    requireValue(typeof entry.rawPath === "string" && entry.rawPath.normalize("NFC") === entry.path);
-    requireValue(typeof entry.blob === "string" && new RegExp(`^[0-9a-f]{${data.revision.length}}$`, "u").test(entry.blob));
-    const raw = section(entry.raw, 4_194_307); rawTotal += raw.length; sections.push(raw);
     const normalized = entry.normalized === null ? null : section(entry.normalized, MAX_NORMALIZED_MODULE_BYTES);
     if (normalized) { normalizedTotal += normalized.length; sections.push(normalized); }
     requireValue(["success", "Source text is not supported", "Syntax could not be analyzed", "Metrics could not be computed"].includes(entry.outcome as string));
+    requireValue((entry.outcome === "Source text is not supported") === (normalized === null));
     const units = list(entry.units, 500_000), contributions = list(entry.contributions, 1_000_000);
     if (entry.outcome !== "success") { requireValue(entry.fact === null && units.length === 0 && contributions.length === 0); continue; }
     requireValue(normalized !== null);
@@ -111,16 +118,17 @@ export function validateSavedHeader(value: unknown): { header: SavedHeader; sect
   const hierarchy = new Set<string>();
   for (const file of files as SavedFile[]) { const parts = file.path.split("/"); for (let index = 1; index < parts.length; index++) hierarchy.add(parts.slice(0, index).join("/")); }
   requireValue(JSON.stringify(data.hierarchy) === JSON.stringify([...hierarchy].sort(compareUnsignedUtf8)));
-  requireValue(rawTotal <= SAVE_LIMITS.raw && normalizedTotal <= MAX_NORMALIZED_TOTAL_BYTES);
+  requireValue(normalizedTotal <= MAX_NORMALIZED_TOTAL_BYTES);
   const city = snapshotCity(data.city);
   requireValue(city ? city.inspection.length === successful.size && city.inspection.every(fact => JSON.stringify(fact) === JSON.stringify(successful.get(fact.canonicalPath))) : successful.size === 0);
-  return { header: data as unknown as SavedHeader, sections, payloadBytes: rawTotal + normalizedTotal };
+  return { header: data as unknown as SavedHeader, sections, payloadBytes: normalizedTotal };
 }
 export function snapshotPrefix(headerBytes: Uint8Array): Uint8Array<ArrayBuffer> {
   if (headerBytes.length > SAVE_LIMITS.header) throw new Error("Investigation exceeds Save limits");
   const prefix = new Uint8Array(12); prefix.set(SNAPSHOT_MAGIC); new DataView(prefix.buffer).setUint32(8, headerBytes.length, false); return prefix;
 }
 export function snapshotHeaderLength(prefix: Uint8Array): number {
+  if (prefix.length === 12 && SNAPSHOT_MAGIC.slice(0, 6).every((byte, index) => prefix[index] === byte) && prefix[6] !== SNAPSHOT_MAGIC[6]) throw new Error("Unsupported saved investigation version");
   requireValue(prefix.length === 12 && SNAPSHOT_MAGIC.every((byte, index) => prefix[index] === byte));
   const length = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength).getUint32(8, false); requireValue(length > 0 && length <= SAVE_LIMITS.header); return length;
 }
@@ -136,5 +144,16 @@ export async function decodeSnapshot(bytes: Uint8Array): Promise<{ header: Saved
     const digest = await sourceSha256(content);
     requireValue(digest === entry.sha256); sourceBytes.push(content);
   }
+  let sectionIndex = 0;
+  for (const file of header.files) if (file.normalized) validateNormalizedSource(file, sourceBytes[sectionIndex++]!);
   return { header, sourceBytes };
+}
+
+/** Structural/text validation only; neither metric recomputation nor provenance certification. */
+export function validateNormalizedSource(file: SavedFile, bytes: Uint8Array): void {
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  requireValue(!text.includes("\0") && !text.includes("\r") && !(bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf));
+  const boundary = (index: number) => index === bytes.length || (bytes[index]! & 0xc0) !== 0x80;
+  for (const unit of file.units) requireValue(boundary(unit[1]) && boundary(unit[2]) && unit[3].every(boundary));
+  for (const contribution of file.contributions) requireValue(boundary(contribution[2]) && boundary(contribution[3]));
 }
