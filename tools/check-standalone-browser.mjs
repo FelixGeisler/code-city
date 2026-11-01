@@ -13,6 +13,7 @@ import { closeInstalledChrome, connectCdp, discoverInstalledChrome, launchInstal
 import { expectCleanExit, launchStandalone, readyOrigin, request, sendGracefulSignal, terminateForCleanup, writeSignalPreload } from "./standalone-check-support.mjs";
 import { createBrowserProviderHarness, FIXTURE_REVISION, providerRequestLeaksPrivateHeaders } from "./standalone-browser-provider-harness.mjs";
 import { exerciseLocalBrowser, reopenLocalBrowser, localPickerSubstitution } from "./standalone-local-browser-scenarios.mjs";
+import { exerciseAutomaticExclusions, reopenAutomaticExclusions } from "./standalone-automatic-exclusion-scenarios.mjs";
 
 const WATCHDOG_MS = 600_000;
 const REPOSITORY = "https://github.com/fixture/standalone";
@@ -83,7 +84,7 @@ export async function checkStandaloneBrowser() {
       }
     });
     const pages = [];
-    async function page({ withoutCrypto = false, localPicker = false, url = origin, browserContextId } = {}) {
+    async function page({ withoutCrypto = false, localPicker = false, observation, url = origin, browserContextId } = {}) {
       const { targetId } = await checked(cdp.send("Target.createTarget", { url: "about:blank", ...(browserContextId ? { browserContextId } : {}) }));
       const { sessionId } = await checked(cdp.send("Target.attachToTarget", { targetId, flatten: true }));
       await checked(cdp.send("Page.enable", {}, sessionId));
@@ -93,6 +94,7 @@ export async function checkStandaloneBrowser() {
       await checked(harness.attachPage(sessionId));
       await checked(cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: renderObservation }, sessionId));
       if (localPicker) await checked(cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: localPickerSubstitution }, sessionId));
+      if (observation) await checked(cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: observation }, sessionId));
       if (withoutCrypto) await checked(cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `Object.defineProperty(crypto,'subtle',{value:undefined});` }, sessionId));
       const evaluate = async expression => {
         const result = await checked(cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId));
@@ -513,6 +515,7 @@ export async function checkStandaloneBrowser() {
     await p.closeSource(); assert.equal(harness.requests.length,beforeEvidenceRequests,'inspection contacted provider/host');
 
     const localSaved = await exerciseLocalBrowser({page,cdp,harness,origin,request,checked});
+    const automaticSaved = await exerciseAutomaticExclusions({page,cdp,harness,origin,request,checked});
     await checked(cdp.send("Page.bringToFront", {}, p.sessionId));
     const maximum = await run("maximum", s => s.canvases === 1 && s.analyzed === 4000 && s.controls && s.progress === null);
     const final = maximum.events.find(e => e.kind === "event" && e.value.type === "ANALYSIS_SUCCEEDED").value;
@@ -579,6 +582,7 @@ export async function checkStandaloneBrowser() {
     await checked(cdp.send("Target.closeTarget", { targetId: reopened.targetId }));
     await checked(cdp.send("Target.disposeBrowserContext", { browserContextId }));
     await reopenLocalBrowser({page,cdp,harness,checked,origin,saved:localSaved});
+    await reopenAutomaticExclusions({page,cdp,harness,checked,origin,request,saved:automaticSaved});
     for (const item of harness.requests) {
       const url = new URL(item.url);
       assert.ok([origin,"https://api.github.com","https://raw.githubusercontent.com"].includes(url.origin));
@@ -598,6 +602,7 @@ export async function checkStandaloneBrowser() {
     process.stdout.write(JSON.stringify({
       chrome: { category: discovery.category, version },
       scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "visible-neutral-nested-platform-fills-and-edges", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "syntax-colors-distinct-from-ownership-underlines", "readable-unit-kind-labels", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "shown-source-contribution-scope-and-location-jump", "selected-only-contribution-highlight-and-overlap-replacement", "first-contribution-preselection-readable-labels-and-one-point-order", "stable-row-order-scope-pagination-and-native-identity-on-selection", "local-working-tree-native-capability-capture", "local-uncommitted-content-identity-and-pruned-exclusions", "local-no-provider-or-upload-before-explicit-save", "local-source-once-save-and-original-code-reopen", "local-picker-denial-cancel-and-parser-replacement", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
+      automaticExclusions: { capabilityBoundary: "real OPFS; substituted picker, not OS-native chooser qualification", scenarios: ["local-default-and-ordinary-yarn-plugin", "native-checkbox-stages-without-RPC-network-source-city-GPU-camera-work", "v4-save-applied-not-pending-policy-and-source-once", "explicit-include-real-cache-code-unit-and-nested-dependency-pruning", "post-save-edit-immutable-snapshot", "all-excluded-editable-recovery", "github-default-include-manual-precedence-actual-raw-network", "restart-fresh-context-both-policies-and-source-no-provider-parser-folder", "restored-settings-survive-required-explicit-folder-selection"] },
       requests: harness.requests.length, workerEvents: harness.events.filter(e=>e.kind==='event').length,
       publicFiles: manifest.files.filter(f=>f.role==='public').map(f=>f.path),
     }) + "\n");

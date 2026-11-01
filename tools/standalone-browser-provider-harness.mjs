@@ -17,6 +17,14 @@ function fixture(mode) {
     ["d.cs", "class C { int M() { return 1; } }\n"],
     ["empty.js", ""],
   ];
+  if (mode === "automatic-exclusions") rows = [
+    ["owned.js", "export function owned(x) { return x ? 1 : 0; }\n"],
+    ["packages/owned.js", "export const ordinaryPackage = () => 1;\n"],
+    [".vite/cache.js", "export function cache(x) { const marker = 'AUTOMATIC_CACHE_INCLUDED'; return x ? marker : 'cache'; }\n"],
+    [".vite/node_modules/deep.js", "export const nestedDependency = () => 1;\n"],
+    [".yarn/cache/pkg.js", "export const cachedPackage = () => 1;\n"],
+    [".yarn/plugins/authored.js", "export const authoredPlugin = () => 1;\n"],
+  ];
   if (mode === "unit-evidence") rows = [
     ["a.js", `const banner = '<img src=x onerror=globalThis.__sourceExecuted=true>😀';\nfunction outer(x) {\n if(x) { const inner = y => y ? 1 : 0; }\n return x && 1;\n}\n`],
     ["b.js", Array.from({ length: 40 }, (_, index) => `const f${index} = x => x;`).join("\n")],
@@ -117,6 +125,36 @@ export function createBrowserProviderHarness(cdp, origin, onFailure) {
       await send("Network.enable", { maxPostDataSize: 0 }, workerSession);
       await send("Runtime.addBinding", { name: "__codeCityEvidence" }, workerSession);
       await send("Runtime.evaluate", { expression: `(() => { const send = self.postMessage.bind(self); self.postMessage = (value, ...rest) => { self.__codeCityEvidence(JSON.stringify(value)); send(value, ...rest); }; })()` }, workerSession);
+      if (["automatic-exclusions-local", "automatic-exclusions-restore"].includes(state.mode)) {
+        await send("Runtime.addBinding", { name: "__codeCityAutomaticEvidence" }, workerSession);
+        // The paused module worker has not exposed FileSystem* constructors yet.
+        // Observe the real transferred handle when START is delivered, before the
+        // production listener. Wrap only enumeration already requested by production.
+        const installed = await send("Runtime.evaluate", { expression: `(() => {
+          self.addEventListener('message', event => {
+            if(event.data?.type!=='START')return;
+            const root=event.data.root;
+            self.__codeCityAutomaticEvidence(JSON.stringify({kind:'capability',present:!!root}));
+            if(!root)return;
+            const paths=new WeakMap([[root,'']]), prototype=Object.getPrototypeOf(root), values=prototype.values;
+            prototype.values=function(...args){
+              const parent=paths.get(this);if(parent===undefined)throw new Error('Untracked local capability');
+              self.__codeCityAutomaticEvidence(JSON.stringify({kind:'descent',path:parent}));
+              const iterator=values.apply(this,args);
+              return (async function*(){for await(const entry of iterator){
+                const path=parent?parent+'/'+entry.name:entry.name;
+                if(entry.kind==='directory')paths.set(entry,path);
+                else if(entry.kind==='file'){
+                  const getFile=entry.getFile;
+                  Object.defineProperty(entry,'getFile',{value:function(...readArgs){self.__codeCityAutomaticEvidence(JSON.stringify({kind:'read',path}));return getFile.apply(this,readArgs);}});
+                }
+                yield entry;
+              }})();
+            };
+          });return true;
+        })()`, returnByValue: true }, workerSession);
+        if (installed.exceptionDetails || installed.result?.value !== true) throw new Error(`Local read observation was not installed: ${JSON.stringify(installed)}`);
+      }
       await send("Runtime.runIfWaitingForDebugger", {}, workerSession);
       record({ kind: "worker", sessionId: workerSession, mode: state.mode });
       return;
@@ -134,6 +172,10 @@ export function createBrowserProviderHarness(cdp, origin, onFailure) {
       const value = JSON.parse(params.payload);
       if (["ANALYSIS_FAILED", "ANALYSIS_CANCELLED", "ANALYSIS_SUCCEEDED", "ANALYSIS_ALL_FILES_FAILED"].includes(value.type)) workers.get(sessionId)?.ended.resolve();
       record({ kind: "event", sessionId, value }); return;
+    }
+    if (method === "Runtime.bindingCalled" && params.name === "__codeCityAutomaticEvidence") {
+      const value = JSON.parse(params.payload);
+      record({ kind: `local-${value.kind}`, sessionId, value }); return;
     }
     if (method === "Runtime.bindingCalled" && params.name === "__codeCityDeliveryEvidence") {
       record({ kind: "delivery-held", sessionId, value: JSON.parse(params.payload) }); return;
@@ -174,7 +216,7 @@ export function createBrowserProviderHarness(cdp, origin, onFailure) {
       throw new Error(`Unexpected network origin or non-worker provider request: ${url.origin}`);
     }
     if (!["GET", "OPTIONS"].includes(params.request.method)) throw new Error("Unexpected provider request method");
-    if (url.origin !== origin && state.mode === "no-provider") throw new Error("Reopen contacted GitHub");
+    if (url.origin !== origin && ["no-provider", "automatic-exclusions-local", "automatic-exclusions-restore"].includes(state.mode)) throw new Error("Local capture or reopen contacted GitHub");
     if (url.origin === "https://api.github.com" && !/^\/repos\/fixture\/(?:standalone|another)\//u.test(url.pathname)) throw new Error("Unexpected provider repository");
     if (params.request.method === "OPTIONS") {
       await fulfill(sessionId, params.requestId, Buffer.alloc(0), "application/json", "OPTIONS"); return;
