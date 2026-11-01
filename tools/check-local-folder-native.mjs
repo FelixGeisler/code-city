@@ -215,12 +215,22 @@ self.onmessage=async({data:{id,command,handle}})=>{try{let result;
  self.postMessage({id,result});
 }catch(e){self.postMessage({id,error:{name:e.name,message:e.message}})}};`;
 
+// Keep the existing two-image/budget bound. For the first select attempt the
+// shortcut-state image sorts before the typed-path image, then the final image.
+function diagnosticImageNames(names) {
+  return names.filter(name => /^linux-native-\d+-[a-z-]+\.png$/.test(name)).sort().slice(0, 2);
+}
+
 async function selfTest() {
   const scratch = await mkdtemp(path.join(os.tmpdir(), 'code-city-native-selftest-'));
   const identities = new Map([[scratch, await lstat(scratch)]]), links = new Map(), removed = [];
   const remove = safeTree(identities, links, removed);
   const outside = path.join(scratch, 'target'), inside = path.join(scratch, 'inside');
   try {
+    assert.deepEqual(diagnosticImageNames(['result.json', 'linux-native-1-select.png',
+      'linux-native-1-select-before-confirm.png', 'linux-native-2-inspect.png',
+      'linux-native-1-select-after-location.png', '../linux-native-1-select.png']),
+    ['linux-native-1-select-after-location.png', 'linux-native-1-select-before-confirm.png']);
     const launcher = {pid: 100, ppid: 90, pgid: 100, start: '200', uid: 42, exe: '/bin/sh', args: ['sh', '/usr/bin/google-chrome']};
     const browser = {pid: 101, ppid: 100, pgid: 100, start: '201', uid: 42, exe: '/opt/google/chrome/chrome', args: ['chrome', '--user-data-dir=/tmp/owned']};
     const bind = (p = browser, l = launcher, env = 'DISPLAY=:7\0', profile = '/tmp/owned') => bindLinuxBrowser(l, p, profile, ':7', env, 42, ['--user-data-dir=/tmp/owned']);
@@ -299,7 +309,7 @@ async function selfTest() {
     await assert.rejects(closeNativeDisplay(display,40),/Xvfb close timed out/);
     assert(display.child.exitCode!==null||display.child.signalCode!==null,'Display timeout left the owned child alive');
     assert(display.child.stderr.destroyed&&display.child.stdio[3].destroyed,'Display pipes remain referenced');
-    console.log(JSON.stringify({ status: 'passed', checks: ['unexpected link refusal', 'changed link target refusal', 'verified link unlink preserves target', 'actual TS graph compilation', 'stalled close terminates child and awaits streams', 'stalled display terminates child and closes both pipes', 'CDP browser PID cardinality and type', 'direct and wrapper browser binding', 'UID/start/group/profile and contradictory DISPLAY refusals; scrubbed DISPLAY defers to X11 proof', 'exact spawn DISPLAY source and DISPLAY-only evidence', 'exact full flattened argv and spoof refusals; raw evidence and empty argv preserved', 'owned launch group cleanup identities'], modules: [...modules.keys()] }));
+    console.log(JSON.stringify({ status: 'passed', checks: ['bounded failure-image ordering retains after-location and before-confirm', 'unexpected link refusal', 'changed link target refusal', 'verified link unlink preserves target', 'actual TS graph compilation', 'stalled close terminates child and awaits streams', 'stalled display terminates child and closes both pipes', 'CDP browser PID cardinality and type', 'direct and wrapper browser binding', 'UID/start/group/profile and contradictory DISPLAY refusals; scrubbed DISPLAY defers to X11 proof', 'exact spawn DISPLAY source and DISPLAY-only evidence', 'exact full flattened argv and spoof refusals; raw evidence and empty argv preserved', 'owned launch group cleanup identities'], modules: [...modules.keys()] }));
   } finally { await remove(scratch); }
 }
 
@@ -572,7 +582,7 @@ async function main() {
     const diagnosticImages=[];
     if(process.platform==='linux'&&result.status==='failed') {
       let budget=256*1024;
-      for(const name of (await readdir(evidence)).filter(name=>/^linux-native-\d+-[a-z-]+\.png$/.test(name)).sort().slice(0,2)) {
+      for(const name of diagnosticImageNames(await readdir(evidence))) {
         const p=path.join(evidence,name),s=await lstat(p);
         if(s.isFile()&&!s.isSymbolicLink()&&s.size<=budget){const bytes=await readFile(p);budget-=bytes.length;diagnosticImages.push({name,base64:bytes.toString('base64')});}
       }

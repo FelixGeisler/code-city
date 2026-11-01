@@ -171,40 +171,58 @@ class ScopedX11:
 
 
 def scoped_key(scope, w, pid, codes, emit, grab, ungrab, sync, focus, release_focus):
-    """One chord on a positively owned server, never a system-wide keyboard API.
+    """Verified segments on our server only; never a system-wide keyboard API.
 
-    Grab only that server and hold it across target/focus proof and the paired
-    releases. Other clients cannot steal focus mid-chord. Cleanup releases only
-    keys pressed by this chord, with fresh full target/focus proof; loss of that
-    proof forbids even a release. The driver then tears down its private Xvfb.
+    Ungrab + XSync between modifier transitions and the primary pair lets GTK
+    issue X requests while modifiers are held. Whole-chord grabs block those
+    requests; whether that caused the CI shortcut failure remains unproven.
+    Keep primary down/up under ONE grab: Return may destroy its target as soon
+    as GTK runs. Every segment and paired release needs fresh ownership/focus
+    proof. Lost proof forbids cleanup input; private Xvfb teardown clears keys.
     """
-    scope.verify(w, pid)
-    grab()
-    try:
+    require(codes and len(set(codes)) == len(codes), 'Empty/ambiguous owned chord')
+    initial, held = True, []
+
+    def segment(action):
+        nonlocal initial
         scope.verify(w, pid)
-        focus()
-        pressed = []
+        grab()
         try:
-            for code in codes:
-                pressed.append(code)  # also clean up an emit that raises after queueing
-                require(emit(code, True), 'Owned XTEST key press failed')
+            scope.verify(w, pid)
+            (focus if initial else release_focus)()
+            initial = False  # keyboard-empty check only before this chord starts
+            action()
         finally:
-            if pressed:
-                scope.verify(w, pid)  # no unchecked release on server/window/identity loss
-                release_focus()
-                errors = []
-                for code in reversed(pressed):
-                    try:
-                        require(emit(code, False), 'Owned XTEST key release failed')
-                    except Exception as error:
-                        errors.append(error)
-                if errors:
-                    raise errors[0]
+            try:
+                ungrab()
+            finally:
+                sync()  # actually flush the ungrab before the next segment
+
+    def press_modifier(code):
+        held.append(code)  # clean up even an emit that raises after queueing
+        require(emit(code, True), 'Owned XTEST key press failed')
+
+    def primary_pair():
+        try:
+            require(emit(codes[-1], True), 'Owned XTEST key press failed')
+        finally:
+            scope.verify(w, pid)
+            release_focus()
+            require(emit(codes[-1], False), 'Owned XTEST key release failed')
+
+    try:
+        for code in codes[:-1]:
+            segment(lambda code=code: press_modifier(code))
+        segment(primary_pair)
     finally:
-        try:
-            sync()
-        finally:
-            ungrab()
+        errors = []
+        for code in reversed(held):
+            try:
+                segment(lambda code=code: require(emit(code, False), 'Owned XTEST key release failed'))
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise errors[0]
 
 
 def verified_focus(top, focused, parent, pids, viewable, pid):
@@ -370,27 +388,57 @@ if sys.argv[1:] == ['--self-test']:
         state.update(change)
         refuses(lambda: guard.act(502, 102, lambda: sent.append('forbidden-key')))
         require(sent == ['focus'], 'Server/browser/window not rechecked before key')
-    # Exercise real chord orchestration, including modifier and failure cleanup.
-    def chord(guard, emit=None, focus=lambda: None):
-        scoped_key(guard, 502, 102, [37, 46], emit or (lambda code, down: sent.append((code, down)) or 1),
-                   lambda: sent.append('grab'), lambda: sent.append('ungrab'),
-                   lambda: sent.append('sync'), focus, focus)
+    # Exercise pure scoped_key orchestration; no X11 calls or mock success claims.
+    def chord(guard, emit=None, focus=lambda: None, release_focus=lambda: None,
+              codes=(37, 46), grab=None, sync=None):
+        scoped_key(guard, 502, 102, codes, emit or (lambda code, down: sent.append((code, down)) or 1),
+                   grab or (lambda: sent.append('grab')), lambda: sent.append('ungrab'),
+                   sync or (lambda: sent.append('sync')), focus, release_focus)
+
+    def events():
+        return [event for event in sent if isinstance(event, tuple)]
 
     guard = reset()
-    chord(guard)
-    require(sent == ['grab', (37, True), (46, True), (46, False), (37, False), 'sync', 'ungrab'],
-            'XTEST chord must pair and reverse-release actual modifier keys')
-    for failing in [(37, True), (46, True), (46, False)]:
-        guard = reset()
-        def fail_emit(code, down):
-            sent.append((code, down))
-            if (code, down) == failing:
-                raise RuntimeError('injected XTEST failure')
-            return 1
-        refuses(lambda: chord(guard, fail_emit))
-        require((37, False) in sent and sent[-2:] == ['sync', 'ungrab'], 'Modifier cleanup/grab leaked')
-        if failing != (37, True):
-            require((46, False) in sent, 'Main key cleanup missing')
+    # Assert the full verification/grab/focus/input/ungrab/sync order, including
+    # exactly one initial keyboard-empty callback and paired-release rechecks.
+    verify = guard.verify
+    def traced_verify(w, pid):
+        sent.append('verify')
+        verify(w, pid)
+    guard.verify = traced_verify
+    chord(guard, focus=lambda: sent.append('initial-empty'), release_focus=lambda: sent.append('release-focus'),
+          codes=(37, 50, 46))
+    start = ['verify', 'grab', 'verify']
+    end = ['ungrab', 'sync']
+    require(sent == [*start, 'initial-empty', (37, True), *end,
+                     *start, 'release-focus', (50, True), *end,
+                     *start, 'release-focus', (46, True), 'verify', 'release-focus', (46, False), *end,
+                     *start, 'release-focus', (50, False), *end,
+                     *start, 'release-focus', (37, False), *end],
+            'Segments must independently verify; primary pair atomic; modifiers reverse-released')
+    guard = reset()
+    chord(guard, codes=(36,))
+    require(sent == ['grab', (36, True), (36, False), 'ungrab', 'sync'],
+            'Terminal Return down/up must remain under one grab')
+    for failing in [(37, True), (50, True), (46, True), (46, False), (50, False), (37, False)]:
+        for raises in (False, True):
+            guard = reset()
+            def fail_emit(code, down):
+                sent.append((code, down))
+                if (code, down) == failing:
+                    if raises:
+                        raise RuntimeError('injected XTEST failure after queueing')
+                    return 0
+                return 1
+            refuses(lambda: chord(guard, fail_emit, codes=(37, 50, 46)))
+            expected = [(37, True)]
+            if failing != (37, True):
+                expected.append((50, True))
+                if failing != (50, True):
+                    expected.extend([(46, True), (46, False)])
+                expected.append((50, False))
+            expected.append((37, False))
+            require(events() == expected and sent[-2:] == end, 'Failed emit leaked a key/grab or retried input')
     for change in [{'peer': (91, 42)}, {'pids': {501: [101], 502: [999]}}, {'top': [502]}]:
         guard = reset()
         state.update(change)
@@ -398,35 +446,62 @@ if sys.argv[1:] == ['--self-test']:
         require(not sent, 'Unproved server/window received part of a chord')
     guard = reset()
     refuses(lambda: chord(guard, focus=lambda: require(False, 'wrong focus')))
-    require(sent == ['grab', 'sync', 'ungrab'], 'Focus refusal emitted keys or leaked grab')
-    guard = reset()
-    def changed_at_grab():
-        sent.append('grab')
-        state['peer'] = (91, 42)
-    refuses(lambda: scoped_key(guard, 502, 102, [37, 46], lambda *_: sent.append('forbidden'),
-                               changed_at_grab, lambda: sent.append('ungrab'), lambda: sent.append('sync'), lambda: None, lambda: None))
-    require(sent == ['grab', 'sync', 'ungrab'], 'Proof not refreshed after grabbing owned server')
-    guard = reset()
-    def lost_server(code, down):
-        sent.append((code, down))
-        state['peer'] = (91, 42)
-        raise RuntimeError('server proof lost')
-    refuses(lambda: chord(guard, lost_server))
-    require(sent == ['grab', (37, True), 'sync', 'ungrab'], 'Lost server received unchecked release')
-    for change in [{'top': [501]}, {'pids': {501: [101], 502: [999]}},
-                   {'target': {**chrome, 'pid': 102, 'start': '999'}}]:
+    require(sent == ['grab', 'ungrab', 'sync'], 'Focus refusal emitted keys or leaked grab')
+    # Simulate focus loss at every later guard, including the paired release.
+    for lost_at in (1, 2, 3):
         guard = reset()
-        def lost_target(code, down):
-            sent.append((code, down))
-            state.update(change)
-            raise RuntimeError('target proof lost')
-        refuses(lambda: chord(guard, lost_target))
-        require(sent == ['grab', (37, True), 'sync', 'ungrab'], 'Lost target received unchecked release')
+        calls = [0]
+        def later_focus():
+            calls[0] += 1
+            require(calls[0] < lost_at, 'injected persistent wrong focus')
+        refuses(lambda: chord(guard, release_focus=later_focus))
+        require(events() == ([(37, True), (46, True)] if lost_at == 2 else
+                              [(37, True), (46, True), (46, False)] if lost_at == 3 else [(37, True)]),
+                'Wrong focus received input or unchecked release')
+        require(sent[-2:] == end, 'Focus refusal leaked grab')
+    # Fresh server proof inside EVERY grab, not just before the whole chord.
+    for grab_number in (1, 2, 3):
+        guard = reset()
+        grabs = [0]
+        def changed_at_grab():
+            sent.append('grab')
+            grabs[0] += 1
+            if grabs[0] == grab_number:
+                state['peer'] = (91, 42)
+        refuses(lambda: chord(guard, grab=changed_at_grab))
+        require(events() == ([(37, True), (46, True), (46, False)] if grab_number == 3 else
+                              [(37, True)] if grab_number == 2 else []),
+                'Proof not refreshed inside segment grab')
+        require(sent[-2:] == end, 'Post-grab refusal leaked grab')
+    # Identity/focus can change while GTK runs BETWEEN segments, or after the
+    # primary down before paired up. Never emit cleanup on a lost proof.
+    for change in [{'peer': (91, 42)}, {'top': [501]}, {'top': [502]},
+                   {'pids': {501: [101], 502: [999]}},
+                   {'target': {**chrome, 'pid': 102, 'start': '999'}},
+                   {'chrome': {**chrome, 'exe': '/wrong'}}, {'xvfb': {**xvfb, 'uid': 43}},
+                   {'env': b'DISPLAY=:70\0'}]:
+        for boundary in ('between', 'paired-release'):
+            guard = reset()
+            def lost_proof_emit(code, down):
+                sent.append((code, down))
+                if boundary == 'paired-release' and (code, down) == (46, True):
+                    state.update(change)
+                return 1
+            def between_sync():
+                sent.append('sync')
+                if boundary == 'between':
+                    state.update(change)
+            refuses(lambda: chord(guard, lost_proof_emit, sync=between_sync))
+            require(events() == ([(37, True)] if boundary == 'between' else [(37, True), (46, True)]),
+                    'Lost server/browser/target proof received unchecked input/release')
+            require(sent[-2:] == end, 'Lost proof leaked grab')
     guard = reset()
-    def focus_lost_after_press():
-        require(not any(isinstance(event, tuple) and event[1] for event in sent), 'injected focus loss')
-    refuses(lambda: chord(guard, focus=focus_lost_after_press))
-    require(sent == ['grab', (37, True), (46, True), 'sync', 'ungrab'], 'Lost focus received unchecked release')
+    def failed_sync():
+        sent.append('sync')
+        raise RuntimeError('injected sync failure')
+    refuses(lambda: chord(guard, sync=failed_sync))
+    require(events() == [(37, True), (37, False)] and sent[-2:] == end,
+            'Sync failure must still attempt verified modifier cleanup')
     for focused in [502, 503, 504]:
         require(verified_focus(502, focused, lambda w: {503: 502, 504: 503}[w],
                                lambda w: [102] if w == 503 else None, lambda w: 2, 102),
@@ -505,7 +580,7 @@ if sys.argv[1:] == ['--self-test']:
     for change in [{'uid': 43}, {'pgid': 90}, {'start': '202'}]:
         refuses(lambda change=change: check_flat(l={**flat_linux, 'launcher': {**launcher, **change}}))
     refuses(lambda: check_flat(env=b'DISPLAY=:70\0'))
-    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, DISPLAY contradiction/source guards and DISPLAY-only evidence; empty metadata defers to exact connected-Xvfb/CDP top-level window proof; focus/key action boundary and identity rechecks; raw/empty argv preservation, ASCII/named keysyms and Shift masks; viewable map states, XTEST modifier/key cleanup, lost-proof release refusal, exact/descendant focus refusals and chooser-before-Allow guard; no X11/native runtime'}))
+    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, DISPLAY contradiction/source guards and DISPLAY-only evidence; empty metadata defers to exact connected-Xvfb/CDP top-level window proof; focus/key action boundary and identity rechecks; raw/empty argv preservation, ASCII/named keysyms and Shift masks; viewable map states, segmented XTEST grab/verification/initial-empty ordering, atomic primary pair, reverse modifier cleanup, press/release/sync failures, between-segment/paired-release lost-proof refusal, exact/descendant focus refusals and chooser-before-Allow guard; no X11/native runtime'}))
     sys.exit(0)
 
 
@@ -737,16 +812,18 @@ def key(w, pid, name, modifiers=0):
     names = (['Shift_L'] if modifiers == 1 else ['Control_L'] if modifiers == 4 else []) + [name]
     codes = [keycode(d, key_symbol(n, keysym)) for n in names]
     require(all(codes) and len(set(codes)) == len(codes), 'Key unavailable/ambiguous on isolated X11 keyboard: ' + name)
-    def focus():
+    def release_focus():
         require_focus(w, pid)
         if a.mode == 'allow-read':
-            require_chooser_closed(owned_windows())  # recheck under grab before EVERY chord
+            require_chooser_closed(owned_windows())  # recheck under grab before EVERY segment/release
+    def focus():
+        release_focus()
         keymap = (C.c_ubyte * 32)()
         query_keymap(d, keymap)
         require(not any(keymap), 'Owned Xvfb already has depressed keys; refusing input')
     scoped_key(scope, w, pid, codes, lambda code, down: fake_key(d, code, int(down), 0),
-               lambda: grab_server(d), lambda: (ungrab_server(d), flush(d, 0)), lambda: flush(d, 0),
-               focus, lambda: require_focus(w, pid))
+               lambda: grab_server(d), lambda: ungrab_server(d), lambda: flush(d, 0),
+               focus, release_focus)
     evidence['input']['chordsCompleted'] += 1
     evidence['input']['lastKey'] = name
 
@@ -826,6 +903,7 @@ try:
         key(w, pid, 'l', 4)
         actions.append('Ctrl+L')
         time.sleep(.2)
+        diagnose('-after-location')  # Ctrl+L result BEFORE any path typing, not shortcut success proof.
         for char in a.fixture:
             key(w, pid, char, typing_modifiers(char))
         actions.append('type-owned-synthetic-path')
