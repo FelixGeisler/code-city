@@ -921,6 +921,12 @@ try:
         actions.append('type-owned-synthetic-path')
         key(w, pid, 'Tab')  # Leave the completion popup before activating the dialog's _Open.
         actions.append('Tab-leave-location-completion')
+        if a.fixture == owner['fixture']:
+            # This controlled main fixture has child directories: GTK opens its
+            # location completion list. Dismiss that list, not the chooser.
+            # The empty fixture has no directory completions and must not receive Escape.
+            key(w, pid, 'Escape')
+            actions.append('Escape-main-fixture-location-completion')
         diagnose('-before-confirm')  # Actual owned chooser state, not an inferred default button.
         # GTK's default response may be Cancel. Activate its explicit English
         # _Open action, not an inferred Return/default-button selection.
