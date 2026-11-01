@@ -167,15 +167,15 @@ test("folder capability stays in process and is posted unchanged only to the ded
   } finally { f.owner.close(); }
 });
 
-test("local read cancellation and replacement drain before termination; stale capture is suppressed", async () => {
+test("local replacement terminates unabortable native reads without awaiting an acknowledgement; stale capture is suppressed", async () => {
   const f = await fixture();
   try {
     await f.owner.analyze(localCommand(f)); const old = f.workers[0];
     f.emit(old, "WORKING_TREE_STARTED", 1, { name: localOrigin.name });
     f.emit(old, "WORKING_TREE_PROGRESS", 1, { completed: 0, total: 2 });
     const replacement = f.owner.analyze(localCommand(f, 2));
-    assert.equal(old.messages.at(-1).type, "STOP"); assert.equal(old.terminated, 0);
-    f.emit(old, "ANALYSIS_CANCELLED"); await replacement;
+    assert.equal(old.messages.some(message => message.type === "STOP"), false); assert.equal(old.terminated, 1);
+    await replacement;
     assert.equal(old.terminated, 1); assert.equal(f.workers.length, 2);
     const before = f.events.length;
     f.emit(old, "WORKING_TREE_CAPTURED", 1, { origin: localOrigin });
@@ -183,7 +183,7 @@ test("local read cancellation and replacement drain before termination; stale ca
   } finally { f.owner.close(); }
 });
 
-test("local capture switches to terminable parser ownership and binds bounded inspection to capture", async () => {
+test("local capture stays terminable through parsing and binds bounded inspection to capture", async () => {
   const f = await fixture();
   try {
     await f.owner.analyze(localCommand(f)); const worker = f.workers[0];
@@ -198,6 +198,18 @@ test("local capture switches to terminable parser ownership and binds bounded in
     assert.equal(await f.owner.cancel(localCommand(f, 2)), 204);
     assert.equal(parserWorker.messages.some(message => message.type === "STOP"), false);
     assert.equal(parserWorker.terminated, 1);
+  } finally { f.owner.close(); }
+});
+
+test("local cancellation terminates a pending native read without a STOP acknowledgement", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.analyze(localCommand(f)); const worker=f.workers[0];
+    f.emit(worker,"WORKING_TREE_STARTED",1,{name:localOrigin.name});
+    f.emit(worker,"WORKING_TREE_PROGRESS",1,{completed:0,total:2});
+    assert.equal(await f.owner.cancel(localCommand(f)),204);
+    assert.equal(worker.terminated,1);assert.equal(worker.messages.some(message=>message.type==="STOP"),false);
+    assert.equal(f.events.at(-1).type,"ANALYSIS_CANCELLED");assert.equal(f.losses(),0);
   } finally { f.owner.close(); }
 });
 

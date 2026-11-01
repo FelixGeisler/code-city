@@ -64,7 +64,9 @@ export function createBrowserWorkerTransport(
             const worker = createWorker();
             let disposed = false;
             const owned: OwnedWorker = {
-              worker, generation: command.generation, providerActive: command.savedId === undefined, finished: false, inspections: new Map(),
+              // Native getFile/enumeration promises cannot be aborted reliably. A local
+              // read-only worker owns no provider requests/writes and is terminated on stop.
+              worker, generation: command.generation, providerActive: command.inputKind !== "working-tree" && command.savedId === undefined, finished: false, inspections: new Map(),
               dispose() {
                 if (disposed) return;
                 disposed = true;

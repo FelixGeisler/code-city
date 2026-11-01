@@ -4,14 +4,14 @@
 |===
 |Layer |Block |Responsibility
 |Domain |Repository/admission/metric/city policies |Deterministic validation, calculations, geometry, and camera/picking rules.
-|Application |`analyzeRepository`, raw acquisition, project analysis |One execution-neutral sequence for revision selection, complete bounded acquisition, per-file continuation, measured progress, and city construction.
-|Browser worker edge |GitHub gateways, Tree-sitter adapter, production worker |Perform anonymous provider reads and parsing; retain source and analysis evidence locally; export explicit snapshots directly to the host; send presentation metadata and only explicitly requested bounded source excerpts to the UI.
+|Application |GitHub/local acquisition and project analysis |Resolve a Git revision or content-identified local capture; share normalization, input limits, canonical consumption, per-file continuation, measured progress and city construction.
+|Browser worker edge |GitHub/local folder gateways, Tree-sitter adapter, production worker |Perform anonymous provider reads or pruned read-only directory access and parsing; retain source and analysis evidence locally; export explicit snapshots directly to the host; send presentation metadata and only explicitly requested bounded source excerpts to the UI.
 |Browser main edge |Local worker transport and standalone controller |Own workers and generations, abort/drain provider work, terminate parser work, validate events, suppress stale publication, and dispose on page exit.
 |Application |Unit and district inspection |Index retained facts, exact descendant aggregates, locations, source pages and owned highlight unions. Validate bounded palette-indexed spans from the coloring adapter.
 |Browser worker edge |Shiki adapter |Color retained text with bundled grammars/theme and inline Oniguruma WASM; no HTML, acquisition or analysis-parser initialization.
 |Domain |Recursive district layout |Iterative deterministic nested platforms; preserve the existing file-dimension and color functions.
 |Presentation |Inventory, inspector, presenter |Filter/sort/select canonical file identities without moving the camera or reuploading geometry. Render paths and failures as inert text.
-|Saved-data application |Snapshot codec/capture |Versioned representation, evidence retention, bounds, references and presentation validation; no metric recomputation.
+|Saved-data application |Snapshot codec/capture |Tagged version-3 origin, one normalized source copy, retained facts, bounds/references/presentation validation; no metric recomputation.
 |Node edge |Native host and investigation store |Stream owned staging writes, isolate validation, publish immutable directories and bound reads. No repository analysis/session runtime is mounted or packaged.
 |Delivery |Builder, manifest, audits, browser evidence, workflows |Reproduce exact bytes, verify parser/public-private closure, drive actual Chrome with controlled provider traffic, and bind artifact publication to its run.
 |===

@@ -1,6 +1,6 @@
 = Local Working-Tree Analysis
 
-Status:: Approved for implementation; qualification and delivery pending
+Status:: Implemented; delivery qualification pending
 
 == Scope and custody
 
@@ -62,7 +62,9 @@ Show the local folder name and `Working-tree capture` identity, not `Commit`.
 Before the capture ID exists, correlate progress by local session/generation;
 afterwards use the actual content identity. No invented percentage, latency,
 physical-memory or whole-checkout-capacity promise is added. Explicit Cancel
-settles owned reads or terminates the owned parser worker; replacement and late
+terminates the read-only local worker, including during native enumeration/getFile
+operations that cannot reliably be aborted; canonical failures drain their owned
+read window. Replacement and late
 responses cannot restore an older investigation.
 
 == Shared source-bearing Save

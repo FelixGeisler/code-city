@@ -9,7 +9,7 @@ service. The operator supplies `--port`; binding defaults to loopback.
 Browser Web Crypto requires HTTPS or a secure localhost context. A remote TLS
 ingress and its trust configuration are not provided by this milestone.
 
-No device, Internet, authentication, private-source, performance, concurrency,
+No device, Internet, authentication, direct private-provider, performance, concurrency,
 or memory deployment claim is made. Raspberry Pi qualification remains
 pending.
 
@@ -20,7 +20,8 @@ security audit, the isolated Node type check, and `npm run verify`. That root
 gate runs type checking and tests, builds the canonical artifact once,
 reproduces its manifest and every recorded byte in an isolated directory,
 drives the actual packaged server/worker/parser/browser, verifies signal
-shutdown, validates the immutable retirement evidence, and builds the docs. It
+shutdown, qualifies native folder access in isolated installed Chrome, validates
+the immutable retirement evidence, and builds the docs. It
 does not publish.
 
 == Main publication path
