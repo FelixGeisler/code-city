@@ -463,7 +463,7 @@ async function main() {
     }
     for(const [name,p]of Object.entries({workspace:scratch,fixture,empty}))if(p)result[name+'Status']=await absent(p)?'removed':'retained';
     if(result.shutdownError||denied.size||result.cleanup.some(x=>x.status==='retained')||result.workspaceStatus==='retained'||result.fixtureStatus==='retained'||result.emptyStatus==='retained'||result.serverClosed===false)result.status='failed';
-    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,shutdownError:result.shutdownError,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
+    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,shutdownError:result.shutdownError,linuxProcesses:process.platform==='linux'&&result.status==='failed'?{launcher:result.chrome?.launchedProcess,actual:result.chrome?.actualProcess}:undefined,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
     if(result.status!=='qualified')process.exitCode=1;
   }
 }
