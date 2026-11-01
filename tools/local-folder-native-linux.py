@@ -910,6 +910,8 @@ try:
         key(w, pid, 'l', 4)
         actions.append('Ctrl+L')
         time.sleep(.2)
+        key(w, pid, 'a', 4)  # Replace the remembered directory, never append another absolute path.
+        actions.append('Ctrl+A-replace-location')
         diagnose('-after-location')  # Ctrl+L result BEFORE any path typing, not shortcut success proof.
         for char in a.fixture:
             key(w, pid, char, typing_modifiers(char))
