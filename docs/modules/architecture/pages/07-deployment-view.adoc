@@ -17,11 +17,11 @@ pending.
 
 Pull-request CI performs locked install, dependency closure, high-severity
 security audit, the isolated Node type check, and `npm run verify`. That root
-gate runs type checking and tests, builds the canonical artifact once,
+gate first qualifies native folder access in isolated installed Chrome, then
+runs type checking and tests, builds the canonical artifact once,
 reproduces its manifest and every recorded byte in an isolated directory,
 drives the actual packaged server/worker/parser/browser, verifies signal
-shutdown, qualifies native folder access in isolated installed Chrome, validates
-the immutable retirement evidence, and builds the docs. It
+shutdown, validates the immutable retirement evidence, and builds the docs. It
 does not publish.
 
 == Main publication path

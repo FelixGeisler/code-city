@@ -57,6 +57,10 @@ npm run verify
 
 The gate type-checks, tests, builds the canonical artifact once, reproduces its manifest-recorded bytes, audits public/private routing and parser integrity, drives the actual packaged browser worker with synthetic GitHub/local capabilities, qualifies external native folder access in isolated Chrome, verifies signal shutdown, and builds documentation. The browser evidence includes multiple independent tabs and the inclusive 4,000-file / 40 MiB normalized-source envelope; it is not a latency or memory guarantee.
 
+Native folder qualification runs first, before the expensive build/browser gate,
+so an unsupported OS/browser fails early rather than silently skipping access.
+It runs once, not again during the package audit.
+
 Pull requests run the gate after locked installation, dependency listing, and a high-severity audit. A protected push to `main` publishes the audited artifact and manifest-bound publication record. GitHub Pages deployment remains removed; `publication/retirement-live-verification-v1.json` preserves the earlier notice and former-asset checks.
 
 ## Documentation
