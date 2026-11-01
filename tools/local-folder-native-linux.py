@@ -264,12 +264,20 @@ def typing_modifiers(char):
     return 1 if char.isupper() or char == '_' else 0
 
 
+def chord_names(name, modifiers):
+    require(modifiers in (0, 1, 4, 8), 'Unsupported XTEST modifiers')
+    return ({0: [], 1: ['Shift_L'], 4: ['Control_L'], 8: ['Alt_L']}[modifiers] + [name])
+
+
 if sys.argv[1:] == ['--self-test']:
     for char in '/tmp/CodeCitySynthetic-a_b.123':
         require(key_symbol(char, lambda _: 0) == ord(char), 'ASCII keysym regression')
     require(key_symbol('Return', lambda name: 0xff0d if name == b'Return' else 0) == 0xff0d,
             'Named keysym regression')
     require([typing_modifiers(c) for c in 'C_/-az'] == [1, 1, 0, 0, 0, 0], 'Shift-mask regression')
+    require(chord_names('o', 8) == ['Alt_L', 'o'], 'Explicit Open mnemonic regression')
+    require(chord_names('l', 4) == ['Control_L', 'l'], 'Location chord regression')
+    require(chord_names('C', 1) == ['Shift_L', 'C'] and chord_names('/', 0) == ['/'], 'Typing chord regression')
     require_viewable(2)
     for state in [0, 1, -1, 3]:
         try:
@@ -808,8 +816,7 @@ def focus_target(w, pid):
 
 
 def key(w, pid, name, modifiers=0):
-    require(modifiers in (0, 1, 4), 'Unsupported XTEST modifiers')
-    names = (['Shift_L'] if modifiers == 1 else ['Control_L'] if modifiers == 4 else []) + [name]
+    names = chord_names(name, modifiers)
     codes = [keycode(d, key_symbol(n, keysym)) for n in names]
     require(all(codes) and len(set(codes)) == len(codes), 'Key unavailable/ambiguous on isolated X11 keyboard: ' + name)
     def release_focus():
@@ -908,15 +915,11 @@ try:
             key(w, pid, char, typing_modifiers(char))
         actions.append('type-owned-synthetic-path')
         diagnose('-before-confirm')  # Actual owned chooser state, not an inferred default button.
-        key(w, pid, 'Return')
-        actions.append('Return-navigate-or-select')
+        # GTK's default response may be Cancel. Activate its explicit English
+        # _Open action, not an inferred Return/default-button selection.
+        key(w, pid, 'o', 8)
+        actions.append('Alt+O-explicit-Open')
         time.sleep(.6)
-        # GTK variants may select on the first Return. Never send another key to
-        # a destroyed, hidden or reused chooser (nor to the browser behind it).
-        windows = owned_windows()
-        if any(window['window'] == w and window['dialog'] and window['mapState'] == 'IsViewable' for window in windows):
-            key(w, pid, 'Return')
-            actions.append('Return-Open/Select')
     elif a.mode == 'cancel':
         key(w, pid, 'Escape')
         actions.append('Escape-native-chooser')
