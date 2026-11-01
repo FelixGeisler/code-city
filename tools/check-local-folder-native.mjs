@@ -218,7 +218,7 @@ self.onmessage=async({data:{id,command,handle}})=>{try{let result;
 // Keep the two-image/budget bound, showing the latest selection attempt rather
 // than a successful earlier chooser when the second selection fails.
 function diagnosticImageNames(names) {
-  return names.filter(name => /^linux-native-\d+-select-(after-location|before-confirm)\.png$/.test(name))
+  return names.filter(name => /^linux-native-\d+-select(-before-confirm)?\.png$/.test(name))
     .sort((a,b)=>Number(b.split('-')[2])-Number(a.split('-')[2])||a.localeCompare(b)).slice(0, 2);
 }
 
@@ -231,8 +231,8 @@ async function selfTest() {
     assert.deepEqual(diagnosticImageNames(['result.json', 'linux-native-1-select.png',
       'linux-native-1-select-before-confirm.png', 'linux-native-2-inspect.png',
       'linux-native-1-select-after-location.png', '../linux-native-1-select.png',
-      'linux-native-4-select-before-confirm.png','linux-native-4-select-after-location.png']),
-    ['linux-native-4-select-after-location.png', 'linux-native-4-select-before-confirm.png']);
+      'linux-native-4-select-before-confirm.png','linux-native-4-select-after-location.png','linux-native-4-select.png']),
+    ['linux-native-4-select-before-confirm.png', 'linux-native-4-select.png']);
     const launcher = {pid: 100, ppid: 90, pgid: 100, start: '200', uid: 42, exe: '/bin/sh', args: ['sh', '/usr/bin/google-chrome']};
     const browser = {pid: 101, ppid: 100, pgid: 100, start: '201', uid: 42, exe: '/opt/google/chrome/chrome', args: ['chrome', '--user-data-dir=/tmp/owned']};
     const bind = (p = browser, l = launcher, env = 'DISPLAY=:7\0', profile = '/tmp/owned') => bindLinuxBrowser(l, p, profile, ':7', env, 42, ['--user-data-dir=/tmp/owned']);
