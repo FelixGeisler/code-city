@@ -153,7 +153,7 @@ class ScopedX11:
     def verify(self, w, pid):
         xvfb, chrome = self.server()
         top = self.windows()
-        browser_windows = [window for window in top if self.window_pids(window) == [chrome['pid']]]
+        browser_windows = [window for window in top if self.window_pids(window, enumeration=True) == [chrome['pid']]]
         require(browser_windows, 'No exact CDP Chrome top-level window on owned Xvfb')
         require(w in top and self.window_pids(w) == [pid] and self.owned(pid),
                 'Target is not an owned top-level window on owned Xvfb')
@@ -261,6 +261,65 @@ def key_symbol(name, lookup):
     return ord(name) if len(name) == 1 else lookup(name.encode())
 
 
+class X11RequestError(RuntimeError):
+    """A failed request must remain fatal even in optional image diagnostics."""
+
+
+def flush(display, discard):
+    x_sync(display, discard)
+    if x_errors:
+        evidence['xErrors'] = list(x_errors)
+        x_errors.clear()
+        raise X11RequestError('Owned X11 request failed: ' + json.dumps(evidence['xErrors']))
+
+
+def checked_property_request(w, name, enumeration, targets, request, sync, collect,
+                             errors, root_children, evidence):
+    """Retirement is a terminal negative enumeration result, never ownership proof.
+
+    Fence old errors before this request and collect its errors synchronously so
+    a closed GTK completion popup cannot poison the next key flush. Only an
+    unknown top-level PID candidate may retire, after one fresh root query proves
+    absence (a live/reused ID fails). No retry, grab, target or focus exemption.
+    """
+    sync()  # Old/other queued errors must fail outside this request's exception.
+    status = request()
+    collect()
+    observed = list(errors)
+    if status == 0 and not observed:
+        return True
+    # libX11 GetProp.c returns generic 1 on failed _XReply, including BadWindow.
+    # That status alone is NOT proof: require the exact handler error as well.
+    eligible = (enumeration and name == '_NET_WM_PID'
+                and not any(window == w for window, _pid in targets)
+                and status in (0, 1, 3)
+                and observed == [{'code': 3, 'request': 20, 'resource': w}])
+    if eligible:
+        present = root_children()  # Proof only: do not rerun enumeration/work.
+        collect()  # Root-query errors must also remain fatal.
+        if w not in present and errors == observed:
+            errors.clear()  # Consume ONLY the exact error whose absence was proved.
+            evidence.setdefault('retiredUnknownCandidates', []).append(w)
+            return False
+    if errors:
+        evidence['xErrors'] = list(errors)
+    raise X11RequestError('Owned X11 property request failed: ' + json.dumps(
+        {'window': w, 'property': name, 'status': status, 'errors': list(errors)}))
+
+
+def scoped_diagnostic(image, sync, evidence):
+    try:
+        image()
+    except X11RequestError:
+        raise
+    except Exception as error:
+        evidence['diagnosticError'] = str(error)
+    finally:
+        # Optional image failures may be reported, never pending X11 errors.
+        # Also fail after the final diagnostic when there is no next key flush.
+        sync()
+
+
 def typing_modifiers(char):
     return 1 if char.isupper() or char == '_' else 0
 
@@ -324,6 +383,112 @@ if sys.argv[1:] == ['--self-test']:
             return
         raise RuntimeError('Ownership guard accepted invalid identity')
 
+    # Exercise the production request boundary, including delayed Xlib delivery.
+    # These are synthetic callbacks, not X11/GUI qualification.
+    bad_candidate = {'code': 3, 'request': 20, 'resource': 599}
+
+    def property_case(status=3, name='_NET_WM_PID', enumeration=True, targets=None,
+                      reported=None, present=(), prior=(), proof_errors=(), proof_fails=False):
+        pending, trace, proof = list(prior), [], {}
+        deliveries = [list([bad_candidate] if reported is None else reported), list(proof_errors)]
+
+        def sync():
+            trace.append('sync')
+            require(not pending, 'Prior queued X11 error')
+
+        def request():
+            trace.append('request')
+            return status
+
+        def collect():
+            trace.append('collect')
+            pending.extend(deliveries.pop(0))
+
+        def root_children():
+            trace.append('root-proof')
+            require(not proof_fails, 'Root query failed')
+            return list(present)
+
+        def run():
+            return checked_property_request(599, name, enumeration, targets or {}, request,
+                                            sync, collect, pending, root_children, proof)
+        return run, pending, trace, proof, sync
+
+    for status in (0, 1, 3):  # libX11's generic _XReply failure still needs full proof.
+        run, pending, trace, proof, sync = property_case(status=status)
+        require(run() is False and not pending and proof == {'retiredUnknownCandidates': [599]},
+                'Exact absent unknown PID candidate must retire, never qualify')
+        require(trace == ['sync', 'request', 'collect', 'root-proof', 'collect'],
+                'Retirement needs synchronous request errors and one fresh absence proof, no retry')
+        sync()  # The consumed error must not leak into the next key's flush.
+    run, pending, trace, proof, sync = property_case(status=0, reported=[])
+    require(run() is True and trace == ['sync', 'request', 'collect'] and not proof,
+            'Successful property read changed or performed unnecessary presence work')
+    for change in [
+            {'enumeration': False}, {'name': 'WM_NAME'}, {'name': 'WM_TRANSIENT_FOR'},
+            {'targets': {(599, 102): {}}}, {'targets': {(599, 999): {}}},
+            {'present': [501, 599]},  # extant/reused XID, regardless of PID
+            {'status': 2}, {'status': 9}, {'status': 1, 'reported': []}, {'status': 3, 'reported': []},
+            {'status': 1, 'reported': [{**bad_candidate, 'code': 2}]},
+            {'reported': [{**bad_candidate, 'code': 2}]},
+            {'reported': [{**bad_candidate, 'request': 3}]},
+            {'reported': [{**bad_candidate, 'resource': 598}]},
+            {'reported': [bad_candidate, bad_candidate]},
+            {'reported': [bad_candidate, {'code': 99, 'request': 20, 'resource': 599}]},
+            {'proof_errors': [{'code': 3, 'request': 15, 'resource': 1}]},
+            {'proof_fails': True}, {'prior': [bad_candidate]}]:
+        run, pending, trace, proof, sync = property_case(**change)
+        refuses(run)
+        require('retiredUnknownCandidates' not in proof, 'Invalid property error was waived')
+        require(trace.count('request') <= 1 and trace.count('root-proof') <= 1,
+                'Property failure retried enumeration or presence proof')
+        if change.get('prior'):
+            require(trace == ['sync'], 'Prior queued error was attributed to candidate request')
+        elif not change.get('reported') == []:
+            require(pending, 'Fatal property error was consumed')
+    # Optional diagnostics must not swallow a failed property status or leave
+    # queued X errors to be ignored after the final image (no next key).
+    for change in [{'status': 3, 'reported': []}, {'present': [599]}]:
+        run, pending, trace, proof, sync = property_case(**change)
+        refuses(lambda: scoped_diagnostic(run, sync, proof))
+        require('diagnosticError' not in proof, 'Fatal property request treated as optional image failure')
+    for queued in (False, True):
+        proof = {}
+        def failed_image():
+            raise RuntimeError('Optional PNG unavailable')
+        def image_sync():
+            require(not queued, 'Queued X11 error after final diagnostic')
+        if queued:
+            refuses(lambda: scoped_diagnostic(failed_image, image_sync, proof))
+        else:
+            scoped_diagnostic(failed_image, image_sync, proof)
+            require(proof == {'diagnosticError': 'Optional PNG unavailable'}, 'Optional image error became fatal')
+    # Use production flush itself: it clears the queue before raising. An image
+    # wrapper that catches that fatal exception would see an empty final flush.
+    for deferred in (False, True):
+        for during_property in (False, True):
+            evidence = {}
+            unexpected = {'code': 2, 'request': 20, 'resource': 599}
+            x_errors = [] if deferred else [unexpected]
+            delivery = [unexpected] if deferred else []
+            def x_sync(_display, _discard):
+                x_errors.extend(delivery)
+                delivery.clear()
+            def fatal_image():
+                if during_property:
+                    checked_property_request(599, '_NET_WM_PID', True, {},
+                                             lambda: require(False, 'Request after prior X error'),
+                                             lambda: flush(None, 0), lambda: x_sync(None, 0),
+                                             x_errors, lambda: [], evidence)
+                else:
+                    flush(None, 0)
+            refuses(lambda: scoped_diagnostic(fatal_image, lambda: flush(None, 0), evidence))
+            require(not x_errors and evidence == {'xErrors': [unexpected]},
+                    'Cleared fatal X11 error became an optional diagnostic failure')
+    # An unrelated proven target does not prevent retirement of this unknown ID.
+    run, pending, trace, proof, sync = property_case(targets={(502, 102): {}})
+    require(run() is False and not pending, 'Unrelated managed target blocked negative enumeration')
+
     check()
     check(c={**chrome, 'args': [b'chrome', b'--user-data-dir', b'/tmp/owned']})
     check(l={**linux, 'launcher': {**launcher, 'pid': 101, 'pgid': 101, 'start': '201'}, 'chromePgid': 101},
@@ -359,7 +524,7 @@ if sys.argv[1:] == ['--self-test']:
         evidence.clear()
         sent.clear()
         return ScopedX11(a, lambda: check(c=state['chrome'], x=state['xvfb'], env=state['env']),
-                         lambda: state['peer'], lambda: state['top'], lambda w: state['pids'].get(w),
+                         lambda: state['peer'], lambda: state['top'], lambda w, enumeration=False: state['pids'].get(w),
                          lambda pid: state['chrome'] if pid == 101 else state['target'],
                          lambda pid: state['owned'] and pid in (101, 102), evidence)
 
@@ -589,7 +754,7 @@ if sys.argv[1:] == ['--self-test']:
     for change in [{'uid': 43}, {'pgid': 90}, {'start': '202'}]:
         refuses(lambda change=change: check_flat(l={**flat_linux, 'launcher': {**launcher, **change}}))
     refuses(lambda: check_flat(env=b'DISPLAY=:70\0'))
-    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, DISPLAY contradiction/source guards and DISPLAY-only evidence; empty metadata defers to exact connected-Xvfb/CDP top-level window proof; focus/key action boundary and identity rechecks; raw/empty argv preservation, ASCII/named keysyms and Shift masks; viewable map states, segmented XTEST grab/verification/initial-empty ordering, atomic primary pair, reverse modifier cleanup, press/release/sync failures, between-segment/paired-release lost-proof refusal, exact/descendant focus refusals and chooser-before-Allow guard; no X11/native runtime'}))
+    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, full flattened argv/spoof refusals, DISPLAY contradiction/source guards and DISPLAY-only evidence; empty metadata defers to exact connected-Xvfb/CDP top-level window proof; focus/key action boundary and identity rechecks; raw/empty argv preservation, ASCII/named keysyms and Shift masks; viewable map states, segmented XTEST grab/verification/initial-empty ordering, atomic primary pair, reverse modifier cleanup, press/release/sync failures, between-segment/paired-release lost-proof refusal, exact/descendant focus refusals and chooser-before-Allow guard; synchronous PID-enumeration unknown-candidate retirement with fresh absence proof, queued-error isolation, known-target/live-or-reused-XID/other-property/status/code/request/resource/mixed-error/root-proof refusals; optional-image boundary preserves fatal property/queued errors, including after the final diagnostic; no X11/native runtime'}))
     sys.exit(0)
 
 
@@ -677,12 +842,6 @@ def record_x_error(_display, event):
 bind('XSetErrorHandler', C.c_void_p, [XErrorHandler])(record_x_error)
 
 
-def flush(display, discard):
-    x_sync(display, discard)
-    if x_errors:
-        evidence['xErrors'] = list(x_errors)
-        x_errors.clear()
-        raise RuntimeError('Owned X11 request failed: ' + json.dumps(evidence['xErrors']))
 set_focus = bind('XSetInputFocus', C.c_int, [Display, Window, C.c_int, C.c_ulong])
 get_focus = bind('XGetInputFocus', C.c_int, [Display, C.POINTER(Window), C.POINTER(C.c_int)])
 keysym = bind('XStringToKeysym', C.c_ulong, [C.c_char_p])
@@ -705,13 +864,18 @@ root = root_window(d)
 actions = evidence['actions']
 
 
-def property_value(w, name):
+def property_value(w, name, enumeration=False):
     actual, fmt, count, after = C.c_ulong(), C.c_int(), C.c_ulong(), C.c_ulong()
     data = C.POINTER(C.c_ubyte)()
-    status = get_property(d, w, atom(d, name.encode(), 0), 0, 1024, 0, 0,
-                          C.byref(actual), C.byref(fmt), C.byref(count), C.byref(after), C.byref(data))
-    require(status == 0, 'X11 property read failed')
+    property_atom = atom(d, name.encode(), 0)
     try:
+        if not checked_property_request(
+                w, name, enumeration, scope.targets,
+                lambda: get_property(d, w, property_atom, 0, 1024, 0, 0,
+                                     C.byref(actual), C.byref(fmt), C.byref(count), C.byref(after), C.byref(data)),
+                lambda: flush(d, 0), lambda: x_sync(d, 0), x_errors,
+                lambda: children(root), evidence):
+            return None
         if not data or not count.value:
             return None
         if fmt.value == 32:
@@ -762,7 +926,7 @@ def owned_windows():
     scope.server()
     found = []
     for w in children(root):
-        pids = property_value(w, '_NET_WM_PID')
+        pids = property_value(w, '_NET_WM_PID', enumeration=True)
         if not pids or len(pids) != 1 or not owned(pids[0]):
             continue
         # Include premapped/hidden windows in diagnostics/closure checks, but
@@ -791,7 +955,8 @@ def connected_server():
 
 
 scope = ScopedX11(a, lambda: verify_processes(a, owner, evidence=evidence), connected_server,
-                  lambda: children(root), lambda w: property_value(w, '_NET_WM_PID'), proc, owned, evidence)
+                  lambda: children(root), lambda w, enumeration=False: property_value(w, '_NET_WM_PID', enumeration),
+                  proc, owned, evidence)
 
 
 def require_focus(w, pid):
@@ -877,10 +1042,7 @@ def diagnostic_png(suffix=''):
 
 
 def diagnose(suffix=''):
-    try:
-        diagnostic_png(suffix)
-    except Exception as error:
-        evidence['diagnosticError'] = str(error)
+    scoped_diagnostic(lambda: diagnostic_png(suffix), lambda: flush(d, 0), evidence)
 
 
 try:
