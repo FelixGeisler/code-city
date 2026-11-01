@@ -18,13 +18,13 @@ in xref:saved-investigations.adoc[Saved Investigations].
 Accept one anonymously accessible public GitHub repository root URL or explicit
 `/tree/<branch-suffix>` branch link or `/releases/tag/<tag-suffix>` release link.
 The initial acceptance repository is
-`https://github.com/FelixGeisler/code-city`. Private repositories, uploads,
-archives, local folders, other providers, tag-management/history browsing,
+`https://github.com/FelixGeisler/code-city`. Authenticated remote repository acquisition, uploads,
+archives, other providers, tag-management/history browsing,
 commit links, and generic
 arbitrary refs are excluded from the delivered input contract.
-The separately planned xref:local-working-tree.adoc[local working-tree slice]
-adds user-approved future scope; it is not implemented and does not silently
-change these GitHub acquisition or immutable-revision rules.
+xref:local-working-tree.adoc[Local Working-Tree Analysis] separately defines
+read-only local-directory input and content identity. Local input does not
+reinterpret these GitHub acquisition or immutable-revision rules.
 
 [[CC-CORE-SRC-02]]
 === Explicit immutable-revision analysis
@@ -38,8 +38,8 @@ starts analysis. Later runs do not alter earlier results.
 [[CC-CORE-SRC-03]]
 === Browser-owned acquisition and analysis
 
-A dedicated browser worker acquires and analyzes the complete selected-commit
-dataset. The browser owns unsaved sources, results, presentation, and
+A dedicated browser worker acquires and analyzes the selected GitHub commit or
+the explicitly captured local working-tree dataset. The browser owns unsaved sources, results, presentation, and
 investigation. The server receives data only on explicit Save, not on
 Analyze or while a tab remains idle. Ownership is fixed by
 xref:architecture:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015].

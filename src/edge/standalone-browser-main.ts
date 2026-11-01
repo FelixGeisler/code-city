@@ -1,3 +1,4 @@
+import { validWorkingTreeName } from "../application/investigation-origin";
 import {
   createStandaloneBrowserController,
   type BrowserFailedFile,
@@ -16,6 +17,15 @@ function requiredElement<T extends Element>(selector: string): T {
 
 const form = requiredElement<HTMLFormElement>("form");
 const repository = requiredElement<HTMLInputElement>("input[name=repository]");
+const inputKind = requiredElement<HTMLSelectElement>("select[name=input-kind]");
+const localSetup = requiredElement<HTMLElement>("[data-local-setup]");
+const githubSetup = requiredElement<HTMLElement>("[data-github-setup]");
+const chooseFolder = requiredElement<HTMLButtonElement>("[data-choose-folder]");
+const folderName = requiredElement<HTMLElement>("[data-folder-name]");
+const folderStatus = requiredElement<HTMLElement>("[data-folder-status]");
+const originLabel = requiredElement<HTMLElement>("[data-origin-label]");
+let selectedFolder: { root: unknown; name: string } | undefined;
+let folderPickerEpoch = 0;
 const exclusions = requiredElement<HTMLTextAreaElement>("textarea[name=additional-exclusions]");
 const feedback = requiredElement<HTMLElement>("[data-feedback]");
 const status = requiredElement<HTMLElement>("[data-status]");
@@ -49,7 +59,7 @@ function showAttempt(working: boolean): void {
   investigation.hidden = false;
   investigationControls.hidden = working;
   changeRepository.disabled = working;
-  changeRepository.textContent = "Change repository";
+  changeRepository.textContent = "Change source";
   changeRepository.setAttribute("aria-expanded", "false");
   repositoryName.textContent = capturedRepositoryUrl;
 }
@@ -149,7 +159,7 @@ const view: StandaloneBrowserView = Object.freeze({
     form.hidden = false;
     investigation.hidden = true;
     repositoryName.textContent = "";
-    changeRepository.textContent = "Change repository";
+    changeRepository.textContent = "Change source";
     changeRepository.setAttribute("aria-expanded", "false");
     feedback.textContent = "";
     workingProgressLabel = undefined;
@@ -176,6 +186,11 @@ const view: StandaloneBrowserView = Object.freeze({
   lost() {
     showAttempt(false);
     replaceStatus("Provider/resolution failure");
+  },
+  origin(value) {
+    capturedRepositoryUrl = value.kind === "working-tree" ? value.name : value.repositoryUrl;
+    repositoryName.textContent = capturedRepositoryUrl;
+    originLabel.textContent = value.kind === "working-tree" ? "Working-tree capture" : "Commit";
   },
   revision(value) {
     commit.textContent = value;
@@ -232,29 +247,64 @@ function showSaved(record: SavedRecord): void {
   saveStatus.replaceChildren(time, link);
   history.replaceState(null, "", `/saved/${record.id}`);
 }
-const controller = createStandaloneBrowserController(createBrowserWorkerTransport(undefined, (url, record, savedExclusions) => {
-  capturedRepositoryUrl = url;
-  repository.value = url;
-  exclusions.value = savedExclusions.join("\n");  repositoryName.textContent = url;
+const controller = createStandaloneBrowserController(createBrowserWorkerTransport(undefined, (origin, record, savedExclusions) => {
+  view.origin?.(origin);
+  inputKind.value = origin.kind;
+  // Reopening a capture never reopens a filesystem capability.
+  selectedFolder = undefined;
+  folderName.textContent = "No folder selected";
+  repository.value = origin.kind === "github" ? origin.repositoryUrl : "";
+  localSetup.hidden = origin.kind !== "working-tree"; githubSetup.hidden = origin.kind !== "github";
+  exclusions.value = savedExclusions.join("\n");
   showSaved(record);
 }), view);
 const secureAnalysis = window.isSecureContext && globalThis.crypto?.subtle !== undefined;
 function submitAnalysis(repositoryUrl: string, additionalExclusions: string): void {
   if (!secureAnalysis) { replaceStatus("Browser analysis requires HTTPS or localhost."); return; }
   history.replaceState(null, "", "/");
-  capturedRepositoryUrl = repositoryUrl;
+  capturedRepositoryUrl = repositoryUrl; originLabel.textContent = "Commit";
   controller.submit(repositoryUrl, additionalExclusions);
 }
+inputKind.addEventListener("change", () => {
+  folderPickerEpoch++;
+  localSetup.hidden = inputKind.value !== "working-tree";
+  githubSetup.hidden = inputKind.value !== "github";
+});
+const directoryPicker = (window as Window & { showDirectoryPicker?: (options: { mode: "read" }) => Promise<{ name: string }> }).showDirectoryPicker;
+chooseFolder.addEventListener("click", () => {
+  if (!secureAnalysis || !directoryPicker) { folderStatus.textContent = "Read-only folder selection requires secure desktop Chromium. Public GitHub remains available."; return; }
+  const epoch = ++folderPickerEpoch;
+  // No file access or analysis on the UI thread: pass the native handle only on Analyze.
+  void directoryPicker.call(window, { mode: "read" }).then(root => {
+    if (epoch !== folderPickerEpoch) return;
+    if (!validWorkingTreeName(root.name)) { folderStatus.textContent = "Folder name is not supported."; return; }
+    selectedFolder = { root, name: root.name };
+    folderName.textContent = root.name;
+    folderStatus.textContent = "Folder selected. Choose Analyze to capture its current files; nothing has been uploaded.";
+  }, error => {
+    if (epoch !== folderPickerEpoch) return;
+    folderStatus.textContent = error instanceof DOMException && error.name === "AbortError"
+      ? "Folder selection cancelled. The current investigation is unchanged."
+      : "Folder access denied or unavailable. The current investigation is unchanged.";
+  });
+});
+if (!secureAnalysis || !directoryPicker) folderStatus.textContent = "Read-only folder selection requires secure desktop Chromium. Public GitHub remains available.";
 form.addEventListener("submit", (event) => {
   event.preventDefault();
-  submitAnalysis(repository.value, exclusions.value);
+  if (inputKind.value === "github") { submitAnalysis(repository.value, exclusions.value); return; }
+  if (!secureAnalysis || !directoryPicker) { folderStatus.textContent = "Read-only folder selection requires secure desktop Chromium."; return; }
+  if (!selectedFolder) { folderStatus.textContent = "Choose a folder before Analyze."; return; }
+  folderPickerEpoch++;
+  history.replaceState(null, "", "/");
+  capturedRepositoryUrl = selectedFolder.name; originLabel.textContent = "Working-tree capture";
+  controller.submitWorkingTree(selectedFolder.root, selectedFolder.name, exclusions.value);
 });
 changeRepository.addEventListener("click", () => {
   if (!hasAttempt || isWorking) return;
   form.hidden = !form.hidden;
-  changeRepository.textContent = form.hidden ? "Change repository" : "Close setup";
+  changeRepository.textContent = form.hidden ? "Change source" : "Close setup";
   changeRepository.setAttribute("aria-expanded", String(!form.hidden));
-  if (!form.hidden) repository.focus();
+  if (!form.hidden) (inputKind.value === "github" ? repository : chooseFolder).focus();
 });
 saveButton.addEventListener("click", () => {
   if (savedRecord) {
@@ -271,6 +321,7 @@ saveButton.addEventListener("click", () => {
 function openSaved(id: string): void {
   if (!secureAnalysis || !validSavedId(id)) { replaceStatus("Saved investigation unavailable"); return; }
   capturedRepositoryUrl = "Opening saved investigation";
+  originLabel.textContent = "Saved identity";
   history.replaceState(null, "", `/saved/${id}`);
   controller.openSaved(id);
 }
@@ -281,15 +332,21 @@ requiredElement<HTMLButtonElement>("[data-open-saved]").addEventListener("click"
     if (epoch !== pickerEpoch || !savedPicker.open) return;
     savedMessage.textContent = records.length ? "" : "No saved investigations yet.";
     const groups = new Map<string, SavedRecord[]>();
-    for (const record of records) { const key = record.repository.toLowerCase(); const group = groups.get(key) ?? []; group.push(record); groups.set(key, group); }
-    for (const [name, records] of [...groups].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+    for (const record of records) {
+      const kind = record.kind ?? "github";
+      const key = `${kind}:${kind === "github" ? record.repository.toLowerCase() : record.repository}`;
+      const group = groups.get(key) ?? []; group.push(record); groups.set(key, group);
+    }
+    for (const [, records] of [...groups].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+      const name = records[0]!.repository;
+      const local = records[0]!.kind === "working-tree";
       const group = document.createElement("details"); group.name = "saved-project"; group.open = groups.size === 1;
       const summary = document.createElement("summary"); const identity = document.createElement("bdi"); identity.dir = "auto"; identity.textContent = name;
-      summary.append(identity, ` (${records.length})`); group.append(summary);
+      summary.append(identity, ` · ${local ? "Working tree" : "GitHub"} (${records.length})`); group.append(summary);
       const list = document.createElement("ul");
       for (const record of records) {
         const row = document.createElement("li"), button = document.createElement("button"); button.type = "button";
-        const label = document.createElement("bdi"); label.dir = "auto"; label.textContent = `${record.ref} · ${record.revision.slice(0, 12)} · ${record.savedAt}`;
+        const label = document.createElement("bdi"); label.dir = "auto"; label.textContent = `${local ? "Working-tree capture" : record.ref} · ${record.revision.slice(0, 12)} · ${record.savedAt}`;
         button.append(label); button.addEventListener("click", () => { savedPicker.close(); openSaved(record.id); }); row.append(button); list.append(row);
       }
       group.append(list); savedProjects.append(group);
@@ -299,6 +356,7 @@ requiredElement<HTMLButtonElement>("[data-open-saved]").addEventListener("click"
 requiredElement<HTMLButtonElement>("[data-close-saved]").addEventListener("click", () => savedPicker.close());
 savedPicker.addEventListener("close", () => { pickerEpoch++; savedProjects.replaceChildren(); });
 window.addEventListener("pagehide", () => {
+  folderPickerEpoch++; selectedFolder = undefined;
   controller.dispose();
   presentation.dispose();
 }, { once: true });

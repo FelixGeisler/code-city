@@ -11,11 +11,14 @@ registerHooks({
 
 const {
   createStandaloneBrowserController,
+  createFetchSessionTransport,
   nextBrowserGeneration,
   parseBrowserSessionEvent,
 } = await import("../src/edge/standalone-browser-controller.ts");
 const { buildCity } = await import("../src/domain/city-model.ts");
 const { validateCityPayload } = await import("../src/application/city-payload.ts");
+const { acquireLocalWorkingTree } = await import("../src/application/local-source.ts");
+const { createLocalFolderGateway } = await import("../src/edge/local-folder-gateway.ts");
 
 const SESSION = "A".repeat(43);
 const SECOND_SESSION = "B".repeat(43);
@@ -94,6 +97,7 @@ function fakeView() {
     invalid() { working = false; calls.push(["invalid"]); },
     capacity() { working = false; calls.push(["capacity"]); },
     lost() { working = false; calls.push(["lost"]); },
+    origin(value) { calls.push(["origin", value]); },
     revision(value) { calls.push(["revision", value]); },
     failed(category, code, revision) { working = false; calls.push(["failed", category, code, revision]); },
     cancelled() { working = false; calls.push(["cancelled"]); },
@@ -475,6 +479,173 @@ test("generation advancement fails closed at the positive safe-integer boundary"
   assert.equal(nextBrowserGeneration(0), 1);
   assert.equal(nextBrowserGeneration(Number.MAX_SAFE_INTEGER - 1), Number.MAX_SAFE_INTEGER);
   assert.equal(nextBrowserGeneration(Number.MAX_SAFE_INTEGER), undefined);
+});
+
+const CAPTURE = "c".repeat(64);
+const LOCAL_ORIGIN = { kind: "working-tree", name: "Synthetic folder", captureId: CAPTURE };
+const localEvent = (type, detail = {}, generation = 1) => ({ type, sessionId: SESSION, generation, ...detail });
+
+async function localFixture() {
+  const transport = fakeTransport(), view = fakeView();
+  const controller = createStandaloneBrowserController(transport, view);
+  controller.start();
+  const owner = transport.owners[0]; owner.readyControl.resolve({ kind: "opened", sessionId: SESSION });
+  // An opaque capability must not be serialized or read while submitting.
+  const root = { toJSON() { throw new Error("Do not serialize a folder"); } };
+  controller.submitWorkingTree(root, LOCAL_ORIGIN.name, "excluded"); await flush();
+  return { transport, view, controller, owner, root };
+}
+
+test("working-tree protocol frames are strict, source-free and do not invent a revision before capture", () => {
+  const valid = [localEvent("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name }),
+    localEvent("WORKING_TREE_PROGRESS", { completed: 0, total: 4000 }),
+    localEvent("WORKING_TREE_CAPTURED", { origin: LOCAL_ORIGIN }),
+    localEvent("WORKING_TREE_FAILED", { category: "Local working tree unavailable" }),
+    localEvent("WORKING_TREE_FAILED", { category: "No supported modules", code: "ADM-06" })];
+  for (const event of valid) {
+    assert.deepEqual(parseBrowserSessionEvent(event), event);
+    assert.equal(parseBrowserSessionEvent({ ...event, source: "private" }), undefined);
+    assert.equal(parseBrowserSessionEvent({ ...event, revision: REVISION }), undefined);
+  }
+  for (const event of [localEvent("WORKING_TREE_STARTED", { name: "C:\\private" }),
+    localEvent("WORKING_TREE_PROGRESS", { completed: 0, total: 0 }),
+    localEvent("WORKING_TREE_PROGRESS", { completed: 0, total: 4001 }),
+    localEvent("WORKING_TREE_PROGRESS", { completed: 2, total: 1 }),
+    localEvent("WORKING_TREE_CAPTURED", { origin: { ...LOCAL_ORIGIN, captureId: REVISION } }),
+    localEvent("WORKING_TREE_CAPTURED", { origin: { kind: "github", repositoryUrl: "https://github.com/a/b", revision: REVISION } }),
+    localEvent("WORKING_TREE_FAILED", { category: "raw private path" }),
+    localEvent("WORKING_TREE_FAILED", { category: "No supported modules" }),
+    localEvent("WORKING_TREE_FAILED", { category: "Local working tree unavailable", code: "ADM-06" })]) assert.equal(parseBrowserSessionEvent(event), undefined);
+});
+
+test("local acquisition progresses before identity; inspection/publication uses the actual capture ID", async () => {
+  const { view, controller, owner, root } = await localFixture();
+  assert.deepEqual(owner.analyzeCalls[0].command, { sessionId: SESSION, generation: 1, inputKind: "working-tree", root, name: LOCAL_ORIGIN.name, additionalExclusions: "excluded" });
+  owner.observer.event(localEvent("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name }));
+  owner.observer.event(localEvent("WORKING_TREE_PROGRESS", { completed: 0, total: 2 }));
+  owner.observer.event(localEvent("WORKING_TREE_PROGRESS", { completed: 1, total: 2 }));
+  assert.equal(view.calls.some(([name]) => name === "revision"), false);
+  owner.observer.event(localEvent("WORKING_TREE_PROGRESS", { completed: 2, total: 2 }));
+  owner.observer.event(localEvent("WORKING_TREE_CAPTURED", { origin: LOCAL_ORIGIN }));
+  owner.observer.event(localEvent("ANALYSIS_PROGRESS", { revision: CAPTURE, stage: "analysis-initialization" }));
+  owner.observer.event(localEvent("ANALYSIS_PROGRESS", { revision: CAPTURE, stage: "analysis", completed: 0, total: 2 }));
+  owner.observer.event(localEvent("ANALYSIS_PROGRESS", { revision: CAPTURE, stage: "analysis", completed: 1, total: 2 }));
+  owner.observer.event(localEvent("ANALYSIS_PROGRESS", { revision: CAPTURE, stage: "analysis", completed: 2, total: 2 }));
+  owner.observer.event(localEvent("ANALYSIS_PROGRESS", { revision: CAPTURE, stage: "city-construction" }));
+  owner.observer.event(parseBrowserSessionEvent({ ...successEvent(1), city: plainCity(), revision: CAPTURE }));
+  assert.deepEqual(view.calls.at(-1), ["succeeded", 1, 1, 0, CAPTURE]);
+  assert(view.calls.some(([name, origin]) => name === "origin" && origin === LOCAL_ORIGIN));
+  const counts = view.calls.filter(([name,, completed]) => name === "progress" && completed !== undefined).map((row) => row[2]);
+  assert.deepEqual(counts, [0, 1, 2, 2, 2, 3, 4, 5, 5]);
+  owner.analyzeCalls[0].result.resolve(202); await flush();
+  assert.deepEqual(view.calls.at(-1), ["succeeded", 1, 1, 0, CAPTURE]);
+  controller.dispose();
+});
+
+test("pure local capture progress crosses the strict protocol without synthetic counts or identity", async () => {
+  const f = await localFixture();
+  const send = (type, detail) => {
+    const event = parseBrowserSessionEvent(localEvent(type, detail));
+    assert(event, `Rejected ${type}`);
+    f.owner.observer.event(event);
+  };
+  try {
+    send("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name });
+    const result = await acquireLocalWorkingTree(LOCAL_ORIGIN.name, [], new AbortController().signal, {
+      async loadInventory() {
+        return { kind: "inventory", candidates: ["b.ts", "a.ts"].map(path => ({
+          rawPath: path, canonicalPath: path,
+          async readRawSource() { return { kind: "source", rawBytes: new TextEncoder().encode("const x = 1;\n") }; },
+        })) };
+      },
+    }, (completed, total) => send("WORKING_TREE_PROGRESS", { completed, total }));
+    assert.equal(result.kind, "success");
+    send("WORKING_TREE_CAPTURED", { origin: result.origin });
+    assert.deepEqual(f.view.calls.filter(([name, label]) => name === "progress" && label.startsWith("Acquiring")), [
+      ["progress", "Acquiring files 0 of 2", 0, 7],
+      ["progress", "Acquiring files 1 of 2", 1, 7],
+      ["progress", "Acquiring files 2 of 2", 2, 7],
+    ]);
+    assert.deepEqual(f.view.calls.filter(([name]) => name === "revision"), [["revision", result.origin.captureId]]);
+    assert.equal(f.owner.closed, false);
+  } finally { f.controller.dispose(); }
+});
+
+test("zero eligible candidates fail with the actual admission code and no counted progress", async () => {
+  const directory = (name, entries) => ({ kind: "directory", name, async *values() { yield* entries; } });
+  for (const [root, code] of [[directory("root", []), "ADM-06"], [directory("root", [directory("empty.ts", [])]), "ADM-07"]]) {
+    const f = await localFixture();
+    try {
+      f.owner.observer.event(parseBrowserSessionEvent(localEvent("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name })));
+      const progress = [];
+      const result = await acquireLocalWorkingTree(LOCAL_ORIGIN.name, [], new AbortController().signal,
+        createLocalFolderGateway(root), (completed, total) => progress.push([completed, total]));
+      assert.deepEqual(result, { kind: "failure", category: "No supported modules", code });
+      assert.deepEqual(progress, []);
+      f.owner.observer.event(parseBrowserSessionEvent(localEvent("WORKING_TREE_FAILED", { category: result.category, code: result.code })));
+      assert.deepEqual(f.view.calls.at(-1), ["failed", "No supported modules", code, undefined]);
+      assert.equal(f.view.calls.some(([name,, completed]) => name === "revision" || (name === "progress" && completed !== undefined)), false);
+      assert.equal(f.owner.closed, false);
+    } finally { f.controller.dispose(); }
+  }
+});
+
+test("local progress rejects wrong phase, identity, repeated/regressing counts and changed budgets", async () => {
+  for (const trigger of [
+    f => f.owner.observer.event(localEvent("WORKING_TREE_PROGRESS", { completed: 0, total: 1 })),
+    f => { f.owner.observer.event(localEvent("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name })); f.owner.observer.event(localEvent("WORKING_TREE_PROGRESS", { completed: 0, total: 0 })); },
+    f => f.owner.observer.event(localEvent("REVISION_SELECTED", { revision: REVISION })),
+    f => { f.owner.observer.event(localEvent("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name })); f.owner.observer.event(localEvent("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name })); },
+    f => f.owner.observer.event(localEvent("WORKING_TREE_STARTED", { name: "Wrong folder" })),
+    ...[{ completed: 1, total: 2 }, { completed: 0, total: 3 }, { completed: 0, total: 2 }].map(detail => f => {
+      f.owner.observer.event(localEvent("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name }));
+      f.owner.observer.event(localEvent("WORKING_TREE_PROGRESS", { completed: 0, total: 2 }));
+      if (detail.completed === 1) f.owner.observer.event(localEvent("WORKING_TREE_PROGRESS", { completed: 1, total: 2 }));
+      f.owner.observer.event(localEvent("WORKING_TREE_PROGRESS", detail));
+    }),
+    f => { f.owner.observer.event(localEvent("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name })); f.owner.observer.event(localEvent("WORKING_TREE_PROGRESS", { completed: 0, total: 2 })); f.owner.observer.event(localEvent("WORKING_TREE_CAPTURED", { origin: LOCAL_ORIGIN })); },
+  ]) {
+    const f = await localFixture(); trigger(f);
+    assert.deepEqual(f.view.calls.at(-1), ["lost"]); assert.equal(f.owner.closed, true); f.controller.dispose();
+  }
+});
+
+test("local failure before capture is explicit and old local frames cannot affect replacement", async () => {
+  const f = await localFixture();
+  f.owner.observer.event(localEvent("WORKING_TREE_STARTED", { name: LOCAL_ORIGIN.name }));
+  f.owner.observer.event(localEvent("WORKING_TREE_FAILED", { category: "No supported modules", code: "ADM-06" }));
+  assert.deepEqual(f.view.calls.at(-1), ["failed", "No supported modules", "ADM-06", undefined]);
+  f.controller.submit("https://github.com/owner/repo", ""); await flush();
+  const length = f.view.calls.length;
+  f.owner.observer.event(localEvent("WORKING_TREE_CAPTURED", { origin: LOCAL_ORIGIN }));
+  assert.equal(f.view.calls.length, length);
+  f.controller.dispose();
+});
+
+test("a saved local origin restores without a root capability or fake repository URL", async () => {
+  const transport = fakeTransport(), view = fakeView();
+  const controller = createStandaloneBrowserController(transport, view);
+  controller.openSaved("S".repeat(43)); const owner = transport.owners[0];
+  owner.readyControl.resolve({ kind: "opened", sessionId: SESSION }); await flush();
+  assert.equal(owner.analyzeCalls[0].command.savedId, "S".repeat(43));
+  assert.equal(Object.hasOwn(owner.analyzeCalls[0].command, "root"), false);
+  owner.observer.event(localEvent("WORKING_TREE_CAPTURED", { origin: LOCAL_ORIGIN }));
+  owner.observer.event(parseBrowserSessionEvent({ ...successEvent(1), city: plainCity(), revision: CAPTURE }));
+  assert.deepEqual(view.calls.at(-1), ["succeeded", 1, 1, 0, CAPTURE]); controller.dispose();
+});
+
+test("native fetch transport rejects folder capabilities before JSON serialization or network dispatch", async () => {
+  const original = globalThis.fetch; let requests = 0;
+  globalThis.fetch = async () => {
+    requests++;
+    return new Response(new ReadableStream({ start(stream) { stream.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "SESSION_OPENED", sessionId: SESSION })}\n`)); } }), { headers: { "Content-Type": "application/x-ndjson; charset=utf-8" } });
+  };
+  const owner = createFetchSessionTransport().open({ event() {}, lost() {} });
+  try {
+    await owner.ready;
+    assert.equal(await owner.analyze({ sessionId: SESSION, generation: 1, inputKind: "working-tree", name: LOCAL_ORIGIN.name, root: { toJSON() { throw new Error("Never serialize"); } }, additionalExclusions: "" }), 422);
+    assert.equal(requests, 1, "only the session opening request is permitted");
+  } finally { owner.close(); globalThis.fetch = original; }
 });
 
 test("the UI thread displays measured progress and delegates analysis without storage, timing, provider, or parser work", async () => {

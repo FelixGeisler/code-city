@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';import test from 'node:test';import{registerHooks}from'node:module';import{createHash}from'node:crypto';
+import assert from 'node:assert/strict';import test from 'node:test';import{registerHooks}from'node:module';
 registerHooks({resolve(specifier,context,nextResolve){return nextResolve(/^\.\.?\//u.test(specifier)&&!/\.[a-z]+$/iu.test(specifier)?specifier+'.ts':specifier,context);}});
 const{createFileInspection:makeInspection,parseInspectionResult,validateInspectionQuery,SOURCE_PAGE_BYTES}=await import('../src/application/unit-inspection.ts');
 const{createSourceColoring}=await import('../src/edge/shiki-source-highlighting.ts');
@@ -11,8 +11,6 @@ const encoder=new TextEncoder(),decoder=new TextDecoder();
 async function analyze(path,source){
  const bytes=encoder.encode(source),capture=createInvestigationCapture();let calls=0;const real=createNodeTreeSitterAdapter();
  const parser={initialize:()=>real.initialize(),project(...args){calls++;return real.project(...args);}};
- const raw=encoder.encode('\ufeff'+source.replaceAll('\n','\r\n'));const blob=createHash('sha1').update(`blob ${raw.length}\0`).update(raw).digest('hex');
- await capture.wrap({async readRawSource(){return{kind:'source',rawBytes:raw};},async loadInventory(){throw Error('unused');}}).readRawSource({},'a'.repeat(40),{canonicalPath:path,rawPath:path,expectedBlobId:blob});
  const result=await analyzeProjectSources({kind:'acquired',selected:'a'.repeat(40),modules:[{canonicalPath:path,normalizedSource:source,normalizedUtf8:bytes}],notAnalyzedFiles:[]},parser,undefined,capture);
  assert.equal(result.kind,'analyzed');assert.equal(result.result.notAnalyzedFiles.length,0);
  return{capture,result:result.result,read:createFileInspection(path,bytes,capture.inspection(path)),calls:()=>calls,source};
@@ -41,15 +39,15 @@ test('JSX, TSX and C# callable evidence survives parser release',async()=>{
   assert.equal((await f.read({type:'contributions',path,unit:unit.id,offset:0,cursor:null})).rows.length,1);assert.equal(f.calls(),1);
  }
 });
-test('a version-2 saved snapshot restores identical unit/source/contribution views without analysis',async()=>{
- const f=await analyze('nested.js',nested);const blob=await f.capture.snapshot('https://github.com/fixture/repository','a'.repeat(40),[],f.result,'f'.repeat(64));const restored=await decodeSnapshot(new Uint8Array(await blob.arrayBuffer()));
- const file=restored.header.files[0];const read=createFileInspection(file.path,restored.sourceBytes[1],{units:{length:file.units.length,at(index){const row=file.units[index];return{kind:row[0],startByte:row[1],endByte:row[2],complexity:row[4]};}},contributionCount:file.contributions.length,contributions:()=>file.contributions});
+test('a version-3 source-once snapshot restores identical unit/source/contribution views without analysis',async()=>{
+ const f=await analyze('nested.js',nested);const blob=await f.capture.snapshot({kind:'github',repositoryUrl:'https://github.com/fixture/repository',revision:'a'.repeat(40)},[],f.result,'f'.repeat(64));const restored=await decodeSnapshot(new Uint8Array(await blob.arrayBuffer()));
+ const file=restored.header.files[0];const read=createFileInspection(file.path,restored.sourceBytes[0],{units:{length:file.units.length,at(index){const row=file.units[index];return{kind:row[0],startByte:row[1],endByte:row[2],complexity:row[4]};}},contributionCount:file.contributions.length,contributions:()=>file.contributions});
  for(const query of [{type:'units',path:file.path,offset:0},{type:'source',path:file.path,unit:1,cursor:null},{type:'contributions',path:file.path,unit:1,offset:0,cursor:null},{type:'contributions',path:file.path,unit:1,offset:0,cursor:(await read({type:'source',path:file.path,unit:1,cursor:null})).cursor}])assert.deepEqual(await read(query),await f.read(query));assert.equal(f.calls(),1);
 });
 test('Save capture budget exhaustion does not remove unit inspection evidence',async()=>{
  const f=await analyze('nested.js',nested);f.capture.contribution('unpublished.js',0,'x'.repeat(12*1048576),0,1);
  const read=createFileInspection('nested.js',f.result.sources[0].normalizedUtf8,f.capture.inspection('nested.js'));assert.equal((await read({type:'units',path:'nested.js',offset:0})).total,3);
- await assert.rejects(()=>f.capture.snapshot('https://github.com/fixture/repository','a'.repeat(40),[],f.result,'f'.repeat(64)),/Save limits/u);
+ await assert.rejects(()=>f.capture.snapshot({kind:'github',repositoryUrl:'https://github.com/fixture/repository',revision:'a'.repeat(40)},[],f.result,'f'.repeat(64)),/Save limits/u);
 });
 test('source and contribution pages are bounded but cover a dense long line completely',async()=>{
  const source='a&&b;'.repeat(10000),path='dense.js',bytes=encoder.encode(source);

@@ -1,3 +1,4 @@
+import { parseInvestigationOrigin, validWorkingTreeName, type WorkingTreeInvestigationOrigin, type InvestigationOrigin } from "../application/investigation-origin";
 import { PRESENTATION_KIND } from "../domain/city-model";
 import type { InspectionQuery, InspectionResult } from "../application/unit-inspection";
 import type { SavedRecord } from "../application/saved-investigation";
@@ -45,7 +46,14 @@ export type BrowserProgressEvent =
       stage: "city-construction";
     }>;
 
+export type WorkingTreeEvent =
+  | Readonly<BrowserCommand & { type: "WORKING_TREE_STARTED"; name: string }>
+  | Readonly<BrowserCommand & { type: "WORKING_TREE_PROGRESS"; completed: number; total: number }>
+  | Readonly<BrowserCommand & { type: "WORKING_TREE_CAPTURED"; origin: WorkingTreeInvestigationOrigin }>
+  | Readonly<BrowserCommand & { type: "WORKING_TREE_FAILED"; category: string; code?: string }>;
+
 export type BrowserSessionEvent =
+  | WorkingTreeEvent
   | Readonly<{ type: "REVISION_SELECTED"; sessionId: string; generation: number; revision: string }>
   | BrowserProgressEvent
   | Readonly<{ type: "ANALYSIS_FAILED"; sessionId: string; generation: number; revision?: string; category: string; code?: string }>
@@ -60,7 +68,10 @@ export type BrowserSessionObserver = Readonly<{
 }>;
 
 export type BrowserCommand = Readonly<{ sessionId: string; generation: number }>;
-export type BrowserAnalyzeCommand = Readonly<BrowserCommand & { repositoryUrl: string; additionalExclusions: string; savedId?: string }>;
+export type BrowserAnalyzeCommand = Readonly<BrowserCommand & (
+  | { repositoryUrl: string; additionalExclusions: string; savedId?: string; inputKind?: never }
+  | { inputKind: "working-tree"; root: unknown; name: string; additionalExclusions: string; savedId?: never }
+)>;
 
 export type BrowserSessionOpenResult = Readonly<{ kind: "opened"; sessionId: string }> | Readonly<{ kind: "capacity" }> | Readonly<{ kind: "lost" }>;
 
@@ -86,6 +97,7 @@ export type StandaloneBrowserView = Readonly<{
   capacity(): void;
   lost(): void;
   revision(value: string): void;
+  origin?(value: InvestigationOrigin): void;
   failed(category: string, code?: string, revision?: string): void;
   cancelled(): void;
   succeeded(generation: number, city: ValidatedCity, failures: readonly BrowserFailedFile[], revision: string, discard: () => void): void;
@@ -95,6 +107,7 @@ export type StandaloneBrowserView = Readonly<{
 export type StandaloneBrowserController = Readonly<{
   start(): void;
   submit(repositoryUrl: string, additionalExclusions: string): void;
+  submitWorkingTree(root: unknown, name: string, additionalExclusions: string): void;
   openSaved(id: string): void;
   save(): Promise<SavedRecord>;
   inspect(query: InspectionQuery): Promise<InspectionResult>;
@@ -112,9 +125,13 @@ type BrowserAttemptState = {
   analysisTotal?: number;
   analysisCompleted?: number;
   saved?: boolean;
+  local?: boolean;
+  localName?: string;
+  localStarted?: boolean;
 };
 
 const FAILURE_CATEGORIES = new Set([
+  "Local working tree unavailable",
   "Repository unavailable for anonymous access",
   "Revision unavailable",
   "Provider/resolution failure",
@@ -281,6 +298,23 @@ export function parseBrowserSessionEvent(value: unknown): BrowserSessionEvent | 
     return control as BrowserSessionEvent;
   }
 
+  const localStarted = exactRecord(value, ["type", "sessionId", "generation", "name"]);
+  if (localStarted?.type === "WORKING_TREE_STARTED" && validSessionId(localStarted.sessionId)
+    && validGeneration(localStarted.generation) && validWorkingTreeName(localStarted.name)) return localStarted as WorkingTreeEvent;
+  const localProgress = exactRecord(value, ["type", "sessionId", "generation", "completed", "total"]);
+  if (localProgress?.type === "WORKING_TREE_PROGRESS" && validSessionId(localProgress.sessionId)
+    && validGeneration(localProgress.generation) && validProgressCount(localProgress.completed, localProgress.total)) return localProgress as WorkingTreeEvent;
+  const localCaptured = exactRecord(value, ["type", "sessionId", "generation", "origin"]);
+  if (localCaptured?.type === "WORKING_TREE_CAPTURED" && validSessionId(localCaptured.sessionId) && validGeneration(localCaptured.generation)) {
+    try { const origin = parseInvestigationOrigin(localCaptured.origin); if (origin.kind === "working-tree") return { ...localCaptured, origin } as WorkingTreeEvent; } catch { /* Invalid frame. */ }
+  }
+  for (const keys of [["type", "sessionId", "generation", "category"], ["type", "sessionId", "generation", "category", "code"]]) {
+    const failure = exactRecord(value, keys);
+    if (failure?.type === "WORKING_TREE_FAILED" && validSessionId(failure.sessionId) && validGeneration(failure.generation)
+      && typeof failure.category === "string" && ["Local working tree unavailable", "Repository exceeds Code City limits", "No supported modules", "Source admission failed"].includes(failure.category)
+      && (Object.hasOwn(failure, "code") ? validCode(failure.category, failure.code) : ["Local working tree unavailable", "Repository exceeds Code City limits"].includes(failure.category))) return failure as WorkingTreeEvent;
+  }
+
   const revision = exactRecord(value, ["type", "sessionId", "generation", "revision"]);
   if (revision?.type === "REVISION_SELECTED" && validSessionId(revision.sessionId)
     && validGeneration(revision.generation) && validRevision(revision.revision)) return revision as BrowserSessionEvent;
@@ -314,8 +348,8 @@ export function parseBrowserSessionEvent(value: unknown): BrowserSessionEvent | 
     const hasCode = Object.hasOwn(failure, "code");
     if (hasRevision && !validRevision(failure.revision)) continue;
     if (hasCode && !validCode(failure.category, failure.code)) continue;
-    const preSelection = ["Repository unavailable for anonymous access", "Revision unavailable", "Provider/resolution failure"].includes(failure.category);
-    const postSelectionUncoded = ["Provider/resolution failure", "Repository exceeds Code City limits"].includes(failure.category);
+    const preSelection = ["Saved investigation unavailable", "Repository unavailable for anonymous access", "Revision unavailable", "Provider/resolution failure"].includes(failure.category);
+    const postSelectionUncoded = ["Local working tree unavailable", "Provider/resolution failure", "Repository exceeds Code City limits"].includes(failure.category);
     const postSelectionCoded = ["No supported modules", "Source admission failed", "Metric processing failed", "City construction failed"].includes(failure.category);
     if ((!hasRevision && !hasCode && preSelection)
       || (hasRevision && !hasCode && postSelectionUncoded)
@@ -432,7 +466,8 @@ export function createFetchSessionTransport(): BrowserSessionTransport {
       const post = (target: string, command: BrowserCommand | BrowserAnalyzeCommand): Promise<number> => commandStatus(target, command, abort.signal);
       return Object.freeze({
         ready,
-        analyze: (command: BrowserAnalyzeCommand) => post("/_code-city/analyze", command),
+        // A folder handle is an opaque browser capability, never a JSON/network value.
+        analyze: (command: BrowserAnalyzeCommand) => command.inputKind === "working-tree" || Object.hasOwn(command, "root") ? Promise.resolve(422) : post("/_code-city/analyze", command),
         cancel: (command: BrowserCommand) => post("/_code-city/cancel", command),
         discard: (command: BrowserCommand) => post("/_code-city/discard", command),
         close() {
@@ -484,8 +519,36 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     if (!state) return;
     if (state.terminal && event.type === "ANALYSIS_PROGRESS") return;
 
+    if (event.type === "WORKING_TREE_STARTED") {
+      if (!state.local || state.saved || state.localStarted || state.terminal || state.revision !== undefined || event.name !== state.localName) { lose(epoch); return; }
+      state.localStarted = true;
+      view.progress("Preparing working-tree inventory");
+      return;
+    }
+    if (event.type === "WORKING_TREE_PROGRESS") {
+      if (!validProgressCount(event.completed, event.total) || !state.local || !state.localStarted || state.terminal || state.revision !== undefined || state.stage > 1
+        || (state.acquisitionTotal === undefined ? event.completed !== 0 : event.total !== state.acquisitionTotal || event.completed <= state.acquisitionCompleted!)) { lose(epoch); return; }
+      state.acquisitionTotal = event.total; state.acquisitionCompleted = event.completed; state.stage = 1;
+      view.progress(`Acquiring files ${event.completed} of ${event.total}`, event.completed, 2 * event.total + 3);
+      return;
+    }
+    if (event.type === "WORKING_TREE_CAPTURED") {
+      if (state.terminal || state.revision !== undefined || (!state.saved && (!state.local || !state.localStarted || event.origin.name !== state.localName
+        || (state.acquisitionTotal !== undefined && state.acquisitionCompleted !== state.acquisitionTotal)))) { lose(epoch); return; }
+      state.local = true; state.revision = event.origin.captureId;
+      view.origin?.(event.origin); view.revision(event.origin.captureId);
+      view.progress(state.saved ? "Preparing saved investigation" : "Preparing analysis", state.acquisitionTotal,
+        state.acquisitionTotal === undefined ? undefined : 2 * state.acquisitionTotal + 3);
+      return;
+    }
+    if (event.type === "WORKING_TREE_FAILED") {
+      if (!state.local || !state.localStarted || state.terminal || state.revision !== undefined) { lose(epoch); return; }
+      state.terminal = true; currentGeneration = undefined;
+      view.failed(event.category, event.code);
+      return;
+    }
     if (event.type === "REVISION_SELECTED") {
-      if (state.terminal || state.revision !== undefined || state.stage !== 0) { lose(epoch); return; }
+      if (state.local || state.terminal || state.revision !== undefined || state.stage !== 0) { lose(epoch); return; }
       state.revision = event.revision;
       view.revision(event.revision);
       view.progress(state.saved ? "Preparing saved investigation" : "Preparing file inventory");
@@ -495,7 +558,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     if (event.type === "ANALYSIS_PROGRESS") {
       if (state.terminal || state.revision === undefined || event.revision !== state.revision) { lose(epoch); return; }
       if (event.stage === "acquisition") {
-        if (state.stage > 1) { lose(epoch); return; }
+        if (state.local || state.stage > 1) { lose(epoch); return; }
         if (state.acquisitionTotal === undefined) {
           state.acquisitionTotal = event.total;
           state.acquisitionCompleted = event.completed;
@@ -544,6 +607,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     }
 
     if (event.type === "ANALYSIS_FAILED") {
+      if (state.local && state.revision === undefined) { lose(epoch); return; }
       const correlated = event.revision === undefined
         ? state.revision === undefined
         : state.revision !== undefined && event.revision === state.revision;
@@ -631,7 +695,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     }
   };
 
-  const submit = (repositoryUrl: string, additionalExclusions: string, savedId?: string): void => {
+  const submit = (repositoryUrl: string, additionalExclusions: string, savedId?: string, local?: { root: unknown; name: string }): void => {
     if (disposed) return;
     const generation = nextBrowserGeneration(latestGeneration);
     clearAssociation();
@@ -654,7 +718,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       view.lost();
       return;
     }
-    attemptState = { terminal: false, stage: 0, ...(savedId === undefined ? {} : { saved: true }) };
+    attemptState = { terminal: false, stage: 0, ...(savedId === undefined ? {} : { saved: true }), ...(local ? { local: true, localName: local.name } : {}) };
     const selected = ensureOwner();
     view.working(() => { void cancelGeneration(selected.epoch, generation); });
     void (async () => {
@@ -662,18 +726,16 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       if (disposed || selected.epoch !== ownerEpoch || generation !== latestGeneration || owner !== selected.owner) return;
       if (opened.kind !== "opened") return;
       sessionId = opened.sessionId;
-      const command: BrowserAnalyzeCommand = { sessionId: opened.sessionId, generation, repositoryUrl, additionalExclusions, ...(savedId === undefined ? {} : { savedId }) };
-      let serialized: string;
-      try { serialized = JSON.stringify(command); }
-      catch { lose(selected.epoch); return; }
-      if (serialized.length === 0) { lose(selected.epoch); return; }
+      const command: BrowserAnalyzeCommand = local
+        ? { sessionId: opened.sessionId, generation, inputKind: "working-tree", root: local.root, name: local.name, additionalExclusions }
+        : { sessionId: opened.sessionId, generation, repositoryUrl, additionalExclusions, ...(savedId === undefined ? {} : { savedId }) };
       try {
         const status = await selected.owner.analyze(command);
         if (disposed || selected.epoch !== ownerEpoch || generation !== latestGeneration) return;
         if (status === 202) {
           const state = attemptState;
           if (state && !state.terminal && state.revision === undefined && state.stage === 0) {
-            view.progress(state.saved ? "Opening saved investigation" : "Resolving revision");
+            view.progress(state.saved ? "Opening saved investigation" : state.local ? "Preparing working-tree inventory" : "Resolving revision");
           }
           return;
         }
@@ -694,6 +756,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
   return Object.freeze({
     start() { if (!disposed && !owner) openOwner(); },
     submit,
+    submitWorkingTree(root, name, additionalExclusions) { if (!validWorkingTreeName(name)) { view.invalid(); return; } submit("", additionalExclusions, undefined, { root, name }); },
     openSaved(id) { submit("", "", id); },
     async inspect(query) {
       if (disposed || currentGeneration === undefined || !owner?.inspect) throw new Error("Unit inspection unavailable");

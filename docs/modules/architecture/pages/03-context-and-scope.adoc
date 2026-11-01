@@ -3,7 +3,8 @@
 [cols="1,3",options="header"]
 |===
 |Party |Interaction
-|User browser |Loads application/worker/parser assets, then acquires and analyzes a public GitHub revision locally. Presents the city and owns the unsaved investigation.
+|User browser |Loads assets, then captures a selected local working tree or public GitHub revision in its worker. Presents the city and owns unsaved source/results.
+|Selected local directory |Grants a read-only browser capability. Excluded subtrees are pruned before descent; no server path API, repository execution or analysis upload.
 |Public GitHub |Receives anonymous fixed-route requests from the browser worker for revision, commit, recursive tree, and raw files.
 |Native Node.js host |Serves verified assets and explicit snapshots. Accepts complete Save data, never analysis commands or unsaved per-tab sessions.
 |Operator |Selects port, bind/canonical host and optional data directory; backs up and recovers saved files.
@@ -25,5 +26,6 @@ live verification remain historical evidence.
 Only explicit Save uploads a complete client-created investigation. Shared
 links reopen stored data without provider access or analysis. Browser and
 server validate structure and hashes, not metric truth or claimed provenance.
-No account, login, private-source integration, or Internet exposure is added.
+No account, login, authenticated provider integration, or Internet exposure is
+added. The user approved shared visibility of explicitly saved local code.
 See xref:requirements:saved-investigations.adoc[Saved Investigations].

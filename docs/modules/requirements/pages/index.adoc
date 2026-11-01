@@ -2,9 +2,10 @@
 
 == Current implementation
 
-Code City analyzes one anonymously accessible public GitHub repository in a
-browser Web Worker. The browser owns immutable revision selection, source
-acquisition, parsing, metrics, city construction, and the unsaved investigation.
+Code City analyzes a selected local working tree or anonymously accessible public
+GitHub repository in a browser Web Worker. The browser owns local capture or
+immutable GitHub revision selection, source acquisition, parsing, metrics, city
+construction and the unsaved investigation.
 The native Node.js HTTP host serves manifest-verified assets and explicitly
 saved snapshots. It owns no repository-analysis worker, unsaved source dataset,
 or per-tab analysis session.
@@ -14,14 +15,14 @@ xref:source-and-metrics.adoc[Source and Metrics]. Presentation and the whole-cor
 Current custody and network rules are defined in
 xref:browser-analysis-operating-policy.adoc[Browser Analysis Operating Policy].
 
-== Next planned slice
+== Local working-tree slice
 
-xref:local-working-tree.adoc[Local Working-Tree Analysis] is the next approved
-scope: analyze a user-selected local checkout, including uncommitted edits.
+xref:local-working-tree.adoc[Local Working-Tree Analysis] analyzes a selected
+local checkout, including uncommitted edits.
 Internal ADO repositories and local checkouts are the real use case; public
-GitHub remains the implemented demonstration/test provider. Local acquisition
-and private-source persistence decisions remain open; this slice is not yet
-implemented or ready for an implementation handoff. Direct ADO access is separate.
+GitHub remains the implemented demonstration/test provider. The user selected read-only browser acquisition, bounded source-once shared Save
+and no login. Native browser qualification is a delivery gate. Direct ADO access
+is separate.
 
 == Build and operation
 
@@ -52,7 +53,8 @@ The host supplies no TLS ingress, and an insecure browser context shows
 
 == User-visible behavior
 
-Analyze captures one public GitHub URL and optional exact path exclusions.
+Analyze captures a selected local directory capability or public GitHub URL,
+plus optional exact path exclusions.
 A dedicated worker resolves the revision, validates and acquires the complete
 eligible source set, continues supported per-file failures, and constructs a
 city from successful facts. The UI thread validates the result and presents it.

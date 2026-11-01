@@ -1,62 +1,69 @@
 = Saved Investigations
 
 Status:: Implemented
-Decision:: xref:architecture:adr/0016-immutable-investigation-file-store.adoc[Immutable file store]
+Decisions:: xref:architecture:adr/0016-immutable-investigation-file-store.adoc[Immutable file store]; xref:architecture:adr/0020-source-once-shared-investigation-snapshots.adoc[Source-once snapshots]
 
 == Save and reopen
 
-A completed investigation remains browser-local until Save is chosen. Save
-publishes one immutable snapshot and changes the address to `/saved/<id>`.
-Copy link copies that address. Saving neither reruns analysis nor replaces an
-existing snapshot; a failed Save leaves the current city and inspection usable.
-A repeated click on an already saved investigation copies its existing link.
+A completed GitHub or local working-tree investigation remains browser-local
+until Save. Save publishes one immutable snapshot and changes the address to
+`/saved/<id>`. Copy link copies that address. Saving does not reacquire source,
+rerun analysis or replace an existing snapshot. A failed Save leaves the current
+city/inspection usable; clicking Save again on a saved result copies its link.
 
-Open saved loads a read-only picker grouped by repository. Each entry shows the
-requested branch, release tag, or default-branch choice, a short commit, and UTC
-saved time. Opening it shows the full commit. Different repositories, branches,
-release tags, and successive commits coexist; none is a storage key or an
-overwrite target. Analyze accepts ordinary repository URLs, `/tree/<branch>`,
-and `/releases/tag/<tag>`; annotated tags resolve to a full commit, with at most
-16 tag-object reads. This is not a history explorer or automatic branch scan.
+Open saved is a read-only picker grouped by input kind and repository/folder
+name. GitHub entries show branch/release/default choice, short commit and UTC
+saved time. Working-tree entries show capture identity and saved time, never a
+fabricated GitHub commit. Different sources, captures and commits coexist under
+random IDs; a name or ref is not an overwrite key.
 
-A saved URL restores the recorded city, metrics, outcomes, and retained evidence
-without GitHub requests or parser initialization. It starts in the normal
-overview: camera, selection, query, and sort are not saved. Closing the original
-tab or restarting the host does not remove a committed snapshot. There is no
-automatic expiry, login, per-user ownership, edit, rename, or deletion UI.
-Saved source is shared with anyone who can reach the host; the URL is not an
-authorization credential. Sharing across computers requires an accessible
-operator deployment, not the default loopback address.
+A saved URL restores city, outcomes, metrics, unit/contribution evidence and exact
+normalized code without acquisition, filesystem permission, GitHub requests or
+analysis-parser initialization. Source drill-down remains available after the
+original checkout changes or disappears. Reopening never reopens a local folder
+capability. Camera, selection, query and sort start in the normal overview.
 
-== Complete versioned snapshot
+Closing the original tab or restarting the host does not remove committed data.
+There is no automatic expiry, login, per-user ownership, rename, edit or deletion
+UI. The user explicitly selected shared visibility: *everyone who can reach the
+host can read saved investigations and their code*. A saved URL is not an
+authorization secret. This does not authorize Internet exposure; loopback remains
+the default and cross-computer access needs an operator-selected deployment.
 
-The version-2 container retains:
+== Complete source-once snapshot
 
-* Repository URL and requested ref, selected full commit, additional and fixed
-  exclusions, canonical hierarchy, and original provider paths.
-* Exact original eligible source bytes and normalized analyzed UTF-8, including
-  original bytes for unsupported-text outcomes.
-* Every per-file outcome; successful raw metrics, unit identities and owned byte
-  regions, per-unit complexity, and decision kind/span/owner contributions.
-* Fixed city geometry, colors, bounds, and source/metric associations.
-* A build-input fingerprint covering production source, pinned parser assets,
-  lockfile, and standalone builder; format version is recorded separately.
+The version-3 container retains:
 
-The executable schema is `src/application/saved-investigation.ts`. Binary
-source sections have lengths and SHA-256 digests. The server checks shape,
-references, byte boundaries, hashes, blob identities, and presentation safety
-in a separate worker. It does not parse repository code, recompute metrics,
-verify a claimed build identity, or certify GitHub provenance. Hash consistency
-is not proof that a client actually used the claimed commit or analyzer.
-xref:unit-inspection.adoc[Unit Source Inspection] uses these retained facts in
-fresh and reopened investigations. Portable import/export remains outside the
-current slice. Recursive geometry uses a new explicit identifier. Only version 2
-is supported: the user waived pre-production compatibility. Older formats fail
-explicitly; no migration, implicit re-layout or deletion occurs. See
-xref:recursive-districts.adoc[Recursive Districts] and
-xref:architecture:adr/0018-recursive-district-presentation.adoc[ADR 0018].
+* Tagged input origin: real GitHub URL/ref/commit or local folder display name
+  and actual working-tree capture ID, never an absolute filesystem path.
+* Fixed/additional exclusions, canonical hierarchy and every per-file outcome.
+* Successful raw metrics, unit identities/owned regions, exact complexity and
+  decision kind/span/owner contributions in normalized byte coordinates.
+* Fixed city geometry, colors, bounds and source/metric associations.
+* Exactly one normalized UTF-8 source section for each text-valid file, including
+  syntax/metric failures. Unsupported text retains its path/outcome, no payload.
+* Build-input fingerprint of production source, pinned parser assets, lockfile
+  and standalone builder; format version is separate.
 
-== Operation and limits
+Save does not archive the checkout, dependency/build trees, assets, Git metadata,
+original raw duplicates or invalid binary-source payloads. Full drill-down is
+retained for all admitted analyzed files; there is no top-N code sampling.
+
+The schema is `src/application/saved-investigation.ts`. Source sections have
+lengths and SHA-256 digests. An isolated validator checks strict shape, references,
+normalized text/scalar boundaries, hashes and presentation safety. It does not
+execute source, compute/certify metrics, verify a claimed build identity or
+certify GitHub/local provenance. Hash consistency is not proof that a client
+actually used the claimed inputs or analyzer.
+
+Only version 3 payloads are supported under the accepted pre-production policy.
+Older payloads fail explicitly with no acquisition, parser fallback, migration,
+rewrite, implicit relayout or deletion. Older seven-field receipt metadata stays
+readable in inventory so existing files do not block new-format Save/catalog
+operations. Old entries are not silently upgraded or claimed to reopen.
+Portable export/import is not part of this slice.
+
+== Operation and bounds
 
 Enable persistence with `--data-dir <directory>`, for example:
 
@@ -65,58 +72,49 @@ Enable persistence with `--data-dir <directory>`, for example:
 npm start -- --port 55583 --data-dir /var/lib/code-city
 ----
 
-Select a dedicated local directory outside `dist/` and the source checkout.
-Paths are resolved against the host's working directory. Artifact containment
-and symlink aliases into it are rejected. Without a usable configured directory,
-Save and the picker report unavailability; browser analysis still works.
-One host per data directory is supported. No database or new package dependency
-is required.
+Use a dedicated local directory outside `dist/` and source. Relative paths resolve
+against host cwd; artifact containment and symlink aliases into it are rejected.
+Without usable storage, Save/picker report unavailability and analysis still
+works. One host per data directory is supported; no database/dependency is added.
 
 [cols="2,1",options="header"]
 |===
 |Bound |Value
 |Encoded JSON header |16 MiB
-|Captured unit/contribution metadata |12 MiB; exhaustion disables Save, not analysis
-|Original source total |128 MiB
+|Captured unit/contribution metadata |12 MiB; exhaustion disables Save, not analysis/inspection
+|Normalized source |2 MiB/file; 40 MiB total; at most 4,000 admitted files
 |Complete upload |192 MiB
 |Committed snapshots |1,024
-|Charged committed storage |2 GiB, including a reserved 16 KiB receipt per entry
+|Charged committed storage |2 GiB, including reserved 16 KiB receipt/entry
 |Concurrent writes / binary reads |1 / 4
 |Upload/validation or binary-read operation timer |120 seconds
-|Validation worker heap |256 MiB old generation, 32 MiB young generation
+|Validation worker heap |256 MiB old generation; 32 MiB young generation
 |===
 
-Existing 4,000-file, 2 MiB/module, and 40 MiB normalized-source bounds do not
-change. These are input/operation bounds, not total process RAM, disk latency,
-power-loss durability, or denial-of-service guarantees. Anonymous clients do
-not establish reliable per-person quotas. A busy/full writer cannot consume
-read admission or browser analysis capacity. Static assets remain independently
-served. Uploads require a same-origin POST, exact binary media type and declared
-length; chunked/oversized or invalid bodies are not published.
+These are input/operation bounds, not process RAM, disk-latency, power-loss or
+DoS guarantees. Anonymous clients cannot establish reliable per-person quotas.
+Busy/full writers do not consume read admission or browser analysis capacity;
+static assets are independent. Uploads require same-origin POST, exact binary
+media type and declared length. Chunked/oversized/invalid bodies are not published.
 
-== Atomic publication and recovery
+== Publication and recovery
 
-Each entry is `snapshots/<random-id>/{snapshot.ccs,record.json}` beneath the data
-directory. The receipt records server UTC time, repository/ref, full commit,
-length, and whole-container hash. Upload, validation, and file synchronization
-precede same-volume directory rename. Only committed directories enter the
-catalog; no partially uploaded entry is visible and IDs are never overwritten.
-Acknowledgment follows publication and the owned cleanup attempt. A lost response can leave
-a complete saved entry discoverable through Open saved; Save is not an
+Entries are `snapshots/<random-id>/{snapshot.ccs,record.json}`. Receipts record UTC
+server time, input kind/label/ref, revision or capture ID, byte length and whole
+container hash. Upload, isolated validation and synchronization precede same-volume
+directory rename. Only committed directories are catalogued; IDs are never
+overwritten. Acknowledgment follows publication and the owned cleanup attempt.
+A lost response may leave a complete picker-discoverable entry; Save is not an
 exactly-once network protocol.
 
-A failed operation removes only its owned staging directory and lock. Failed
-staging cleanup retains the lock so further uploads cannot accumulate uncharged
-bytes. A crash may leave a lock or staging directory: committed reads still
-work, but new writes remain blocked. With the host stopped, inspect those
-artifacts, preserve uncertain work, then remove only confirmed abandoned staging
-and its lock. Never promote a partial directory automatically.
+A failed operation removes only its owned staging directory/lock. Failed cleanup
+retains the lock to prevent accumulating uncharged bytes. Crash locks block new
+writes, not committed reads. With the host stopped, inspect/preserve uncertain
+staging and remove only confirmed abandoned work. Never promote partial data.
 
 Back up the whole data directory. Stop the host before backup restoration or
-operator deletion of selected committed directories. Startup validates receipts,
-regular files, lengths, and bounded catalog structure; malformed storage fails
-closed without deleting it. Restore validates the recorded whole-container and
-source hashes and rejects corruption or unsupported versions without provider
-or parser fallback. Process-restart durability is tested; filesystem failure,
-power loss, network filesystems, TLS ingress, and Internet deployment are not
-qualified by this delivery.
+operator deletion. Startup validates receipts, regular files, lengths and bounded
+catalog shape; malformed storage fails closed without deleting it. Restore rejects
+corruption/unsupported formats. Process-restart durability is tested; filesystem
+failure, power loss, network filesystems, TLS ingress and Internet exposure are
+not qualified by this delivery.

@@ -10,23 +10,36 @@
   <main>
     <header data-app-bar><h1>Code City</h1><button type="button" data-open-saved>Open saved</button></header>
     <form id="repository-setup" novalidate>
-      <label for="repository">GitHub repository, branch, or release URL</label>
-      <input id="repository" name="repository" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repository">
+      <label for="input-kind">Source</label>
+      <select id="input-kind" name="input-kind">
+        <option value="working-tree" selected>Local working tree</option>
+        <option value="github">Public GitHub</option>
+      </select>
+      <div data-local-setup>
+        <button type="button" data-choose-folder>Choose folder</button>
+        <bdi data-folder-name dir="auto">No folder selected</bdi>
+        <p data-folder-status role="status">Read-only folder access requires secure desktop Chromium. Selection does not start analysis.</p>
+      </div>
+      <div data-github-setup hidden>
+        <label for="repository">Public GitHub repository, branch, or release URL</label>
+        <input id="repository" name="repository" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repository">
+      </div>
       <button type="submit">Analyze</button>
       <details data-exclusions>
         <summary>Additional exclusions (optional)</summary>
         <label for="additional-exclusions">One canonical path per line</label>
         <textarea id="additional-exclusions" name="additional-exclusions" rows="3" autocomplete="off" spellcheck="false"></textarea>
       </details>
+      <p id="shared-save-info" data-shared-save>Analyze and inspection stay in your browser. Only Save uploads all admitted normalized source and results. No login: everyone reaching this instance can read saved investigations and code.</p>
     </form>
     <header data-investigation hidden>
       <div data-investigation-identity>
         <bdi data-repository dir="auto"></bdi>
-        <output data-commit aria-live="polite"></output>
+        <div data-origin-identity><span data-origin-label>Commit</span><output data-commit aria-live="polite"></output></div>
       </div>
       <div data-investigation-controls>
-        <button type="button" data-change-repository aria-controls="repository-setup" aria-expanded="false">Change repository</button>
-        <button type="button" data-save hidden>Save</button>
+        <button type="button" data-change-repository aria-controls="repository-setup" aria-expanded="false">Change source</button>
+        <button type="button" data-save aria-describedby="shared-save-info" title="Save uploads analyzed source and results. Everyone reaching this instance can read them." hidden>Save</button>
       </div>
     </header>
     <p data-save-status role="status"></p>

@@ -1,67 +1,110 @@
 = Local Working-Tree Analysis
 
-Status:: Planned; scope approved, not implemented or ready for implementation
+Status:: Implemented
 
-== Approved outcome
+== Scope and custody
 
-Internal Azure DevOps (ADO) repositories and local checkouts are the real product
-use case. Public GitHub remains the implemented input and a demonstration/test
-provider, not the intended long-term source boundary.
+Internal ADO checkouts and local working trees are the real use case. Select a
+folder on the user's computer, then explicitly Analyze the files on disk,
+including uncommitted edits. Public GitHub remains supported. Direct ADO
+credentials/acquisition, Git tracking/ignore interpretation, native agents,
+server filesystem APIs, watchers and repository execution are not introduced.
 
-The next slice accepts a local checkout selected on the user's computer and
-analyzes its *working-tree contents, including uncommitted edits*, rather than
-only the checked-out commit. This also covers ADO repositories already cloned
-with the user's existing tools. Direct authenticated ADO acquisition is a separate
-follow-up, not part of this slice.
+The browser owns read-only acquisition, parsing, metrics, city and inspection.
+Before explicit Save no local source, paths, names, hashes, metrics or results
+leave the browser. Fixed application/parser asset loads are permitted. Use only
+synthetic fixtures for implementation and qualification; do not open internal
+repositories or transmit private material to a coding assistant.
 
-== Scope
+== Folder access and inclusion
 
-* Explicit folder selection and Analyze, using the existing browser-worker
-  analysis and investigation UI. No arbitrary server filesystem path API.
-* Read-only acquisition: no repository writes, checkout, fetch, package scripts,
-  hooks, builds or tests. Source remains untrusted data and is never executed.
-* Preserve the supported languages, metric definitions, processing limits,
-  cancellation, stale-result suppression and read-only source inspection.
-* Unsaved source/results stay in the browser. Analyze must not send local source,
-  local paths, credentials or project data to the Code City host, ADO, GitHub,
-  cloud models or other services. Loading application assets is distinct from
-  transmitting repository data.
-* Identify the captured input as a working tree, not as proof of a clean or
-  immutable Git commit. A HEAD identifier alone cannot identify edited files.
-* Existing public-GitHub analysis remains available. No new metric,
-  export/import feature, watcher, background scan or automatic saving is added.
+Use the browser's read-only directory picker in a secure desktop Chromium
+context. Unsupported environments show a local unsupported message and keep
+GitHub input usable. Denied/cancelled selection leaves an existing completed
+investigation unchanged. Selection alone never starts analysis or persistence.
+Do not fall back to recursively enumerating a complete FileList: multi-gigabyte
+checkouts require pruning excluded directories before descending into them.
 
-This page records future approved scope. It does not relax the delivered
-xref:source-and-metrics.adoc[public-source input contract] or claim local input
-already works.
+Include supported-suffix regular files, whether tracked, untracked or ignored,
+after the existing fixed and captured user exclusions. Do not read or interpret
+.gitignore or Git metadata. Skip .git files/directories at every depth with a
+case-insensitive local metadata rule. Nested checkouts and already populated
+submodule directories are ordinary physical contents after exclusions. Never
+fetch missing submodules or follow a link outside the selected root.
 
-== Decisions required before implementation
+Validate native relative paths/NFC collisions and preserve canonical unsigned
+UTF-8 ordering. Enumerate without recursion on the JavaScript call stack. An
+unreadable directory or eligible file, permission loss, disappearance or reported
+modification fails the whole capture; do not publish a partial city or retry
+automatically. Unsupported source text remains a recorded per-file outcome.
 
-[cols="1,2",options="header"]
-|===
-|Decision |Required result
-|File inclusion |Define tracked/untracked and ignored-file behavior, exclusions, repository metadata, nested repositories/submodules and links escaping the selected root.
-|Capture and failure behavior |Define input identity and what happens when files change, disappear or cannot be read during enumeration/capture; do not promise an atomic filesystem snapshot without evidence.
-|Folder access |Choose and qualify the browser permission/access mechanism, supported environments and explicit unsupported/denied-access behavior. Do not silently introduce a native agent or server-side acquisition.
-|Private-source persistence |Decide whether and how local investigations can be saved, where their source goes and who can read it. The current shared anonymous store is not automatically approved for private source.
-|Representation |Define local provenance and any required saved-format changes without fabricating a GitHub URL, commit, blob identity or remote verification claim.
-|===
+Qualification must exercise real directory APIs, links/junctions, access failures
+and browser/OS support. Do not claim a mocked handle proves native selection, or
+ship an unqualified fallback when the selected mechanism fails its boundary.
 
-Record consequential architecture/data-contract/privacy decisions before a
-Software Developer implementation handoff. New ADRs remain Proposed until the
-user accepts them. Requirements for local input must explicitly supersede the
-applicable public-only assumptions; existing GitHub behavior remains supported.
+== Bounded, non-atomic capture
 
-== Qualification target
+Keep the existing 4,000 admitted files, 2,097,152 normalized UTF-8 bytes/file,
+41,943,040 normalized bytes/attempt and bounded raw-read guards. Up to eight
+owned reads may overlap; consume in canonical order and stop/drain on the same
+whole-attempt failures. Reuse normalization, supported per-file continuation,
+parser/metric definitions, cancellation and stale-publication suppression.
 
-After the decisions above are accepted, qualify folder selection through
-Analyze/Cancel, city publication and complete file/unit/contribution inspection
-using deterministic synthetic working-tree fixtures, including uncommitted edits.
-Cover the agreed inclusion, change-during-read, access failure, path and limit
-rules and prove that analysis sends no repository data over the network and
-performs no repository writes or execution. Preserve existing GitHub and saved
-investigation regressions.
+A working tree is not an immutable Git commit or atomic filesystem snapshot.
+Identify the actual eligible captured bytes with a versioned SHA-256 manifest of
+canonical paths, raw lengths/digests and inclusion policy/exclusions, including
+unsupported-text outcomes. The root's display name is not content identity.
+A fresh Analyze enumerates the folder again; files created after an enumeration
+are not magically part of that captured set. Never manufacture a GitHub URL,
+Git commit, remote blob identity or provenance certification claim.
 
-Do not inspect internal repositories or send their contents to a cloud model
-merely to plan or test this slice. Use synthetic fixtures unless the user
-separately authorizes access to particular private material.
+Show the local folder name and `Working-tree capture` identity, not `Commit`.
+Before the capture ID exists, correlate progress by local session/generation;
+afterwards use the actual content identity. No invented percentage, latency,
+physical-memory or whole-checkout-capacity promise is added. Explicit Cancel
+terminates the read-only local worker, including during native enumeration/getFile
+operations that cannot reliably be aborted; canonical failures drain their owned
+read window. Replacement and late
+responses cannot restore an older investigation.
+
+== Shared source-bearing Save
+
+The user explicitly requires full code drill-down for every admitted analyzed
+file, not a top-N sample. Save results plus one copy of the normalized analyzed
+source. Do not archive the checkout, repository metadata, dependencies, build
+outputs, assets, original raw duplicates or unsupported binary source payloads.
+All input methods use this source-once rule. The normalized-source budget remains
+40 MiB; metadata, geometry and container budgets remain separately bounded.
+
+Save is explicit. The user chose no login: everyone who can access the Code City
+instance can read saved investigations and their retained code. State that shared
+visibility in the local UI. This does not authorize new network exposure, TLS
+configuration, Internet hosting, automatic upload or access to internal repos.
+
+The version-3 snapshot records tagged GitHub/local origin, capture/revision
+identity, exclusions, hierarchy, outcomes, metrics, units/contribution ownership
+and normalized byte locations, fixed presentation evidence and one hashed
+normalized source section per retained text file. Successful files and valid
+text with syntax/metric failures retain their normalized text; unsupported text
+retains its path/outcome without raw payload. Reopen restores the same city and
+full code inspection without acquisition or metric reanalysis.
+
+Version 2 source-payload snapshots are unsupported by the new reader, consistent
+with the accepted pre-production policy. Preserve stored files: no migration,
+rewrite, implicit relayout or deletion. Older receipt metadata may remain visible
+in the picker; unsupported snapshot opens fail locally and must not brick new
+Save/catalog operations. Snapshot validation is structural/hash/boundary/presentation
+validation in the isolated worker, not metric or provider certification.
+
+== Qualification
+
+Prove local folder selection through acquisition, Analyze/Cancel/replacement,
+city, complete file/unit/contribution inspection, explicit shared Save, host
+restart and fresh-context source-bearing reopen. Cover uncommitted edits,
+excluded huge subtrees never entered, limits, canonical ordering, path failures,
+read/change/delete/permission failures and source identity changes. Observe page
+and worker requests: local analysis and inspection emit no repository data or
+GitHub/ADO traffic; only explicit Save uploads the bounded source-once snapshot.
+Preserve existing GitHub, deterministic presentation, no-camera selection,
+package/reproducibility and shutdown regressions. Report browser/OS qualification
+limits honestly; do not treat serving smoke checks as universal hardware evidence.

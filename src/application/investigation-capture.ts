@@ -1,4 +1,4 @@
-import type { ImmutableRawSourceGateway } from "./source-retrieval";
+import type { InvestigationOrigin } from "./investigation-origin";
 import type { BaseMetricAnalysis } from "../domain/base-metrics";
 import type { InspectionEvidence } from "./unit-inspection";
 import type { ProjectAnalysis } from "./project-analysis";
@@ -7,12 +7,11 @@ import { compareUnsignedUtf8, FIXED_EXCLUDED_SEGMENTS } from "../domain/source-a
 
 /** Save-only evidence budget; exhaustion never changes analysis admission/results. */
 export function createInvestigationCapture() {
-  const raw = new Map<string, { bytes: Uint8Array; blob: string; rawPath: string }>();
   const evidence = new Map<string, { units: SavedUnit[]; contributions: SavedContribution[] }>();
   const inspections = new Map<string, InspectionEvidence>();
   const owners = new Map<string, { values: number[]; counts: number[]; total: number }>();
-  let rawBytes = 0, metadataBytes = 0, complete = true;
-  const disable = (): void => { complete = false; raw.clear(); evidence.clear(); };
+  let metadataBytes = 0, complete = true;
+  const disable = (): void => { complete = false; evidence.clear(); };
   const entry = (path: string) => { let value = evidence.get(path); if (!value) { value = { units: [], contributions: [] }; evidence.set(path, value); } return value; };
   const append = (path: string, value: SavedUnit | SavedContribution, units: boolean): void => {
     if (!complete) return;
@@ -21,19 +20,6 @@ export function createInvestigationCapture() {
     if (units) entry(path).units.push(value as SavedUnit); else entry(path).contributions.push(value as SavedContribution);
   };
   return {
-    wrap(gateway: ImmutableRawSourceGateway): ImmutableRawSourceGateway {
-      return { loadInventory: (...args) => gateway.loadInventory(...args), async readRawSource(...args) {
-        const result = await gateway.readRawSource(...args);
-        if (complete && result.kind === "source") {
-          try {
-            rawBytes += result.rawBytes.length;
-            if (rawBytes > SAVE_LIMITS.raw) disable();
-            else raw.set(args[2].canonicalPath, { bytes: result.rawBytes.slice(), blob: args[2].expectedBlobId, rawPath: args[2].rawPath });
-          } catch { disable(); }
-        }
-        return result;
-      } };
-    },
     contribution(path: string, owner: number, kind: string, start: number, end: number): void {
       try {
         let runs = owners.get(path);
@@ -79,7 +65,7 @@ export function createInvestigationCapture() {
       } catch { disable(); }
     },
     inspection(path: string): InspectionEvidence | undefined { return inspections.get(path); },
-    async snapshot(repositoryUrl: string, revision: string, exclusions: readonly string[], result: ProjectAnalysis, analyzer: string): Promise<Blob> {
+    async snapshot(origin: InvestigationOrigin, exclusions: readonly string[], result: ProjectAnalysis, analyzer: string): Promise<Blob> {
       if (!complete) throw new Error("Investigation exceeds Save limits");
       const sections: Uint8Array[] = [];
       const descriptor = async (bytes: Uint8Array): Promise<SourceSection> => ({ length: bytes.length,
@@ -87,19 +73,22 @@ export function createInvestigationCapture() {
       const facts = new Map(result.city?.inspection.map(fact => [fact.canonicalPath, fact]) ?? []);
       const failures = new Map(result.notAnalyzedFiles.map(failure => [failure.canonicalPath, failure.category]));
       const normalized = new Map(result.sources.map(source => [source.canonicalPath, source.normalizedUtf8]));
-      if (raw.size !== facts.size + failures.size) throw new Error("Complete source evidence is unavailable");
+      const paths = [...facts.keys(), ...failures.keys()].sort(compareUnsignedUtf8);
+      if (new Set(paths).size !== paths.length || normalized.size !== result.sources.length
+        || result.sources.some(source => !facts.has(source.canonicalPath) && !failures.has(source.canonicalPath))
+        || paths.some(path => (failures.get(path) === "Source text is not supported") === normalized.has(path))) throw new Error("Complete source evidence is unavailable");
       const files: SavedHeader["files"] = [];
       const hierarchy = new Set<string>();
-      for (const [path, source] of [...raw].sort(([a], [b]) => compareUnsignedUtf8(a, b))) {
+      for (const path of paths) {
         const parts = path.split("/"); for (let index = 1; index < parts.length; index++) hierarchy.add(parts.slice(0, index).join("/"));
         const norm = normalized.get(path), fact = facts.get(path);
         const captured = fact ? evidence.get(path) : undefined;
         if (fact && (!captured || captured.units.length !== fact.U)) throw new Error("Complete unit evidence is unavailable");
-        files.push({ path, rawPath: source.rawPath, blob: source.blob, raw: await descriptor(source.bytes), normalized: norm ? await descriptor(norm) : null,
+        files.push({ path, normalized: norm ? await descriptor(norm) : null,
           outcome: fact ? "success" : failures.get(path)!, fact: fact ?? null, units: captured?.units.map(unit => unit[0] === "top-level" ? [unit[0], 0, norm!.length, unit[3], unit[4]] : unit) ?? [], contributions: captured?.contributions ?? [] });
-        sections.push(source.bytes); if (norm) sections.push(norm);
+        if (norm) sections.push(norm);
       }
-      const header: SavedHeader = { version: 2, analyzer, repositoryUrl, revision, exclusions: [...exclusions], fixedExcludedSegments: [...FIXED_EXCLUDED_SEGMENTS], hierarchy: [...hierarchy].sort(compareUnsignedUtf8), files, city: cityForSnapshot(result.city) };
+      const header: SavedHeader = { version: 3, analyzer, origin, exclusions: [...exclusions], fixedExcludedSegments: [...FIXED_EXCLUDED_SEGMENTS], hierarchy: [...hierarchy].sort(compareUnsignedUtf8), files, city: cityForSnapshot(result.city) };
       validateSavedHeader(header);
       const encoded = new TextEncoder().encode(JSON.stringify(header));
       const blob = new Blob([snapshotPrefix(encoded).buffer, encoded.buffer, ...sections.map(bytes => bytes.slice().buffer)], { type: "application/octet-stream" });

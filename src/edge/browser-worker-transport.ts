@@ -1,3 +1,4 @@
+import { investigationIdentity, parseInvestigationOrigin, validWorkingTreeName, type InvestigationOrigin } from "../application/investigation-origin";
 import { parseInspectionResult, validateInspectionQuery, type InspectionQuery, type InspectionResult } from "../application/unit-inspection";
 import { parseSavedRecord } from "./browser-saved-investigations";
 import { validSavedId, type SavedRecord } from "../application/saved-investigation";
@@ -21,7 +22,7 @@ type OwnedWorker = {
 /** Browser-local ownership only: opening an idle page performs no backend request. */
 export function createBrowserWorkerTransport(
   createWorker: () => Worker = () => new Worker(new URL("./browser-analysis-worker.ts", import.meta.url), { type: "module" }),
-  restored?: (repositoryUrl: string, record: SavedRecord, exclusions: readonly string[]) => void,
+  restored?: (origin: InvestigationOrigin, record: SavedRecord, exclusions: readonly string[]) => void,
 ): BrowserSessionTransport {
   return Object.freeze({
     open(observer) {
@@ -56,12 +57,16 @@ export function createBrowserWorkerTransport(
           const selectedVersion = ++version;
           if (active) await stop(active);
           if (closed || version !== selectedVersion) return 202;
-          if (command.savedId === undefined ? !parseRepositoryReference(command.repositoryUrl) || !parseAdditionalExclusions(command.additionalExclusions) : !validSavedId(command.savedId)) return 422;
+          if (command.inputKind === "working-tree"
+            ? !validWorkingTreeName(command.name) || !command.root || !parseAdditionalExclusions(command.additionalExclusions)
+            : command.savedId === undefined ? !parseRepositoryReference(command.repositoryUrl) || !parseAdditionalExclusions(command.additionalExclusions) : !validSavedId(command.savedId)) return 422;
           try {
             const worker = createWorker();
             let disposed = false;
             const owned: OwnedWorker = {
-              worker, generation: command.generation, providerActive: command.savedId === undefined, finished: false, inspections: new Map(),
+              // Native getFile/enumeration promises cannot be aborted reliably. A local
+              // read-only worker owns no provider requests/writes and is terminated on stop.
+              worker, generation: command.generation, providerActive: command.inputKind !== "working-tree" && command.savedId === undefined, finished: false, inspections: new Map(),
               dispose() {
                 if (disposed) return;
                 disposed = true;
@@ -88,7 +93,8 @@ export function createBrowserWorkerTransport(
                   if (entry) {
                     owned.inspections.delete(entry[0]);
                     try {
-                      if (raw.ok !== true || raw.revision !== owned.revision) throw new Error("Unit inspection unavailable");
+                      if (raw.ok !== true || raw.revision !== owned.revision
+                        || Object.keys(raw).sort().join(",") !== "generation,ok,requestId,revision,sessionId,type,value") throw new Error("Unit inspection unavailable");
                       entry[1].resolve(parseInspectionResult(raw.value, entry[1].query));
                     } catch { entry[1].reject(new Error("Unit inspection unavailable")); }
                   }
@@ -98,7 +104,14 @@ export function createBrowserWorkerTransport(
                   const pending = owned.saveRequest;
                   if (pending && raw.requestId === pending.id) {
                     owned.saveRequest = undefined;
-                    try { if (raw.ok !== true) throw new Error(typeof raw.error === "string" ? raw.error : "Save failed"); pending.resolve(parseSavedRecord(raw.record)); }
+                    try {
+                      if (raw.ok !== true) {
+                        if (Object.keys(raw).sort().join(",") !== "error,generation,ok,requestId,sessionId,type") throw new Error("Save failed");
+                        throw new Error(typeof raw.error === "string" ? raw.error : "Save failed");
+                      }
+                      if (Object.keys(raw).sort().join(",") !== "generation,ok,record,requestId,sessionId,type") throw new Error("Save failed");
+                      pending.resolve(parseSavedRecord(raw.record));
+                    }
                     catch (failure) { pending.reject(failure instanceof Error ? failure : new Error("Save failed")); }
                   }
                   return;
@@ -106,27 +119,30 @@ export function createBrowserWorkerTransport(
                 if (raw.type === "RESTORED") {
                   try {
                     const record = parseSavedRecord(raw.record);
-                    if (record.id !== command.savedId || typeof raw.repositoryUrl !== "string" || !parseRepositoryReference(raw.repositoryUrl)) throw new Error("Invalid restored metadata");
-                    if (!Array.isArray(raw.exclusions) || raw.exclusions.some(item => typeof item !== "string")) throw new Error("Invalid saved exclusions");
-                    restored?.(raw.repositoryUrl, record, raw.exclusions as string[]);
+                    const origin = parseInvestigationOrigin(raw.origin);
+                    if (Object.keys(raw).sort().join(",") !== "exclusions,generation,origin,record,sessionId,type" || record.id !== command.savedId
+                      || investigationIdentity(origin) !== record.revision || (record.kind ?? "github") !== origin.kind) throw new Error("Invalid restored metadata");
+                    if (!Array.isArray(raw.exclusions) || raw.exclusions.some(item => typeof item !== "string") || !parseAdditionalExclusions(raw.exclusions.join("\n"))) throw new Error("Invalid saved exclusions");
+                    restored?.(origin, record, raw.exclusions as string[]);
                   } catch { error(); }
                   return;
                 }
               }
               const event = parseBrowserSessionEvent(received.data);
               if (!event || event.sessionId !== sessionId || event.generation !== command.generation) { error(); return; }
-              if (event.type === "ANALYSIS_PROGRESS" && event.stage !== "acquisition") owned.providerActive = false;
+              if (event.type === "WORKING_TREE_CAPTURED" || (event.type === "ANALYSIS_PROGRESS" && event.stage !== "acquisition")) owned.providerActive = false;
               const terminal = event.type === "ANALYSIS_SUCCEEDED" || event.type === "ANALYSIS_ALL_FILES_FAILED"
-                || event.type === "ANALYSIS_FAILED" || event.type === "ANALYSIS_CANCELLED";
+                || event.type === "ANALYSIS_FAILED" || event.type === "WORKING_TREE_FAILED" || event.type === "ANALYSIS_CANCELLED";
               if (owned.stop) {
                 if (terminal || !owned.providerActive) destroy(owned);
                 return;
               }
               if (version !== selectedVersion) return;
               if (event.type === "REVISION_SELECTED") owned.revision = event.revision;
+              if (event.type === "WORKING_TREE_CAPTURED") owned.revision = event.origin.captureId;
               if (terminal) owned.finished = true;
               observer.event(event);
-              if (event.type === "ANALYSIS_FAILED" || event.type === "ANALYSIS_CANCELLED") destroy(owned);
+              if (event.type === "ANALYSIS_FAILED" || event.type === "WORKING_TREE_FAILED" || event.type === "ANALYSIS_CANCELLED") destroy(owned);
             };
             active = owned;
             try {
@@ -166,7 +182,7 @@ export function createBrowserWorkerTransport(
         },
         save() {
           const owned = active;
-          if (closed || !owned || !owned.finished || owned.saveRequest) return Promise.reject(new Error("Saving is unavailable or busy"));
+          if (closed || !owned || !owned.finished || !owned.revision || owned.saveRequest) return Promise.reject(new Error("Saving is unavailable or busy"));
           return new Promise<SavedRecord>((resolve, reject) => {
             const id = ++saveId; owned.saveRequest = { id, resolve, reject };
             try { owned.worker.postMessage({ type: "SAVE", sessionId, generation: owned.generation, requestId: id }); }

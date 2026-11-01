@@ -25,14 +25,19 @@ server-analysis slice and does not define current temporary custody.
   source body. Inspection neither contacts the provider/server nor reruns
   analysis; it renders source as inert text. See
   xref:unit-inspection.adoc[Unit Source Inspection].
-* *Provider:* Read public GitHub anonymously from the browser using only the
+* *Local input:* Use only the explicitly selected read-only browser directory
+  capability, with pre-descent exclusions and no Git/repository execution. No
+  local data reaches a provider or host before Save. See
+  xref:local-working-tree.adoc[Local Working-Tree Analysis].
+* *Provider:* In GitHub mode, read anonymously from the browser using only the
   fixed API/raw origins and validated immutable identities. Omit credentials
   and referrers. Never execute repository code or use its text as an asset URL.
 * *Hosting:* Serve only manifest-public application/worker/parser assets and
   the bounded saved-investigation API.
   Keep the Node host and manifest private. Loopback is the default. Remote
   browser analysis requires HTTPS for Web Crypto; this milestone supplies no
-  TLS ingress, Internet deployment, private provider, or device qualification.
+  TLS ingress, Internet deployment, authenticated private-provider acquisition,
+  or device-capacity qualification.
 * *Explicit shared persistence:* There is no login or automatic saving. Only
   explicit Save uploads source/evidence. The
   xref:saved-investigations.adoc[saved-investigation policy] owns persistence,

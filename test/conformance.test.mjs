@@ -373,6 +373,8 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "application/city-payload.ts",
     "application/internal/source-byte-ownership.ts",
     "application/investigation-capture.ts",
+    "application/investigation-origin.ts",
+    "application/local-source.ts",
     "application/main-controller.ts",
     "application/metric-explanation.ts",
     "application/project-analysis.ts",
@@ -397,6 +399,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/district-inspection-view.ts",
     "edge/github-revision-gateway.ts",
     "edge/github-source-gateway.ts",
+    "edge/local-folder-gateway.ts",
     "edge/main.ts",
     "edge/node/analysis-worker-entry.ts",
     "edge/node/analysis-worker-production.ts",
@@ -813,7 +816,7 @@ test("commands preserve the canonical package audit sequence and CI separates re
     start: "node dist/server/standalone.mjs",
     "test:package": "node tools/audit-standalone-package.mjs && node tools/check-standalone-signals.mjs && node tools/check-standalone-browser.mjs",
     "docs:build": "antora antora-playbook.yml",
-    verify: "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build",
+    verify: "npm run standalone:local-native && npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build",
     "typecheck:node": "tsc -p tsconfig.node.json",
     "standalone:build": "node tools/build-standalone.mjs",
     "standalone:audit": "node tools/audit-standalone.mjs",
@@ -822,7 +825,8 @@ test("commands preserve the canonical package audit sequence and CI separates re
     "standalone:package": "node tools/audit-standalone-package.mjs",
     "standalone:signals": "node tools/check-standalone-signals.mjs",
     "standalone:browser": "node tools/check-standalone-browser.mjs",
-    "standalone:verify": "npm run standalone:build && npm run standalone:audit && npm run standalone:reproducibility && npm run standalone:start && npm run standalone:package && npm run standalone:signals && npm run standalone:browser",
+    "standalone:local-native": "node tools/check-local-folder-native.mjs --allow-public-documents-synthetic --evidence build/evidence/local-folder-native",
+    "standalone:verify": "npm run standalone:local-native && npm run standalone:build && npm run standalone:audit && npm run standalone:reproducibility && npm run standalone:start && npm run standalone:package && npm run standalone:signals && npm run standalone:browser",
   });
 
   const ci = await readText(".github/workflows/ci.yml");

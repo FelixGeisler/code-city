@@ -1,7 +1,8 @@
 = Architecture Constraints
 
-* Public GitHub acquisition and TypeScript/WASM analysis run in a browser Web
-  Worker, never on the UI thread or in the application server.
+* Public GitHub or selected local-directory acquisition and TypeScript/WASM
+  analysis run in a browser Web Worker, never on the UI thread or server. Local
+  directory access is read-only, with exclusions pruned before descent.
 * Source is untrusted data. Code City never executes repository scripts,
   builds, tests, hooks, or dynamically selected code.
 * Requirements own admission, algorithms, processing limits, and visual mapping.
@@ -10,7 +11,7 @@
   context. Direct insecure remote HTTP cannot perform analysis.
 * Only `--port` is required. The host defaults to loopback; a non-loopback bind
   also requires a canonical host. No analysis-capacity setting remains.
-* Private repositories, Internet deployment, TLS ingress, and Raspberry Pi
+* Direct authenticated provider acquisition, Internet deployment, TLS ingress, and Raspberry Pi
   performance/concurrency/memory qualification are not supplied.
 
 == Package boundary

@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
 export const FIXTURE_REVISION = "a".repeat(40);
+export function providerRequestLeaksPrivateHeaders(headers) {
+  // CDP Network metadata includes Referer:"" for explicit no-referrer fetches.
+  // Empty referrer carries no data; credentials and any nonempty referrer fail.
+  return Object.entries(headers).some(([name,value])=>/^(authorization|cookie)$/iu.test(name)||(/^(referer|referrer)$/iu.test(name)&&value!==""));
+}
 const ROOT = "b".repeat(40);
 const blob = bytes => createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 
@@ -135,23 +140,22 @@ export function createBrowserProviderHarness(cdp, origin, onFailure) {
     }
     if (method === "Network.requestWillBeSent") {
       const url = new URL(params.request.url);
-      if (![origin, "https://api.github.com", "https://raw.githubusercontent.com"].includes(url.origin)) throw new Error("Unexpected observed network origin");
       const state = workers.get(sessionId) ?? pageWorkers.get(sessionId);
       if (workers.has(sessionId)) {
         const owner = workers.get(sessionId);
         owner.networkUrls.add(params.request.url);
         networkOwners.set(params.requestId, owner);
       }
-      // Never mirror large binary uploads into CDP JSON. Observe their metadata
-      // through Network while allowing the actual request to reach the host.
-      if (url.origin === origin && url.pathname.startsWith("/api/investigations")) requests.push({ url: url.href, method: params.request.method, worker: workers.has(sessionId), sessionId: state?.sessionId ?? sessionId, headers: params.request.headers });
+      // Observe EVERY page/worker request, including un-intercepted same-origin
+      // routes. Network has maxPostDataSize:0: retain metadata, never binary bodies.
+      requests.push({ url: url.href, method: params.request.method, worker: !!state, sessionId: state?.sessionId ?? sessionId, headers: params.request.headers });
+      if (![origin, "https://api.github.com", "https://raw.githubusercontent.com"].includes(url.origin)) throw new Error("Unexpected observed network origin");
     }
     if (method !== "Fetch.requestPaused") return;
     const url = new URL(params.request.url);
     const state = networkOwners.get(params.networkId) ?? workers.get(sessionId) ?? pageWorkers.get(sessionId);
     const ownerSessionId = state?.sessionId;
     if (state) interceptions.set(params.requestId, state);
-    requests.push({ url: url.href, method: params.request.method, worker: !!state, sessionId: ownerSessionId ?? sessionId, headers: params.request.headers });
     if (state && detached.has(state.sessionId)) {
       // Fetch notifications use the page channel and can arrive after the
       // owning worker detached. Network.requestId preserves the real owner;

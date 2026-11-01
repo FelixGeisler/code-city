@@ -10,7 +10,7 @@ test("root commands atomically activate the canonical standalone artifact", () =
   assert.equal(packageManifest.scripts.start, "node dist/server/standalone.mjs");
   assert.equal(packageManifest.scripts["test:reproducibility"], "node tools/check-standalone-reproducibility.mjs && node tools/audit-cutover.mjs");
   assert.equal(packageManifest.scripts["test:package"], "node tools/audit-standalone-package.mjs && node tools/check-standalone-signals.mjs && node tools/check-standalone-browser.mjs");
-  assert.equal(packageManifest.scripts.verify, "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build");
+  assert.equal(packageManifest.scripts.verify, "npm run standalone:local-native && npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build");
   assert.match(packageManifest.scripts.typecheck, /tsconfig\.main\.json[\s\S]*tsconfig\.worker\.json[\s\S]*tsconfig\.node\.json/u);
 });
 
@@ -23,6 +23,7 @@ test("prepared standalone checks remain available without owning canonical root 
     "standalone:package": "node tools/audit-standalone-package.mjs",
     "standalone:signals": "node tools/check-standalone-signals.mjs",
     "standalone:browser": "node tools/check-standalone-browser.mjs",
-    "standalone:verify": "npm run standalone:build && npm run standalone:audit && npm run standalone:reproducibility && npm run standalone:start && npm run standalone:package && npm run standalone:signals && npm run standalone:browser",
+    "standalone:local-native": "node tools/check-local-folder-native.mjs --allow-public-documents-synthetic --evidence build/evidence/local-folder-native",
+    "standalone:verify": "npm run standalone:local-native && npm run standalone:build && npm run standalone:audit && npm run standalone:reproducibility && npm run standalone:start && npm run standalone:package && npm run standalone:signals && npm run standalone:browser",
   });
 });

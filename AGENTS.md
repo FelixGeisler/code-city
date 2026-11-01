@@ -93,7 +93,9 @@ commands merely as a ritual.
   performs its second build only under `build/reproducibility/`.
 * `npm run test:package` audits the existing canonical package without
   rebuilding or changing it.
-* Run `npm run verify` for the repository-wide gate. It executes type checking,
+* Run `npm run verify` for the repository-wide gate. A native folder preflight
+  fails early on unsupported OS/browser access, before the expensive checks. It
+  then executes type checking,
   tests, the canonical build, reproducibility, packaged HTTP audit, and the
   documentation build in that order.
 * For `npm run dev` and `npm run start`, verify both startup and clean shutdown

@@ -1,6 +1,7 @@
 = Introduction and Goals
 
-Code City turns one immutable public GitHub revision into an interactive city.
+Code City turns a local working-tree capture or immutable public GitHub revision
+into an interactive city.
 The browser owns acquisition and analysis in a dedicated Web Worker; the native
 Node.js service serves verified assets and explicitly saved snapshots. This boundary is selected by
 xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015].
@@ -13,7 +14,7 @@ xref:adr/0015-browser-analysis-and-server-saved-investigations.adoc[ADR 0015].
 |Deterministic evidence |Preserve immutable identity, full acquisition, accepted algorithms, and stale-publication guards.
 |Safe presentation |Validate worker results and render paths and metrics as inert data.
 |Verifiable delivery |Close the package manifest, reproduce bytes, and exercise the actual packaged browser worker.
-|Shared investigations |Persist explicit immutable client-created snapshots; reopen by URL without GitHub or parser work.
+|Shared investigations |Persist explicit immutable client-created snapshots; reopen code/results by URL without folder access, GitHub or parser work.
 |===
 
 Product behavior and bounds are authoritative in

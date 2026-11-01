@@ -19,19 +19,21 @@ loaded browser-owned completed view.
 
 . The main context validates input and captured exclusions and assigns a local
   generation. It creates a dedicated browser worker only for valid Analyze.
-. `analyzeRepository` resolves an immutable revision, validates the complete
-  inventory, and calls the shared raw acquisition pipeline. Its bounded window
-  retains completed but unconsumed reads and commits outcomes canonically;
-  failure precedence and settlement remain requirement-owned.
+. GitHub input resolves an immutable revision and validates complete inventory.
+  Local input transfers the read-only directory capability, prunes exclusions
+  before descent and hashes actual captured bytes/settings. Bounded acquisition
+  windows retain unconsumed reads and consume canonically; failure ordering and
+  settlement remain requirement-owned. Local progress precedes final capture ID;
+  no dummy commit is emitted.
 . The same application sequence initializes the pinned parser once, processes
   supported files with per-file continuation, reports completion after cleanup,
   and constructs the deterministic city.
 . The worker retains normalized source for text-valid files and bounded
-  original source/unit/contribution evidence for explicit Save. Packed unit
-  tables, finalized complexities, observations and recorded decision-owner runs
-  also support inspection independently of the Save budget. Unsupported
-  original text is retained too. Capture-budget exhaustion disables saving,
-  not analysis or unit inspection. It publishes presentation data and failure rows to the UI.
+  unit/contribution evidence for explicit source-once Save. Packed unit tables,
+  finalized complexities, observations and decision-owner runs support inspection
+  independently of the Save budget. Unsupported binary text has no persisted
+  source section. Capture-budget exhaustion disables saving, not analysis or
+  unit inspection. It publishes presentation data and failure rows to the UI.
 . The main context validates event shape, local identity, generation, revision,
   monotonic phase counts, and city payload before presentation. Inventory,
   inspector, and existing presenter commit as one local publication.
@@ -47,7 +49,9 @@ server write queue, clock-driven percentage, or ETA exists.
 Before cancellation or replacement can publish another result, the old attempt
 is ineligible. During provider activity, STOP aborts its signal and the source
 window settles all owned reads; the cancellation/terminal acknowledgement
-permits worker release. After acquisition, termination does not wait for a busy
+permits worker release. Local read-only directory work owns no provider request
+or write; its worker is terminated immediately because native enumeration/getFile
+promises cannot reliably be aborted. After acquisition, termination does not wait for a busy
 synchronous parser to receive a message. No browser worker-exit event is assumed.
 
 Only the newest queued local replacement creates another worker. Old messages
@@ -62,7 +66,7 @@ File selection asks the completed worker for a bounded unit page. The worker
 indexes only the selected file's retained facts and normalized byte/line mapping.
 Explicit unit activation requests a source window and a page of recorded owned
 contributions. This does not initialize a parser, reacquire source, recompute
-metrics or send HTTP requests. Saved investigations adapt their version-2
+metrics or send HTTP requests. Saved investigations adapt their version-3
 stored tuples to the same reader. Explicit source opening also lazily initializes
 Shiki's bundled Oniguruma highlighting engine in this worker; it emits validated
 palette-indexed text spans, not HTML. This is distinct from the analysis parser.
@@ -97,8 +101,8 @@ xref:requirements:unit-inspection.adoc[Unit Source Inspection].
   It verifies hashes and version, restores retained source/evidence and
   publishes the recorded city. GitHub and parser initialization are not used.
 
-The picker reads only receipt metadata and groups by repository; refs/commits
-coexist under random IDs. Capacity, corruption and operator recovery are owned
+The picker reads only receipt metadata and groups by input kind and
+repository/folder; refs/commits and local captures coexist under random IDs. Capacity, corruption and operator recovery are owned
 by xref:requirements:saved-investigations.adoc[Saved Investigations].
 
 == Qualification
