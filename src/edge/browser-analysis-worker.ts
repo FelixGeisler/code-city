@@ -4,7 +4,7 @@ import { SOURCE_PAGE_BYTES, createFileInspection, validateInspectionQuery, type 
 import { analyzeRepository } from "../application/analyze-repository";
 import { analyzeProjectSources, type ProjectAnalysis } from "../application/project-analysis";
 import { investigationIdentity, validWorkingTreeName, type InvestigationOrigin } from "../application/investigation-origin";
-import { acquireLocalWorkingTree } from "../application/local-working-tree";
+import { acquireLocalWorkingTree } from "../application/local-source";
 import { createLocalFolderGateway } from "./local-folder-gateway";
 import { buildCity } from "../domain/city-model";
 import { validateCityPayload } from "../application/city-payload";
