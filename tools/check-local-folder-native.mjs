@@ -1,0 +1,385 @@
+// Real external File System Access qualification, NOT OPFS, FileList or application/Save acceptance.
+// Node 24+, installed Google Chrome; Windows: PowerShell/UIAutomation, English Chrome UI.
+// Linux: non-root user, Xvfb (-displayfd), python3, libX11. Never uses the caller's DISPLAY.
+// Run: node tools/check-local-folder-native.mjs --evidence <directory>
+// Windows additionally requires: --allow-public-documents-synthetic
+// Each run writes a unique evidence subdirectory; failure is nonzero, never a native-gate skip.
+// No installs/build outputs. Actual gateway/acquisition TS is stripped by Node and served as ESM.
+import assert from 'node:assert/strict';
+import { randomUUID, createHash } from 'node:crypto';
+import { spawn, execFile as execFileCallback } from 'node:child_process';
+import { promisify } from 'node:util';
+import { stripTypeScriptTypes } from 'node:module';
+import { mkdtemp, mkdir, readFile, writeFile, lstat, readdir, unlink, rmdir, readlink, symlink, chmod } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import http from 'node:http';
+import net from 'node:net';
+import { fileURLToPath } from 'node:url';
+import { discoverInstalledChrome, readInstalledChromeVersion, connectCdp, closeInstalledChrome } from './chrome-cdp.mjs';
+
+const execFile = promisify(execFileCallback);
+const tools = path.dirname(fileURLToPath(import.meta.url));
+const project = path.dirname(tools);
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const same = (a, b) => a.dev === b.dev && a.ino === b.ino;
+async function absent(p) { try { await lstat(p); return false; } catch (e) { if (e.code === 'ENOENT') return true; throw e; } }
+async function bounded(work, ms, label) {
+  let timer;
+  try { return await Promise.race([work, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(`${label} timed out`)), ms); })]); }
+  finally { clearTimeout(timer); }
+}
+async function until(check, label) {
+  const end = Date.now() + 10000;
+  do { const value = await check(); if (value) return value; await delay(100); } while (Date.now() < end);
+  throw Error(`${label} unavailable within 10s`);
+}
+function processHandle(executable, args, options = {}) {
+  const child = spawn(executable, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, ...options });
+  const closed = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
+  // Keep spawn failures handled even before the startup waiter is installed.
+  let error; child.on('error', e => { error = e; });
+  return { child, closed, get error() { return error; } };
+}
+// A timeout must also release the OS child/stdio handles, not just reject a promise.
+// Forced shutdown is a failed qualification: preserve its profile for inspection.
+async function closeNativeChrome(chrome, cdp, terminateOwned, timeout = 15000) {
+  try { await bounded(closeInstalledChrome(chrome, cdp), timeout, 'Chrome closed barrier'); }
+  catch (error) {
+    cdp?.close();
+    try { await terminateOwned('SIGTERM'); }
+    finally {
+      if(chrome.child.exitCode===null&&chrome.child.signalCode===null)chrome.child.kill();
+      try { await bounded(chrome.closed, 5000, 'Forced Chrome closure'); }
+      catch {
+        try { await terminateOwned('SIGKILL');if(chrome.child.exitCode===null&&chrome.child.signalCode===null)chrome.child.kill('SIGKILL');await bounded(chrome.closed,2000,'Killed Chrome closure'); }
+        finally { chrome.child.unref();chrome.child.stderr?.destroy(); }
+      }
+    }
+    throw error;
+  }
+}
+async function closeNativeDisplay(display, timeout = 5000) {
+  if(display.child.exitCode===null&&display.child.signalCode===null)display.child.kill('SIGTERM');
+  try { return await bounded(display.closed,timeout,'Xvfb close'); }
+  catch(error) {
+    try {
+      if(display.child.exitCode===null&&display.child.signalCode===null)display.child.kill('SIGKILL');
+      await bounded(display.closed,2000,'Killed Xvfb closure');
+    } finally { display.child.unref();display.child.stderr?.destroy();display.child.stdio[3]?.destroy(); }
+    throw error;
+  }
+}
+function safeTree(identities, links, removed) {
+  return async function remove(p) {
+    const s = await lstat(p);
+    if (s.isSymbolicLink()) {
+      assert(links.has(p), `Unexpected link retained: ${p}`);
+      assert.equal(path.resolve(await readlink(p)), path.resolve(links.get(p)), 'Link target changed; retain');
+      await unlink(p); removed.push({ path: p, mode: 'unlink-only', target: links.get(p) });
+    } else if (s.isDirectory()) {
+      if (identities.has(p)) assert(same(s, identities.get(p)), `Directory identity changed: ${p}`);
+      for (const name of await readdir(p)) await remove(path.join(p, name));
+      await rmdir(p);
+    } else { assert(s.isFile(), `Unexpected object retained: ${p}`); await unlink(p); }
+  };
+}
+// Compile only the actual local-source graph. No dynamic arbitrary-file HTTP route.
+async function sourceModules() {
+  const routes = new Map();
+  async function visit(relative) {
+    const route = '/' + relative.replaceAll('\\', '/');
+    if (routes.has(route)) return;
+    assert(relative.startsWith('src/') && !relative.split('/').includes('..'));
+    const source = await readFile(path.join(project, relative + '.ts'), 'utf8');
+    const javascript = stripTypeScriptTypes(source, { mode: 'strip' });
+    routes.set(route, javascript);
+    for (const match of javascript.matchAll(/\bfrom\s*["'](\.[^"']+)["']/g)) {
+      await visit(path.posix.normalize(path.posix.join(path.posix.dirname(relative), match[1])));
+    }
+  }
+  await visit('src/edge/local-folder-gateway');
+  await visit('src/application/local-source');
+  return routes;
+}
+const page = `<!doctype html><meta charset="utf-8"><title>Code City synthetic native qualification</title>
+<script>
+window.worker = new Worker('/worker.js', {type:'module'});
+let next=0; const pending=new Map();
+worker.onmessage=({data})=>{const p=pending.get(data.id); if(!p)return; pending.delete(data.id); data.error?p.reject(Error(JSON.stringify(data.error))):p.resolve(data.result)};
+worker.onerror=e=>{for(const p of pending.values())p.reject(Error(e.message));pending.clear()};
+window.rpc=(command)=>new Promise((resolve,reject)=>{const id=++next;pending.set(id,{resolve,reject});worker.postMessage({id,command,handle:root})});
+window.pickerState='idle'; window.pick=()=>{pickerState='pending';window.pickerError=null;showDirectoryPicker({mode:'read'}).then(h=>{window.root=h;pickerState='selected'},e=>{window.pickerError={name:e.name,message:e.message};pickerState='rejected'})};
+</script>`;
+const workerSource = `import {createLocalFolderGateway} from '/src/edge/local-folder-gateway';
+import {acquireLocalWorkingTree} from '/src/application/local-source';
+let root, inventory; const snapshots={}; let log=[];
+const attempt=async f=>{try{return {ok:true,value:await f()}}catch(e){return {ok:false,name:e.name,message:e.message}}};
+// Instrumentation delegates every operation to the real native capability, preserving pruning proof.
+function instrument(h,p='') {return {kind:h.kind,name:h.name,
+ async *values(){log.push({op:'values',path:p}); for await(const c of h.values()){const childPath=p?p+'/'+c.name:c.name;log.push({op:'entry',path:childPath,kind:c.kind});yield instrument(c,childPath)}},
+ async getFile(){log.push({op:'getFile',path:p});return h.getFile()}}}
+const signal=()=>new AbortController().signal;
+self.onmessage=async({data:{id,command,handle}})=>{try{let result;
+ if(command==='init'){root=handle;result={worker:typeof document==='undefined',native:root instanceof FileSystemDirectoryHandle,name:root.name,permission:await root.queryPermission({mode:'read'})}}
+ if(command==='capture'){log=[];const capture=await acquireLocalWorkingTree(root.name,['src/user-excluded','user-excluded'],signal(),createLocalFolderGateway(instrument(root))); result={capture,log}}
+ if(command==='inventory'){inventory=await createLocalFolderGateway(root).loadInventory(['src/user-excluded','user-excluded'],signal());result={kind:inventory.kind,paths:inventory.candidates?.map(c=>c.canonicalPath)}}
+ if(command==='read-inventory'){result={};for(const c of inventory.candidates)if(['mutate.cs','delete.cs','denied.cs'].includes(c.canonicalPath))result[c.canonicalPath]=await c.readRawSource(signal())}
+ if(command==='links'){result={};for(const name of ['outward-junction','outward-dir-link','outward-file-link.cs','loop'])result[name]=await attempt(async()=>{const h=name.endsWith('.cs')?await root.getFileHandle(name):await root.getDirectoryHandle(name);if(h.kind==='file')return(await h.getFile()).text();return Array.fromAsync(h.keys())})}
+ if(command==='snapshot'){result={};for(const name of ['mutate.cs','delete.cs','denied.cs']){const h=await root.getFileHandle(name),f=await h.getFile();snapshots[name]={h,f};result[name]={size:f.size,text:await f.text()}}}
+ if(command==='read-snapshots'){result={};for(const [name,{h,f}]of Object.entries(snapshots))result[name]={oldFile:await attempt(()=>f.text()),newFile:await attempt(async()=>await(await h.getFile()).text())}}
+ if(command==='directory-read')result=await attempt(async()=>Array.fromAsync((await root.getDirectoryHandle('acl-directory')).keys()));
+ self.postMessage({id,result});
+}catch(e){self.postMessage({id,error:{name:e.name,message:e.message}})}};`;
+
+async function selfTest() {
+  const scratch = await mkdtemp(path.join(os.tmpdir(), 'code-city-native-selftest-'));
+  const identities = new Map([[scratch, await lstat(scratch)]]), links = new Map(), removed = [];
+  const remove = safeTree(identities, links, removed);
+  const outside = path.join(scratch, 'target'), inside = path.join(scratch, 'inside');
+  try {
+    await mkdir(outside); await mkdir(inside); await writeFile(path.join(outside, 'keep'), 'synthetic');
+    const link = path.join(inside, 'link'); await symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    await assert.rejects(remove(inside), /Unexpected link retained/);
+    assert.equal(await readFile(path.join(outside, 'keep'), 'utf8'), 'synthetic');
+    links.set(link, inside); await assert.rejects(remove(inside), /Link target changed/);
+    links.set(link, outside); await remove(inside);
+    assert.equal(await readFile(path.join(outside, 'keep'), 'utf8'), 'synthetic');
+    assert.equal(removed[0].mode, 'unlink-only');
+    const modules = await sourceModules();
+    assert(modules.get('/src/edge/local-folder-gateway').includes('createLocalFolderGateway'));
+    assert(modules.get('/src/application/local-source').includes('acquireLocalWorkingTree'));
+    const child=processHandle(process.execPath,['-e','setInterval(()=>{},1000)']);
+    await new Promise((resolve,reject)=>{child.child.once('spawn',resolve);child.child.once('error',reject);});
+    await assert.rejects(closeNativeChrome(child,{send:()=>new Promise(()=>{}),close(){}},async()=>{child.child.kill();},40),/Chrome closed barrier timed out/);
+    assert(child.child.exitCode!==null||child.child.signalCode!==null,'Timeout left the owned child alive');
+    const display=processHandle(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore','ignore','pipe','pipe']});
+    await new Promise((resolve,reject)=>{display.child.once('spawn',resolve);display.child.once('error',reject);});
+    const kill=display.child.kill.bind(display.child);display.child.kill=signal=>signal==='SIGTERM'?true:kill(signal);
+    await assert.rejects(closeNativeDisplay(display,40),/Xvfb close timed out/);
+    assert(display.child.exitCode!==null||display.child.signalCode!==null,'Display timeout left the owned child alive');
+    assert(display.child.stderr.destroyed&&display.child.stdio[3].destroyed,'Display pipes remain referenced');
+    console.log(JSON.stringify({ status: 'passed', checks: ['unexpected link refusal', 'changed link target refusal', 'verified link unlink preserves target', 'actual TS graph compilation', 'stalled close terminates child and awaits streams', 'stalled display terminates child and closes both pipes'], modules: [...modules.keys()] }));
+  } finally { await remove(scratch); }
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.length === 1 && args[0] === '--self-test') return selfTest();
+  if (args.length === 1 && args[0] === '--help') {
+    console.log('node tools/check-local-folder-native.mjs --evidence <directory> [--allow-public-documents-synthetic]\nWindows: installed English Chrome, PowerShell/UIAutomation. Linux: installed Chrome, non-root, Xvfb, python3, libX11; own display only. --self-test runs non-browser cleanup/compiler regressions.'); return;
+  }
+  let evidenceRoot, authorized = false;
+  for (let i=0;i<args.length;i++) {
+    if (args[i] === '--evidence' && args[i+1]) evidenceRoot = path.resolve(args[++i]);
+    else if (args[i] === '--allow-public-documents-synthetic') authorized = true;
+    else throw Error('Unknown/incomplete argument: ' + args[i]);
+  }
+  assert(evidenceRoot, '--evidence <directory> is required');
+  assert(['win32','linux'].includes(process.platform), 'Only Windows and Linux native paths are supported');
+  assert(process.platform !== 'win32' || authorized, 'Explicit --allow-public-documents-synthetic authorization required');
+  await mkdir(evidenceRoot, {recursive:true});
+  const evidence = await mkdtemp(path.join(evidenceRoot, 'run-'));
+  const result = { status:'failed', started:new Date().toISOString(), platform:process.platform, os:os.release(), evidence, actions:[], links:{}, cleanup:[], limitations:[] };
+  const identities = new Map(), links = new Map(), denied = new Set();
+  const remove = safeTree(identities, links, result.cleanup);
+  let scratch, fixture, empty, profile, server, chrome, cdp, sessionId, discovery, ticks, xvfb, sid, linuxEnvironment;
+  const ps = args => execFile('powershell.exe', ['-NoProfile', ...args], {windowsHide:true,timeout:20000,maxBuffer:4*2**20});
+  const save = () => writeFile(path.join(evidence, 'result.json'), JSON.stringify(result,null,2)+'\n');
+  async function ownDirectory(p) { await mkdir(p); identities.set(p, await lstat(p)); }
+  async function assertOwned(p) { const s=await lstat(p); assert(s.isDirectory()&&!s.isSymbolicLink()&&identities.has(p)&&same(s,identities.get(p)), 'Owned root changed: '+p); }
+  async function dialog(mode, target=fixture) {
+    if(mode==='select') await assertOwned(target);
+    const x=await ps(['-File',path.join(tools,'local-folder-native-windows.ps1'),'-OwnedPid',String(chrome.child.pid),'-Executable',discovery.executable,'-Profile',profile,'-Mode',mode,'-Fixture',target,'-ExpectedOrigin',result.origin,'-OwnershipFile',path.join(scratch,'ownership.json'),...(ticks?['-CreationTicks',ticks]:[])]);
+    const data=JSON.parse(x.stdout.trim()); ticks??=data.creationTicks; result.actions.push(data); await save(); return data;
+  }
+  async function linuxDialog(mode, target=fixture) {
+    const x=await execFile('python3',[path.join(tools,'local-folder-native-linux.py'),'--display',result.display,'--xvfb-pid',String(xvfb.child.pid),'--chrome-pid',String(chrome.child.pid),'--profile',profile,'--ownership',path.join(scratch,'ownership.json'),'--mode',mode,'--fixture',target],{env:linuxEnvironment,timeout:15000});
+    const data=JSON.parse(x.stdout);result.actions.push(data);await save();return data;
+  }
+  async function evaluate(expression, awaitPromise=false, userGesture=false) {
+    const r=await bounded(cdp.send('Runtime.evaluate',{expression,awaitPromise,userGesture,returnByValue:true},sessionId),15000,'Browser evaluation');
+    if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;
+  }
+  const worker = command => evaluate('rpc('+JSON.stringify(command)+')',true);
+  async function pick(target) {
+    await assertOwned(target);await evaluate('pick();void 0',false,true);
+    if(process.platform==='win32') {
+      await until(async()=>{const d=await dialog('inspect');return d.dialogs.length;},'Owned native chooser');
+      await dialog('select',target); await delay(800);
+      if((await evaluate('pickerState'))==='pending') {
+        const d=await dialog('inspect');if(d.dialogs.length){await dialog('confirm',target);await delay(800);}
+      }
+      if((await evaluate('pickerState'))==='pending') {
+        await until(async()=>{const d=await dialog('inspect-browser');return d.browserUi.some(e=>e.type==='ControlType.Button'&&e.name==='Allow');},'Owned read permission prompt');
+        await dialog('allow-read',target);
+      }
+    } else {
+      await linuxDialog('select',target); await delay(800);
+      if((await evaluate('pickerState'))==='pending') await linuxDialog('allow-read',target);
+    }
+    await until(async()=>(await evaluate('pickerState'))!=='pending','Native picker resolution');
+    const state=await evaluate('({state:pickerState,error:window.pickerError,root:window.root?{name:root.name,native:root instanceof FileSystemDirectoryHandle}:null})');
+    assert.equal(state.state,'selected',JSON.stringify(state));assert.equal(state.root.native,true);assert.equal(state.root.name,path.basename(target));return state;
+  }
+  async function restore(p) {
+    await assertOwned(fixture);assert(!(await lstat(p)).isSymbolicLink(),'ACL target changed');
+    if(process.platform==='win32')await execFile('icacls.exe',[p,'/remove:d','*'+sid],{windowsHide:true,timeout:10000});
+    else await chmod(p, p===path.join(fixture,'denied.cs')?0o600:0o700);
+    denied.delete(p);
+  }
+  try {
+    if(process.platform==='linux') {
+      assert(process.getuid()!==0,'Native chmod qualification requires a non-root Linux user; no --no-sandbox fallback');
+      await execFile('python3',['--version'],{timeout:5000});
+      await execFile('Xvfb',['-help'],{timeout:5000});
+    }
+    discovery=await discoverInstalledChrome();result.chrome={...discovery,version:await readInstalledChromeVersion(discovery,{execFileImpl:(command,args,options)=>execFile(command,args,{...options,timeout:10000})})};
+    const modules=await sourceModules();
+    result.servedModuleSha256=Object.fromEntries([...modules].map(([name,text])=>[name,createHash('sha256').update(text).digest('hex')]));
+    result.toolSha256={};for(const name of ['check-local-folder-native.mjs','local-folder-native-windows.ps1','local-folder-native-linux.py'])result.toolSha256[name]=createHash('sha256').update(await readFile(path.join(tools,name))).digest('hex');
+    scratch=await mkdtemp(path.join(os.tmpdir(),'code-city-native-'));identities.set(scratch,await lstat(scratch));
+    profile=path.join(scratch,'profile');await ownDirectory(profile);
+    if(process.platform==='linux') {
+      // Isolate GTK history/config/auth as well as the display. An ambient desktop
+      // portal must never launch a chooser on the caller's D-Bus/Wayland session.
+      const home=path.join(scratch,'home'),runtime=path.join(scratch,'runtime'),authority=path.join(scratch,'xauthority');
+      await ownDirectory(home);await ownDirectory(runtime);await chmod(runtime,0o700);await writeFile(authority,'',{mode:0o600});
+      linuxEnvironment={...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,'config'),XDG_DATA_HOME:path.join(home,'data'),XDG_CACHE_HOME:path.join(home,'cache'),XDG_RUNTIME_DIR:runtime,XAUTHORITY:authority,DBUS_SESSION_BUS_ADDRESS:'unix:path='+path.join(scratch,'no-session-bus'),WAYLAND_DISPLAY:'',GTK_USE_PORTAL:'0'};
+    }
+    const token=randomUUID();
+    fixture=process.platform==='win32'?path.win32.join('C:/Users/Public/Documents','CodeCitySynthetic-'+token):path.join(scratch,'CodeCitySynthetic-'+token);
+    empty=fixture+'-empty';await ownDirectory(fixture);await ownDirectory(empty);
+    Object.assign(result,{workspace:scratch,fixture,empty,profile});await save();
+    await writeFile(path.join(scratch,'ownership.json'),JSON.stringify({fixture,empty,profile,identities:Object.fromEntries([...identities].map(([p,s])=>[p,{dev:s.dev,ino:s.ino}]))}));
+    for(const dir of ['.git','node_modules','dist','build','bin','obj','user-excluded','src','src/.GIT','src/user-excluded','acl-directory']) {
+      await mkdir(path.join(fixture,dir));await writeFile(path.join(fixture,dir,'sentinel.cs'),'// synthetic excluded or ordinary '+dir+'\nclass Synthetic {}\n');
+    }
+    for(const name of ['edited.cs','mutate.cs','delete.cs','denied.cs'])await writeFile(path.join(fixture,name),'// synthetic original\r\nclass Synthetic {}\r\n');
+    await writeFile(path.join(fixture,'edited.cs'),'// synthetic edited before native capture\r\nclass Edited {}\r\n');
+    for(const name of ['space name.cs','épreuve.cs','😀.cs'])await writeFile(path.join(fixture,'src',name),'// synthetic path '+name+'\nclass Synthetic {}\n');
+    await writeFile(path.join(empty,'outside.cs'),'// SYNTHETIC_OUTSIDE_MUST_NOT_READ\n');
+    for(const [name,target,type]of [
+      ...(process.platform==='win32'?[['outward-junction',empty,'junction']]:[]),
+      ['outward-dir-link',empty,'dir'],['outward-file-link.cs',path.join(empty,'outside.cs'),'file'],['loop',fixture,process.platform==='win32'?'junction':'dir']]) {
+      const p=path.join(fixture,name);
+      try {await symlink(target,p,type);links.set(p,target);assert((await lstat(p)).isSymbolicLink());result.links[name]={created:true,target};}
+      catch(e) { if(process.platform!=='win32'||!['EPERM','EACCES'].includes(e.code))throw e; result.links[name]={created:false,code:e.code};result.limitations.push(name+': Windows symbolic link privilege unavailable; not qualified'); }
+    }
+    // Select the allowed external target separately, so containment cannot pass just because the target is protected Temp.
+    await save();
+    if(process.platform==='linux') {
+      xvfb=processHandle('Xvfb',['-displayfd','3','-screen','0','1280x900x24','-nolisten','tcp','-ac'],{stdio:['ignore','ignore','pipe','pipe']});
+      const display=await bounded(new Promise((resolve,reject)=>{let text='';xvfb.child.once('error',reject);xvfb.child.once('exit',()=>reject(Error('Xvfb exited during startup')));xvfb.child.stdio[3].on('data',chunk=>{text+=String(chunk);if(/^\d+\n$/.test(text))resolve(':'+text.trim());});}),10000,'Isolated Xvfb');
+      assert(/^:\d+$/.test(display));result.display=display;result.xvfbPid=xvfb.child.pid;linuxEnvironment.DISPLAY=display;
+    }
+    server=http.createServer((req,res)=>{
+      const text=req.url==='/'?page:req.url==='/worker.js'?workerSource:modules.get(req.url);
+      res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type',req.url==='/'?'text/html':'text/javascript');res.statusCode=text===undefined?404:200;res.end(text??'Not found');
+    });
+    await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve)});
+    assert.notEqual(server.address().port,55583);result.origin='http://127.0.0.1:'+server.address().port;
+    const arguments_=['--remote-debugging-port=0','--user-data-dir='+profile,'--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update','--disable-default-apps','--disable-sync','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows','--disable-features=CalculateNativeWinOcclusion','--lang=en-US',...(process.platform==='win32'?['--window-position=-22000,-22000']:['--ozone-platform=x11','--disable-gpu']),'--window-size=900,650','about:blank'];
+    // Explicit headed launch here only; chrome-cdp's default headless arguments and closed barrier remain unchanged.
+    chrome=processHandle(discovery.executable,arguments_,{detached:process.platform==='linux',env:process.platform==='linux'?linuxEnvironment:process.env});
+    result.chrome.pid=chrome.child.pid;result.chrome.arguments=arguments_;
+    if(process.platform==='win32')await dialog('inspect');
+    const endpoint=await bounded(new Promise((resolve,reject)=>{let text='';chrome.child.once('error',reject);chrome.child.once('exit',()=>reject(Error('Chrome exited before CDP')));chrome.child.stderr.on('data',chunk=>{text=(text+String(chunk)).slice(-16384);result.chromeStderr=text;const match=/DevTools listening on (ws:\/\/[^\s]+)/.exec(text);if(match)resolve(match[1]);});}),20000,'Headed Chrome startup');
+    assert(/^ws:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+\/devtools\/browser\//.test(endpoint));
+    const connection=connectCdp(endpoint);cdp={...connection,send:(...args)=>bounded(connection.send(...args),15000,'CDP '+args[0])};
+    result.protocol=await cdp.send('Browser.getVersion');
+    if(process.platform==='linux') {
+      const start = async pid => {const text=await readFile('/proc/'+pid+'/stat','utf8');return text.slice(text.lastIndexOf(')')+1).trim().split(/\s+/)[19];};
+      const ownership=JSON.parse(await readFile(path.join(scratch,'ownership.json'),'utf8'));
+      ownership.linux={display:result.display,xvfbStart:await start(xvfb.child.pid),chromeStart:await start(chrome.child.pid),chromeExe:await readlink('/proc/'+chrome.child.pid+'/exe')};result.linuxOwnership=ownership.linux;
+      await writeFile(path.join(scratch,'ownership.json'),JSON.stringify(ownership));
+    }
+    const target=(await cdp.send('Target.getTargets')).targetInfos.find(t=>t.type==='page');
+    ({sessionId}=await cdp.send('Target.attachToTarget',{targetId:target.targetId,flatten:true}));await cdp.send('Page.enable',{},sessionId);
+    await cdp.send('Page.navigate',{url:result.origin},sessionId);
+    await until(()=>evaluate('typeof pick === "function"'),'Probe page');
+    result.environment=await evaluate('({secure:isSecureContext,picker:typeof showDirectoryPicker,ua:navigator.userAgent})');assert.equal(result.environment.secure,true);assert.equal(result.environment.picker,'function');
+    if(process.platform==='win32')await dialog('prepare');
+    result.externalTargetPicker=await pick(empty);await unlink(path.join(empty,'outside.cs'));
+    result.emptyCapture=await worker('init');result.emptyCapture=await worker('capture');
+    assert.equal(result.emptyCapture.capture.category,'No supported modules');
+    await writeFile(path.join(empty,'outside.cs'),'// SYNTHETIC_OUTSIDE_MUST_NOT_READ\n');
+    result.picker=await pick(fixture);result.worker=await worker('init');assert.equal(result.worker.worker,true);assert.equal(result.worker.native,true);assert.equal(result.worker.permission,'granted');
+    result.capture=await worker('capture');assert.equal(result.capture.capture.kind,'success',JSON.stringify(result.capture));
+    const files=result.capture.capture.acquired.modules;
+    assert.equal(files.find(f=>f.canonicalPath==='edited.cs')?.normalizedSource,'// synthetic edited before native capture\nclass Edited {}\n');
+    for(const n of ['space name.cs','épreuve.cs','😀.cs'])assert(files.some(f=>f.canonicalPath==='src/'+n));
+    assert(!files.some(f=>f.canonicalPath.includes('outward')||f.canonicalPath.includes('loop')||JSON.stringify(f).includes('SYNTHETIC_OUTSIDE')),'Link escaped native boundary');
+    for(const e of result.capture.log)if(e.op!=='entry')assert(!e.path.split('/').some(n=>['.git','node_modules','dist','build','bin','obj','user-excluded'].includes(n.toLowerCase())),'Excluded native operation '+JSON.stringify(e));
+    for(const excluded of ['.git','node_modules','dist','build','bin','obj','user-excluded','src/.GIT','src/user-excluded'])assert(result.capture.log.some(e=>e.op==='entry'&&e.path===excluded),'Expected native excluded entry '+excluded);
+    result.directLinks=await worker('links');
+    for(const [name,info]of Object.entries(result.links))if(info.created)assert.equal(result.directLinks[name].ok,false,'Native link lookup escaped: '+name);
+    result.inventory=await worker('inventory');assert.equal(result.inventory.kind,'inventory');result.before=await worker('snapshot');
+    await assertOwned(fixture);
+    await writeFile(path.join(fixture,'mutate.cs'),'// synthetic changed after getFile\nclass Changed { int Value => 12345; }\n');await unlink(path.join(fixture,'delete.cs'));
+    if(process.platform==='win32')sid=(await ps(['-Command','[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value'])).stdout.trim();
+    for(const name of ['denied.cs','acl-directory']) {
+      const p=path.join(fixture,name);assert(!(await lstat(p)).isSymbolicLink());denied.add(p);
+      if(process.platform==='win32')await execFile('icacls.exe',[p,'/deny','*'+sid+':(RD)'],{windowsHide:true,timeout:10000});else await chmod(p,0);
+    }
+    result.after=await worker('read-snapshots');result.gatewayReads=await worker('read-inventory');result.directoryDenied=await worker('directory-read');result.captureDenied=await worker('capture');
+    assert.equal(result.after['mutate.cs'].oldFile.ok,false);assert.equal(result.after['mutate.cs'].newFile.ok,true);assert(result.after['mutate.cs'].newFile.value.includes('changed after getFile'));
+    assert.equal(result.after['delete.cs'].oldFile.ok,false);assert.equal(result.after['delete.cs'].newFile.name,'NotFoundError');assert.equal(result.after['denied.cs'].newFile.ok,false);
+    assert.equal(result.gatewayReads['mutate.cs'].kind,'source');assert.equal(result.gatewayReads['delete.cs'].kind,'unavailable');assert.equal(result.gatewayReads['denied.cs'].kind,'unavailable');
+    assert.equal(result.directoryDenied.ok,false);assert.equal(result.captureDenied.capture.category,'Local working tree unavailable');
+    for(const p of [...denied])await restore(p);result.directoryRestored=await worker('directory-read');assert.equal(result.directoryRestored.ok,true);
+    await evaluate('pick();void 0',false,true);
+    if(process.platform==='win32'){await until(async()=>(await dialog('inspect')).dialogs.length,'Cancel chooser');await dialog('cancel');}else await linuxDialog('cancel');
+    await until(async()=>(await evaluate('pickerState'))!=='pending','Chooser cancellation');result.cancel=await evaluate('({error:pickerError,retained:root.name})');assert.equal(result.cancel.error.name,'AbortError');assert.equal(result.cancel.retained,path.basename(fixture));
+    result.status='qualified';
+  } catch(e) {result.error={message:e.message,stack:e.stack};}
+  finally {
+    for(const p of [...denied])try{await restore(p);}catch(e){result.cleanup.push({path:p,status:'retained',error:e.message});}
+    try {
+      if(chrome){
+        if(process.platform==='win32'&&chrome.child.exitCode===null&&cdp){try{const d=await dialog('inspect');if(d.dialogs.length)await dialog('cancel');}catch(e){result.shutdownInspectionError=e.message;}}
+        await closeNativeChrome(chrome,cdp,async(signal)=>{
+          if(process.platform==='win32') {
+            // Only previously recorded PID/start-time/executable identities, never taskkill /T or global Chrome.
+            const known=new Map();for(const a of result.actions)for(const p of a.ownedProcesses??[])known.set(p.pid+':'+p.creationTicks,p);
+            const executable=discovery.executable.replaceAll("'","''");
+            const items=[...known.values()].sort((a,b)=>(a.role==='browser')-(b.role==='browser')).map(p=>'@{pid='+p.pid+';ticks="'+p.creationTicks+'"}').join(',');
+            const script="$stopped=@();foreach($i in @("+items+")){$p=Get-Process -Id $i.pid -ErrorAction SilentlyContinue;if($p -and $p.Path -eq '"+executable+"' -and $p.StartTime.ToUniversalTime().Ticks.ToString() -eq $i.ticks){Stop-Process -Id $p.Id -ErrorAction Stop;$stopped+=$i}};ConvertTo-Json -InputObject @($stopped) -Compress";
+            result.forcedProcesses=JSON.parse((await ps(['-Command',script])).stdout);
+          } else {
+            // Chrome alone owns this new process group; never signal a caller's group/display.
+            const members=[];
+            for(const name of await readdir('/proc'))if(/^\d+$/.test(name)){try{const text=await readFile('/proc/'+name+'/stat','utf8'),fields=text.slice(text.lastIndexOf(')')+1).trim().split(/\s+/);if(Number(fields[2])===chrome.child.pid&&(await readlink('/proc/'+name+'/exe'))===result.linuxOwnership?.chromeExe&&BigInt(fields[19])>=BigInt(result.linuxOwnership.chromeStart))members.push(Number(name));}catch(e){if(!['ENOENT','ESRCH','EACCES'].includes(e.code))throw e;}}
+            result.forcedProcessGroup={id:chrome.child.pid,verifiedMembers:members};
+            if(members.length||(chrome.child.exitCode===null&&chrome.child.signalCode===null))try{process.kill(-chrome.child.pid,signal);}catch(e){if(e.code!=='ESRCH')throw e;}
+          }
+        });result.browserClosed=await chrome.closed;
+      }
+    }catch(e){result.shutdownError=e.message;cdp?.close();}
+    if(server?.listening){const port=server.address().port;await new Promise(resolve=>server.close(resolve));result.serverClosed=await new Promise(resolve=>{const s=net.connect({host:'127.0.0.1',port});s.on('connect',()=>{s.destroy();resolve(false)});s.on('error',e=>resolve(e.code==='ECONNREFUSED'));});}
+    if(xvfb){try{result.xvfbClosed=await closeNativeDisplay(xvfb);if(result.display){const number=result.display.slice(1);result.xvfbDisplayRemoved=await absent('/tmp/.X11-unix/X'+number)&&await absent('/tmp/.X'+number+'-lock');assert(result.xvfbDisplayRemoved,'Owned Xvfb display socket/lock remains; inspect, do not force-delete');}}catch(e){result.shutdownError=e.message;}}
+    // Windows helper records PID+creation-time identities; verify no recorded Chrome child is still live.
+    try {
+      if(process.platform==='win32'&&chrome){
+        const identities=new Map();for(const a of result.actions)for(const p of a.ownedProcesses??[])identities.set(p.pid+':'+p.creationTicks,p);
+        assert(identities.size,'No owned process identities recorded; retain profile');
+        const items=[...identities.values()].map(p=>'@{pid='+p.pid+';ticks="'+p.creationTicks+'"}').join(',');
+        const script='$live=@();foreach($i in @('+items+')){$p=Get-Process -Id $i.pid -ErrorAction SilentlyContinue;if($p -and $p.StartTime.ToUniversalTime().Ticks.ToString() -eq $i.ticks){$live+=$i}};ConvertTo-Json -InputObject @($live) -Compress';
+        result.remainingProcesses=JSON.parse((await ps(['-Command',script])).stdout);assert.equal(result.remainingProcesses.length,0,'Owned Chrome processes remain');
+      }
+      if(process.platform==='linux'&&profile){
+        const remaining=[];
+        for(const name of await readdir('/proc'))if(/^\d+$/.test(name)){try{const cmd=await readFile('/proc/'+name+'/cmdline','utf8');if(cmd.split('\0').includes('--user-data-dir='+profile))remaining.push(Number(name));}catch(e){if(!['ENOENT','ESRCH','EACCES'].includes(e.code))throw e;}}
+        result.remainingProcesses=remaining;assert.equal(remaining.length,0,'Owned Chrome processes remain');
+      }
+    }catch(e){result.shutdownError=e.message;}
+    if(!result.shutdownError&&!denied.size){
+      for(const p of [fixture,empty,scratch].filter(Boolean))try{if(identities.has(p)&&!(await absent(p))){await assertOwned(p);await remove(p);}result.cleanup.push({path:p,status:await absent(p)?'removed':'retained'});}catch(e){result.cleanup.push({path:p,status:'retained',error:e.message});}
+    }
+    for(const [name,p]of Object.entries({workspace:scratch,fixture,empty}))if(p)result[name+'Status']=await absent(p)?'removed':'retained';
+    if(result.shutdownError||denied.size||result.cleanup.some(x=>x.status==='retained')||result.workspaceStatus==='retained'||result.fixtureStatus==='retained'||result.emptyStatus==='retained'||result.serverClosed===false)result.status='failed';
+    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,shutdownError:result.shutdownError,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
+    if(result.status!=='qualified')process.exitCode=1;
+  }
+}
+await main();
