@@ -431,7 +431,8 @@ async function main() {
     }
     const token=randomUUID();
     fixture=process.platform==='win32'?path.win32.join('C:/Users/Public/Documents','CodeCitySynthetic-'+token):path.join(scratch,'CodeCitySynthetic-'+token);
-    empty=fixture+'-empty';await ownDirectory(fixture);await ownDirectory(empty);
+    // Distinct names avoid GTK completing the main path to a prefix-matching sibling.
+    empty=process.platform==='linux'?path.join(scratch,'CodeCitySynthetic-'+randomUUID()+'-empty'):fixture+'-empty';await ownDirectory(fixture);await ownDirectory(empty);
     Object.assign(result,{workspace:scratch,fixture,empty,profile});await save();
     await writeFile(path.join(scratch,'ownership.json'),JSON.stringify({fixture,empty,profile,identities:Object.fromEntries([...identities].map(([p,s])=>[p,{dev:s.dev,ino:s.ino}]))}));
     for(const dir of ['.git','node_modules','dist','build','bin','obj','user-excluded','src','src/.GIT','src/user-excluded','acl-directory']) {
