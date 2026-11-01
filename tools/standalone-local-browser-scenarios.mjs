@@ -15,18 +15,24 @@ async function sourceContains(p, marker) {
   assert.equal(await p.evaluate(`document.querySelectorAll('[data-source-code] script,[data-source-code] img').length`),0);
   await p.closeSource();
 }
-function assertLocalRequests(requests, origin, allowSave=false) {
+export function assertLocalRequests(requests, origin, {expectedPosts=0,savedId,forbidParser=false}={}) {
+  const assets=new Set(['/','/favicon.ico','/browser.js','/browser.css','/analysis-worker.js','/parser/web-tree-sitter.js','/parser/web-tree-sitter.wasm','/parser/tree-sitter-javascript.wasm','/parser/tree-sitter-typescript.wasm','/parser/tree-sitter-tsx.wasm','/parser/tree-sitter-c-sharp.wasm']);
+  const restored=new Set(savedId?[`/saved/${savedId}`,`/api/investigations/${savedId}`,`/api/investigations/${savedId}/record`]:[]);
+  let posts=0;
   for (const request of requests) {
     const url = new URL(request.url);
     assert.equal(url.origin, origin, 'Local acquisition/inspection contacted a provider');
     assert.equal(url.search, '', 'Local data entered a request query');
     if (request.method === 'POST') {
-      assert.ok(allowSave && url.pathname === '/api/investigations', 'Unexpected local data upload');
-    } else assert.equal(request.method, 'GET');
-    assert.equal(url.pathname.startsWith('/_code-city/'), false);
-    assert.equal(url.href.includes('PRIVATE_SYNTHETIC'), false);
-    assert.equal(url.href.includes('synthetic-working-tree'), false);
+      assert.equal(url.pathname,'/api/investigations','Unexpected local data upload route');posts++;
+    } else {
+      assert.equal(request.method,'GET');assert.ok(assets.has(url.pathname)||restored.has(url.pathname),'Unapproved local request route');
+    }
+    if(forbidParser)assert.equal(url.pathname.startsWith('/parser/'),false,'Reopen/inspection initialized an analysis parser');
+    const metadata=JSON.stringify({url:url.href,headers:request.headers??{}});
+    for(const value of ['PRIVATE_SYNTHETIC','synthetic-working-tree','src/app.ts'])assert.equal(metadata.includes(value),false,'Local repository data entered request metadata');
   }
+  assert.equal(posts,expectedPosts,'Upload occurred outside its single explicit Save authorization');
 }
 const folderMessage = (p, text) => p.evaluate(`new Promise(resolve=>{let observer;const check=()=>{if(document.querySelector('[data-folder-status]').textContent.includes(${JSON.stringify(text)})){observer?.disconnect();resolve(true);}};observer=new MutationObserver(check);observer.observe(document.querySelector('[data-folder-status]'),{childList:true,subtree:true,characterData:true});check();})`);
 async function submit(p) {
@@ -75,6 +81,8 @@ export async function exerciseLocalBrowser({page,cdp,harness,origin,request,chec
     assert.equal((await p.snapshot()).canvases,1);
   }
   await p.evaluate(`window.__localPickerError=undefined;true`);
+  assertLocalRequests(harness.requests.slice(start),origin);
+  const saveStart=harness.requests.length;
   await p.click('[data-save]'); await p.wait(s=>s.saved||s.saveMessage.includes('unchanged'));
   assert.equal((await p.snapshot()).saved,true,(await p.snapshot()).saveMessage);
   const savedUrl=await p.evaluate('location.href'),id=new URL(savedUrl).pathname.split('/').at(-1);
@@ -86,7 +94,8 @@ export async function exerciseLocalBrowser({page,cdp,harness,origin,request,chec
   assert.equal(bytes.length,12+headerBytes+header.files.reduce((sum,file)=>sum+(file.normalized?.length??0),0));
   assert.equal(bytes.indexOf(Buffer.from(markerA)),bytes.lastIndexOf(Buffer.from(markerA)),'Source appeared more than once in snapshot');
   assert.ok(bytes.indexOf(Buffer.from(markerA))>=12+headerBytes);
-  assertLocalRequests(harness.requests.slice(start),origin,true);
+  assertLocalRequests(harness.requests.slice(saveStart),origin,{expectedPosts:1});
+  const afterSave=harness.requests.length;
   await p.evaluate(`window.__writeLocal('src/app.ts',${JSON.stringify(`export function choose(x: number) { const marker = '${markerB}'; if(x) return x > 1 ? 1 : 2; return 0; }\n`)})`);
   await submit(p); await healthy(p); assert.notEqual((await p.snapshot()).commit,captureId,'Uncommitted edit did not change capture identity');
   await sourceContains(p,markerB);
@@ -101,7 +110,7 @@ export async function exerciseLocalBrowser({page,cdp,harness,origin,request,chec
   harness.setMode('no-provider');await p.evaluate(`document.querySelector('form').requestSubmit();true`);await healthy(p);
   await checked(harness.waitFor(event=>event.kind==='detached'&&event.sessionId===replaced.sessionId));
   assert.equal((await p.snapshot()).commit,editedId,'Replacement changed identical captured input');
-  assertLocalRequests(harness.requests.slice(start),origin,true);
+  assertLocalRequests(harness.requests.slice(afterSave),origin);
   await checked(cdp.send('Target.closeTarget',{targetId:p.targetId}));
   return{savedUrl,fingerprint,captureId,marker:markerA,sourcePath};
 }
@@ -116,6 +125,6 @@ export async function reopenLocalBrowser({page,cdp,harness,checked,origin,saved}
   assert.equal(await p.evaluate(`document.querySelector('[data-folder-name]').textContent`),'No folder selected');
   assert.ok(harness.requests.slice(start).every(item=>new URL(item.url).origin===origin&&!new URL(item.url).pathname.startsWith('/parser/')),'Reopen acquired or analyzed source');
   await sourceContains(p,saved.marker);
-  assertLocalRequests(harness.requests.slice(start),origin);
+  assertLocalRequests(harness.requests.slice(start),origin,{savedId:new URL(saved.savedUrl).pathname.split('/').at(-1),forbidParser:true});
   await checked(cdp.send('Target.closeTarget',{targetId:p.targetId}));await checked(cdp.send('Target.disposeBrowserContext',{browserContextId}));
 }

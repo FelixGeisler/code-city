@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {createBrowserProviderHarness} from '../tools/standalone-browser-provider-harness.mjs';
+import {createBrowserProviderHarness,providerRequestLeaksPrivateHeaders} from '../tools/standalone-browser-provider-harness.mjs';
 const origin='http://127.0.0.1:12345';
 const url='https://api.github.com/repos/fixture/standalone/commits?per_page=1&page=1';
 function fixture(t,fail){
@@ -11,7 +11,7 @@ function fixture(t,fail){
  const network=id=>emit({method:'Network.requestWillBeSent',sessionId:id,params:{requestId:'network-old',request:{url,method:'GET',headers:{}}}});
  const detach=id=>emit({method:'Target.detachedFromTarget',params:{sessionId:id}});
  const paused=()=>emit({method:'Fetch.requestPaused',sessionId:'page',params:{requestId:'interception-old',networkId:'network-old',request:{url,method:'GET',headers:{}}}});
- return {harness,calls,failure,attach,network,detach,paused};
+ return {harness,calls,failure,attach,network,detach,paused,emit};
 }
 
 test('late parent-channel Fetch notification retains its detached network owner rather than using a replacement worker',async t=>{
@@ -29,6 +29,17 @@ test('detached-owner cancellation does not suppress a different CDP failure',asy
  await state.attach('old');state.network('old');state.detach('old');state.paused();
  const error=await state.failure.promise;assert.equal(error.cause.message,'A different failure');
  assert.equal(state.harness.events.some(event=>event.kind==='interception-cancelled'),false);
+});
+
+test('complete Network metadata permits an empty explicit no-referrer value but no credentials or populated referrer',()=>{
+ assert.equal(providerRequestLeaksPrivateHeaders({Referer:'',Accept:'application/json'}),false);
+ for(const headers of [{Referer:origin},{referrer:origin},{Authorization:''},{Cookie:''},{authorization:'token'},{cookie:'value'}])assert.equal(providerRequestLeaksPrivateHeaders(headers),true);
+});
+
+test('records un-intercepted same-origin requests including potential unauthorized uploads',async t=>{
+ const state=fixture(t);const hidden=origin+'/unobserved?source=PRIVATE_SYNTHETIC_UNCOMMITTED_A';
+ state.emit({method:'Network.requestWillBeSent',sessionId:'page',params:{requestId:'unobserved',request:{url:hidden,method:'POST',headers:{'X-Synthetic':'source'}}}});
+ assert.deepEqual(state.harness.requests,[{url:hidden,method:'POST',worker:false,sessionId:'page',headers:{'X-Synthetic':'source'}}]);
 });
 
 test('an unattributed provider request still fails the worker-only network boundary',async t=>{

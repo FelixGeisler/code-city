@@ -11,7 +11,7 @@ import { auditStandaloneArtifact } from "./standalone-manifest.mjs";
 import { canonicalStandaloneRoot } from "./build-standalone.mjs";
 import { closeInstalledChrome, connectCdp, discoverInstalledChrome, launchInstalledChrome, readInstalledChromeVersion } from "./chrome-cdp.mjs";
 import { expectCleanExit, launchStandalone, readyOrigin, request, sendGracefulSignal, terminateForCleanup, writeSignalPreload } from "./standalone-check-support.mjs";
-import { createBrowserProviderHarness, FIXTURE_REVISION } from "./standalone-browser-provider-harness.mjs";
+import { createBrowserProviderHarness, FIXTURE_REVISION, providerRequestLeaksPrivateHeaders } from "./standalone-browser-provider-harness.mjs";
 import { exerciseLocalBrowser, reopenLocalBrowser, localPickerSubstitution } from "./standalone-local-browser-scenarios.mjs";
 
 const WATCHDOG_MS = 600_000;
@@ -586,7 +586,7 @@ export async function checkStandaloneBrowser() {
       assert.equal(url.pathname.startsWith("/_code-city/"), false);
       if (url.origin !== origin) {
         assert.equal(item.worker, true);
-        assert.equal(Object.keys(item.headers).some(name => ["authorization", "cookie", "referer"].includes(name.toLowerCase())), false, "Provider request leaked credentials or referrer");
+        assert.equal(providerRequestLeaksPrivateHeaders(item.headers), false, `Provider request leaked credentials or referrer: ${JSON.stringify(item)}`);
         if (item.method === "GET") assert.ok(harness.workers.get(item.sessionId)?.networkUrls.has(item.url), "Provider GET did not originate from the actual worker network context");
       }
     }
