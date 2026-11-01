@@ -19,9 +19,9 @@ xref:browser-analysis-operating-policy.adoc[Browser Analysis Operating Policy].
 xref:local-working-tree.adoc[Local Working-Tree Analysis] is the next approved
 scope: analyze a user-selected local checkout, including uncommitted edits.
 Internal ADO repositories and local checkouts are the real use case; public
-GitHub remains the implemented demonstration/test provider. Local acquisition
-and private-source persistence decisions remain open; this slice is not yet
-implemented or ready for an implementation handoff. Direct ADO access is separate.
+GitHub remains the implemented demonstration/test provider. The user selected read-only browser acquisition, bounded source-once shared Save,
+and no login. Implementation and native browser qualification are in progress;
+this is not a claim that the feature is delivered. Direct ADO access is separate.
 
 == Build and operation
 

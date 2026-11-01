@@ -1,0 +1,45 @@
+= ADR 0019: Browser-Owned Local Working-Tree Acquisition
+
+Status:: Accepted
+Acceptance:: Recorded from the user's explicit local-working-tree selection, including uncommitted edits, and subsequent implementation direction. Native browser qualification remains a delivery gate; no private repository access was authorized.
+
+== Context
+
+The user identified internal ADO checkouts/local working trees as the real use
+case, selected working-tree contents including uncommitted edits, and explicitly
+requested implementation. A multi-gigabyte checkout must not be recursively
+materialized before exclusions can be applied. GitHub-only immutable identities
+must not be fabricated for local files.
+
+== Decision
+
+Extend the existing browser-owned analysis boundary with explicitly selected,
+read-only local directory capability. Prune excluded subtrees before enumeration
+and read supported physical files in the browser worker. Do not introduce a
+native agent, server filesystem endpoint, Git process or direct ADO credentials.
+Capture is non-atomic and content-identified, with tagged local provenance rather
+than an invented GitHub URL/commit. Reuse supported languages, normalization,
+metrics, source limits, canonical ordering, cancellation and inspection.
+
+The browser directory capability and supported environment must pass native
+qualification. Unsupported or denied access is explicit; no silent recursive
+FileList or server-side fallback weakens the custody/exclusion boundary.
+
+== Alternatives
+
+* Keep public GitHub as the product boundary: rejected by explicit user direction.
+* Analyze only HEAD: rejected; the user selected working-tree edits.
+* Native/server acquisition: adds source custody/process/security boundaries not
+  needed for the approved browser-local scope.
+* Materialize every checkout file before exclusions: cannot prune gigabyte-scale
+  dependency/build trees before traversal and is not the selected design.
+
+== Consequences
+
+Local inputs require explicit origin/capture identity, progress before identity
+is finalized, and read/change/permission failure behavior. No universal atomicity,
+RAM or latency guarantee follows. Existing public-GitHub input remains usable.
+Direct authenticated ADO acquisition remains a separate decision.
+
+The exact product inclusion, failure, privacy and qualification rules live in
+xref:requirements:local-working-tree.adoc[Local Working-Tree Analysis].

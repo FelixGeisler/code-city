@@ -1,0 +1,53 @@
+= ADR 0020: Shared Source-Once Investigation Snapshots
+
+Status:: Accepted
+Acceptance:: Recorded from the user's explicit code-drill-down requirement, approval to retain all admitted analyzed source once within existing limits, and final no-login/everyone-can-read sharing direction.
+
+== Context
+
+The user requires saved drill-down into the actual code, not locations alone or
+an automatic reconnect to a possibly changed checkout. The user accepted full
+drill-down for the admitted input rather than top-N sampling, one analyzed-source
+copy within existing bounds, and explicitly chose: "No login. Everyone can see it."
+
+Version 2 retains original and normalized source and assumes GitHub provenance.
+That representation cannot honestly describe a local working-tree input while
+satisfying source-once retention for every input method.
+
+== Decision
+
+Use a new explicit version-3 snapshot with tagged GitHub/local provenance,
+analysis/presentation facts and one hashed normalized source section per retained
+text file. Do not save a checkout archive, original raw duplicates, binary-invalid
+source payloads or credentials. Preserve full recorded unit/contribution mapping
+and reopen exact analyzed code without provider acquisition or metric reanalysis.
+
+Keep explicit immutable Save and the existing bounded isolated validation,
+filesystem publication and no-login shared visibility. Anyone who can reach the
+instance can read saved source; this is the user's approved sharing policy, not
+an authorization secret or permission to expose the host more widely.
+
+New readers reject old version-2 payloads explicitly, under the accepted
+pre-production no-compatibility policy. Do not rewrite or delete existing data.
+Older receipt inventory must not prevent new-format catalog/Save operations.
+
+== Alternatives
+
+* Results-only snapshots: rejected after the user confirmed full code drill-down.
+* Disable local Save: rejected; the user requires saving the investigation.
+* Top-N retained source: rejected for this slice; retain every admitted file under
+  the existing input and persistence budgets instead of silently sampling.
+* Original plus normalized source: unnecessary duplication for normalized-code
+  inspection and contrary to the approved source-once policy.
+* Add accounts/private per-user stores: rejected by explicit no-login/shared choice.
+
+== Consequences
+
+Local and GitHub saves share one source-once representation and structural
+validator. Server validation still does not certify metrics or provider claims.
+The header/source envelope and old payload handling change explicitly; persisted
+source size is bounded independently from metadata and container storage budgets.
+
+Authoritative behavior is in xref:requirements:local-working-tree.adoc[Local
+Working-Tree Analysis] and xref:requirements:saved-investigations.adoc[Saved
+Investigations]. Existing file-store publication/recovery decisions remain.
