@@ -4,7 +4,7 @@
 Qualification-only Python stdlib + ctypes/libX11/libXtst; no user desktop APIs.
 No portal fallback: chooser must belong to the recorded Chrome PID or its children.
 English GTK chooser: real XTEST Ctrl+L/Ctrl+A, exact synthetic directory with
-trailing slash, Tab out of completion, explicit Alt+O Open. Chrome's read prompt:
+trailing slash, Return to commit navigation, then explicit Alt+O Open if needed. Chrome's read prompt:
 Tab from default Cancel, Return; the driver still requires the actual granted handle.
 The JS driver requires a real selected handle and granted permission afterwards;
 UI differences fail the native gate, never imply success or an OPFS fallback.
@@ -1243,20 +1243,19 @@ try:
         for char in a.fixture + '/':
             key(w, pid, char, typing_modifiers(char))
         actions.append('type-owned-synthetic-path')
-        key(w, pid, 'Tab')  # Leave the completion popup before activating the dialog's _Open.
-        actions.append('Tab-leave-location-completion')
-        if a.fixture == owner['fixture']:
-            # This controlled main fixture has child directories: GTK opens its
-            # location completion list. Dismiss that list, not the chooser.
-            # The empty fixture has no directory completions and must not receive Escape.
-            key(w, pid, 'Escape')
-            actions.append('Escape-main-fixture-location-completion')
-        diagnose('-before-confirm')  # Actual owned chooser state, not an inferred default button.
-        # GTK's default response may be Cancel. Activate its explicit English
-        # _Open action, not an inferred Return/default-button selection.
-        key(w, pid, 'o', 8)
-        actions.append('Alt+O-explicit-Open')
+        diagnose('-before-confirm')
+        # Commit the location entry: Escape merely reverts to the previously
+        # selected folder. This is navigation, not activation of a default button.
+        key(w, pid, 'Return')
+        actions.append('Return-commit-directory-navigation')
         time.sleep(.6)
+        windows = owned_windows()
+        if any(window['window'] == w and window['dialog'] and window['mapState'] == 'IsViewable' for window in windows):
+            # The location entry navigated without accepting. Explicitly select
+            # that directory; never send another chord to a closed/reused chooser.
+            key(w, pid, 'o', 8)
+            actions.append('Alt+O-select-committed-directory')
+            time.sleep(.6)
     elif a.mode == 'cancel':
         key(w, pid, 'Escape')
         actions.append('Escape-native-chooser')
