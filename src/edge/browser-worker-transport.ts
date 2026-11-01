@@ -1,3 +1,4 @@
+import { exclusionSettings, parseRecordedExclusionPolicy, type RecordedExclusionPolicy } from "../domain/exclusion-policy";
 import { investigationIdentity, parseInvestigationOrigin, validWorkingTreeName, type InvestigationOrigin } from "../application/investigation-origin";
 import { parseInspectionResult, validateInspectionQuery, type InspectionQuery, type InspectionResult } from "../application/unit-inspection";
 import { parseSavedRecord } from "./browser-saved-investigations";
@@ -22,7 +23,7 @@ type OwnedWorker = {
 /** Browser-local ownership only: opening an idle page performs no backend request. */
 export function createBrowserWorkerTransport(
   createWorker: () => Worker = () => new Worker(new URL("./browser-analysis-worker.ts", import.meta.url), { type: "module" }),
-  restored?: (origin: InvestigationOrigin, record: SavedRecord, exclusions: readonly string[]) => void,
+  restored?: (origin: InvestigationOrigin, record: SavedRecord, policy: RecordedExclusionPolicy) => void,
 ): BrowserSessionTransport {
   return Object.freeze({
     open(observer) {
@@ -60,6 +61,9 @@ export function createBrowserWorkerTransport(
           if (command.inputKind === "working-tree"
             ? !validWorkingTreeName(command.name) || !command.root || !parseAdditionalExclusions(command.additionalExclusions)
             : command.savedId === undefined ? !parseRepositoryReference(command.repositoryUrl) || !parseAdditionalExclusions(command.additionalExclusions) : !validSavedId(command.savedId)) return 422;
+          try {
+            exclusionSettings({ manual: parseAdditionalExclusions(command.additionalExclusions) ?? [], included: command.included ?? [] });
+          } catch { return 422; }
           try {
             const worker = createWorker();
             let disposed = false;
@@ -120,10 +124,10 @@ export function createBrowserWorkerTransport(
                   try {
                     const record = parseSavedRecord(raw.record);
                     const origin = parseInvestigationOrigin(raw.origin);
-                    if (Object.keys(raw).sort().join(",") !== "exclusions,generation,origin,record,sessionId,type" || record.id !== command.savedId
+                    if (Object.keys(raw).sort().join(",") !== "exclusionPolicy,generation,origin,record,sessionId,type" || record.id !== command.savedId
                       || investigationIdentity(origin) !== record.revision || (record.kind ?? "github") !== origin.kind) throw new Error("Invalid restored metadata");
-                    if (!Array.isArray(raw.exclusions) || raw.exclusions.some(item => typeof item !== "string") || !parseAdditionalExclusions(raw.exclusions.join("\n"))) throw new Error("Invalid saved exclusions");
-                    restored?.(origin, record, raw.exclusions as string[]);
+                    const policy = parseRecordedExclusionPolicy(raw.exclusionPolicy);
+                    restored?.(origin, record, policy);
                   } catch { error(); }
                   return;
                 }

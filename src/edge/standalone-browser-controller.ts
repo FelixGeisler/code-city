@@ -1,3 +1,4 @@
+import { parseRecordedExclusionPolicy, type RecordedExclusionPolicy } from "../domain/exclusion-policy";
 import { parseInvestigationOrigin, validWorkingTreeName, type WorkingTreeInvestigationOrigin, type InvestigationOrigin } from "../application/investigation-origin";
 import { PRESENTATION_KIND } from "../domain/city-model";
 import type { InspectionQuery, InspectionResult } from "../application/unit-inspection";
@@ -53,6 +54,7 @@ export type WorkingTreeEvent =
   | Readonly<BrowserCommand & { type: "WORKING_TREE_FAILED"; category: string; code?: string }>;
 
 export type BrowserSessionEvent =
+  | Readonly<BrowserCommand & { type: "EXCLUSION_POLICY"; policy: RecordedExclusionPolicy; complete: boolean }>
   | WorkingTreeEvent
   | Readonly<{ type: "REVISION_SELECTED"; sessionId: string; generation: number; revision: string }>
   | BrowserProgressEvent
@@ -68,7 +70,7 @@ export type BrowserSessionObserver = Readonly<{
 }>;
 
 export type BrowserCommand = Readonly<{ sessionId: string; generation: number }>;
-export type BrowserAnalyzeCommand = Readonly<BrowserCommand & (
+export type BrowserAnalyzeCommand = Readonly<BrowserCommand & { included?: readonly string[] } & (
   | { repositoryUrl: string; additionalExclusions: string; savedId?: string; inputKind?: never }
   | { inputKind: "working-tree"; root: unknown; name: string; additionalExclusions: string; savedId?: never }
 )>;
@@ -91,6 +93,7 @@ export type BrowserSessionTransport = Readonly<{
 
 export type StandaloneBrowserView = Readonly<{
   clear(): void;
+  exclusionPolicy?(policy: RecordedExclusionPolicy, complete: boolean): void;
   working(cancel: () => void): void;
   progress(label: string, completed?: number, total?: number): void;
   invalid(): void;
@@ -106,8 +109,8 @@ export type StandaloneBrowserView = Readonly<{
 
 export type StandaloneBrowserController = Readonly<{
   start(): void;
-  submit(repositoryUrl: string, additionalExclusions: string): void;
-  submitWorkingTree(root: unknown, name: string, additionalExclusions: string): void;
+  submit(repositoryUrl: string, additionalExclusions: string, included?: readonly string[]): void;
+  submitWorkingTree(root: unknown, name: string, additionalExclusions: string, included?: readonly string[]): void;
   openSaved(id: string): void;
   save(): Promise<SavedRecord>;
   inspect(query: InspectionQuery): Promise<InspectionResult>;
@@ -289,6 +292,10 @@ export function parseBrowserCity(value: unknown): ValidatedCity | undefined {
 }
 
 export function parseBrowserSessionEvent(value: unknown): BrowserSessionEvent | undefined {
+  const policyFrame = exactRecord(value, ["type", "sessionId", "generation", "policy", "complete"]);
+  if (policyFrame?.type === "EXCLUSION_POLICY" && validSessionId(policyFrame.sessionId) && validGeneration(policyFrame.generation) && typeof policyFrame.complete === "boolean") {
+    try { return { ...policyFrame, policy: parseRecordedExclusionPolicy(policyFrame.policy) } as BrowserSessionEvent; } catch { return undefined; }
+  }
   const opened = exactRecord(value, ["type", "sessionId"]);
   if (opened?.type === "SESSION_OPENED" && validSessionId(opened.sessionId)) return undefined;
 
@@ -518,6 +525,10 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     const state = attemptState;
     if (!state) return;
     if (state.terminal && event.type === "ANALYSIS_PROGRESS") return;
+    if (event.type === "EXCLUSION_POLICY") {
+      if (!state.terminal) view.exclusionPolicy?.(event.policy, event.complete);
+      return;
+    }
 
     if (event.type === "WORKING_TREE_STARTED") {
       if (!state.local || state.saved || state.localStarted || state.terminal || state.revision !== undefined || event.name !== state.localName) { lose(epoch); return; }
@@ -695,7 +706,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
     }
   };
 
-  const submit = (repositoryUrl: string, additionalExclusions: string, savedId?: string, local?: { root: unknown; name: string }): void => {
+  const submit = (repositoryUrl: string, additionalExclusions: string, included: readonly string[] = [], savedId?: string, local?: { root: unknown; name: string }): void => {
     if (disposed) return;
     const generation = nextBrowserGeneration(latestGeneration);
     clearAssociation();
@@ -719,6 +730,7 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       return;
     }
     attemptState = { terminal: false, stage: 0, ...(savedId === undefined ? {} : { saved: true }), ...(local ? { local: true, localName: local.name } : {}) };
+    const appliedIncluded = [...included];
     const selected = ensureOwner();
     view.working(() => { void cancelGeneration(selected.epoch, generation); });
     void (async () => {
@@ -727,8 +739,8 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
       if (opened.kind !== "opened") return;
       sessionId = opened.sessionId;
       const command: BrowserAnalyzeCommand = local
-        ? { sessionId: opened.sessionId, generation, inputKind: "working-tree", root: local.root, name: local.name, additionalExclusions }
-        : { sessionId: opened.sessionId, generation, repositoryUrl, additionalExclusions, ...(savedId === undefined ? {} : { savedId }) };
+        ? { sessionId: opened.sessionId, generation, inputKind: "working-tree", root: local.root, name: local.name, additionalExclusions, included: appliedIncluded }
+        : { sessionId: opened.sessionId, generation, repositoryUrl, additionalExclusions, included: appliedIncluded, ...(savedId === undefined ? {} : { savedId }) };
       try {
         const status = await selected.owner.analyze(command);
         if (disposed || selected.epoch !== ownerEpoch || generation !== latestGeneration) return;
@@ -756,8 +768,8 @@ export function createStandaloneBrowserController(transport: BrowserSessionTrans
   return Object.freeze({
     start() { if (!disposed && !owner) openOwner(); },
     submit,
-    submitWorkingTree(root, name, additionalExclusions) { if (!validWorkingTreeName(name)) { view.invalid(); return; } submit("", additionalExclusions, undefined, { root, name }); },
-    openSaved(id) { submit("", "", id); },
+    submitWorkingTree(root, name, additionalExclusions, included = []) { if (!validWorkingTreeName(name)) { view.invalid(); return; } submit("", additionalExclusions, included, undefined, { root, name }); },
+    openSaved(id) { submit("", "", [], id); },
     async inspect(query) {
       if (disposed || currentGeneration === undefined || !owner?.inspect) throw new Error("Unit inspection unavailable");
       return owner.inspect(query);

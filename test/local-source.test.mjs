@@ -4,7 +4,8 @@ import { registerHooks } from "node:module";
 import test from "node:test";
 registerHooks({ resolve(s, c, next) { return next(/^\.\.?\//.test(s) && !/\.[a-z]+$/i.test(s) ? `${s}.ts` : s, c); } });
 const { acquireLocalWorkingTree, MAX_LOCAL_RAW_BYTES } = await import("../src/application/local-source.ts");
-const { FIXED_EXCLUDED_SEGMENTS, SUPPORTED_SUFFIXES } = await import("../src/domain/source-admission.ts");
+const { recordExclusionPolicy } = await import("../src/domain/exclusion-policy.ts");
+const { SUPPORTED_SUFFIXES } = await import("../src/domain/source-admission.ts");
 const encode = text => new TextEncoder().encode(text);
 const signal = () => new AbortController().signal;
 const raw = bytes => ({ kind: "source", rawBytes: typeof bytes === "string" ? encode(bytes) : bytes });
@@ -24,14 +25,13 @@ test("capture uses actual raw SHA-256 manifest, canonical order, policy, unsuppo
   assert.deepEqual(first.acquired.modules.map(m => [m.canonicalPath, m.normalizedSource, [...m.normalizedUtf8]]), [["é.ts", "x\ny\n", [120, 10, 121, 10]]]);
   assert.deepEqual(first.acquired.notAnalyzedFiles, [{ canonicalPath: "a.cs", category: "Source text is not supported" }]);
   const hash = bytes => createHash("sha256").update(bytes).digest("hex");
-  const manifest = { version: "code-city-working-tree-v1", policy: {
-    supportedSuffixes: SUPPORTED_SUFFIXES, fixedExcludedSegments: ["node_modules", "dist", "build", "bin", "obj", ".angular"],
-    metadata: "case-insensitive-.git-at-every-depth", exclusions: [],
+  const manifest = { version: "code-city-working-tree-v2", policy: {
+    supportedSuffixes: SUPPORTED_SUFFIXES,
+    metadata: "case-insensitive-.git-at-every-depth", exclusionPolicy: recordExclusionPolicy([]),
   }, files: [["a.cs", 1, hash(new Uint8Array([255]))], ["é.ts", encode("\uFEFFx\r\ny\r").length, hash(encode("\uFEFFx\r\ny\r"))]] };
-  assert.deepEqual(FIXED_EXCLUDED_SEGMENTS, manifest.policy.fixedExcludedSegments);
   assert.equal(first.origin.captureId, hash(JSON.stringify(manifest)));
-  const historical = structuredClone(manifest); historical.policy.fixedExcludedSegments.pop();
-  assert.notEqual(first.origin.captureId, hash(JSON.stringify(historical)), "the new fixed policy changes capture identity even for unchanged files");
+  const changed = structuredClone(manifest); changed.policy.exclusionPolicy = recordExclusionPolicy(['unused']);
+  assert.notEqual(first.origin.captureId, hash(JSON.stringify(changed)), "applied policy changes capture identity even for unchanged files");
   assert.equal(first.acquired.selected, first.origin.captureId);
   assert.match(first.origin.captureId, /^[0-9a-f]{64}$/);
   assert.deepEqual(progress, [[0, 2], [1, 2], [2, 2]]);

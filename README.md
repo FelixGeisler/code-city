@@ -33,7 +33,7 @@ Development output is `build/development/`. Browser analysis requires HTTPS or a
 
 ## Current behavior
 
-- Select a local folder, then Analyze working-tree files including uncommitted edits; excluded metadata/dependency/build trees are pruned before descent. No Git operations or `.gitignore` interpretation occurs.
+- Select a local folder, then Analyze working-tree files including uncommitted edits; recognized dependency/output/framework-cache directories are pruned before descent. Exclusions separates manual paths from detected automatic paths/reasons, with 32-row pages. Uncheck a detected path to include that exact root on the next Analyze; siblings/nested matches stay independent and manual paths always win. Local `.git` is never included. Selection and setting edits perform no scan, reanalysis or upload. No Git operations or `.gitignore` interpretation occurs.
 - Or analyze one anonymously accessible public GitHub repository at an immutable revision.
 - Acquire files with bounded overlap, then compute metrics and construct the city in a dedicated browser worker.
 - Show one continuous measured progress bar, cancellation, per-file failures, and the searchable/sortable file inventory.
@@ -45,7 +45,7 @@ Development output is `build/development/`. Browser analysis requires HTTPS or a
 - Save an immutable investigation, copy its URL, and reopen after a host restart without GitHub acquisition or parsing.
 - Open saved investigations grouped by input kind and repository/folder, with separate GitHub revisions or local content-identified captures.
 
-Version-3 snapshots store one normalized source copy plus results for every retained text file. Older pre-production payloads are not migrated or deleted and do not reopen; their receipt inventory does not block new Save operations.
+Version-4 snapshots store one normalized source copy plus results for every retained text file and the applied versioned exclusion policy, not pending edits. Reopen restores original settings/source/results without folder or provider access; reanalysis requires explicit folder selection, retaining restored settings. Older payloads (including v3) are not migrated or deleted and do not reopen; their receipt inventory does not block new Save operations. See [automatic exclusions](docs/modules/requirements/pages/automatic-exclusions.adoc) and [ADR 0021](docs/modules/architecture/pages/adr/0021-recorded-automatic-exclusion-policy.adoc).
 
 There is no login, automatic saving, saved-entry management UI, or server metric certification. Snapshots include source and analysis evidence, are shared with anyone reaching the host, and never expire automatically. Back up/delete them as described in [Saved Investigations](docs/modules/requirements/pages/saved-investigations.adoc).
 

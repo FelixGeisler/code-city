@@ -11,6 +11,10 @@ details. Historical numbering does not count active decisions.
 * xref:adr/0017-offline-shiki-source-highlighting.adoc[ADR 0017: Offline Shiki source highlighting]
 * xref:adr/0018-recursive-district-presentation.adoc[ADR 0018: Recursive district presentation]
 
+* xref:adr/0019-local-working-tree-acquisition.adoc[ADR 0019: Browser-owned local working-tree acquisition]
+* xref:adr/0020-source-once-shared-investigation-snapshots.adoc[ADR 0020: Source-once snapshots (historical v3 format)]
+* xref:adr/0021-recorded-automatic-exclusion-policy.adoc[ADR 0021: Recorded automatic exclusion policy and v4-only snapshots]
+
 == Earlier decisions
 
 ADR 0015 replaces the server-analysis portions of these records. The native

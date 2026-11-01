@@ -88,7 +88,7 @@ export async function exerciseLocalBrowser({page,cdp,harness,origin,request,chec
   const savedUrl=await p.evaluate('location.href'),id=new URL(savedUrl).pathname.split('/').at(-1);
   const response=await checked(request(origin,'/api/investigations/'+id));assert.equal(response.status,200);
   const bytes=response.body,headerBytes=bytes.readUInt32BE(8),header=JSON.parse(bytes.subarray(12,12+headerBytes).toString('utf8'));
-  assert.equal(header.version,3);assert.deepEqual(header.origin,{kind:'working-tree',name:'synthetic-working-tree',captureId});
+  assert.equal(header.version,4);assert.deepEqual(header.origin,{kind:'working-tree',name:'synthetic-working-tree',captureId});
   assert.equal(header.files.length,7);assert.equal(header.files.find(file=>file.path==='unsupported.ts').normalized,null);
   assert.ok(header.files.every(file=>!Object.hasOwn(file,'raw')&&!Object.hasOwn(file,'blob')&&!Object.hasOwn(file,'rawPath')));
   assert.equal(bytes.length,12+headerBytes+header.files.reduce((sum,file)=>sum+(file.normalized?.length??0),0));

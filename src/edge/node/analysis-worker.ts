@@ -110,7 +110,8 @@ type ExactType<Left, Right> =
 type AssertType<Value extends true> = Value;
 type AcceptedAcquireProjectSources = (
   repository: RepositoryReference, selected: string, signal: AbortSignal, gateway: ImmutableRawSourceGateway,
-  observe?: (ownership: RetrievalOwnership) => void, additionalExclusions?: readonly string[],
+  observe?: (ownership: RetrievalOwnership) => void, additionalExclusions?: import("../../domain/exclusion-policy").ExclusionInput,
+  report?: import("../../domain/exclusion-policy").ExclusionReport,
 ) => Promise<ProjectSourceAcquisitionResult>;
 type AcceptedNormalizeSourceText = (decodedSource: string) => NormalizedSourceText | undefined;
 type SourceAdmissionExports = typeof import("../../domain/source-admission");

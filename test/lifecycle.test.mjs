@@ -8,6 +8,8 @@ registerHooks({
     return nextResolve(/^\.\.?\//.test(specifier) && !/\.[a-z]+$/i.test(specifier) ? `${specifier}.ts` : specifier, context);
   },
 });
+const { AUTOMATIC_EXCLUSION_RULES } = await import("../src/domain/exclusion-policy.ts");
+const DEFAULTS = AUTOMATIC_EXCLUSION_RULES.map(rule => rule.path);
 const { createMainController } = await import("../src/application/main-controller.ts");
 const { buildCity } = await import("../src/domain/city-model.ts");
 const { stageSemanticPublication } = await import("../src/edge/semantic-publication.ts");
@@ -230,7 +232,7 @@ test("additional exclusions validate before worker creation and each Analyze cap
   assert.equal(f.controller.submit(VALID, "z\r\n\r a \ra"), true);
   assert.deepEqual(f.transports[0].sent[0].additionalExclusions, [" a ", "a", "z"]);
   assert.equal(Object.isFrozen(f.transports[0].sent[0].additionalExclusions), true);
-  assert.deepEqual(f.presentation.exclusions, [["node_modules", "dist", "build", "bin", "obj", ".angular", " a ", "a", "z"]]);
+  assert.deepEqual(f.presentation.exclusions, [[...DEFAULTS, " a ", "a", "z"]]);
 
   assert.equal(f.controller.submit("https://github.com/owner/queued", "queued"), true);
   assert.equal(f.controller.submit("https://github.com/owner/latest", "latest"), true);
@@ -239,7 +241,7 @@ test("additional exclusions validate before worker creation and each Analyze cap
   assert.deepEqual(f.transports[1].sent[0], {
     type: "START", generation: 2, repository: { owner: "owner", repository: "latest", branch: null }, additionalExclusions: ["latest"],
   });
-  assert.deepEqual(f.presentation.exclusions.at(-1), ["node_modules", "dist", "build", "bin", "obj", ".angular", "latest"]);
+  assert.deepEqual(f.presentation.exclusions.at(-1), [...DEFAULTS, "latest"]);
 });
 
 test("one worker receives accepted unusual segments unchanged", () => {

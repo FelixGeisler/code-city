@@ -1,11 +1,7 @@
 import { validateCityPayload, type CityPayload } from "./city-payload";
 import { isCanonicalSourcePath, compareUnsignedUtf8, MAX_ADMITTED_MODULES, MAX_NORMALIZED_MODULE_BYTES, MAX_NORMALIZED_TOTAL_BYTES } from "../domain/source-admission";
 import { parseInvestigationOrigin, type InvestigationOrigin } from "./investigation-origin";
-// Version-3 wire vocabulary is pinned, not silently widened by future analyzers.
-const V3_FIXED_EXCLUSION_LISTS = [
-  ["node_modules", "dist", "build", "bin", "obj"],
-  ["node_modules", "dist", "build", "bin", "obj", ".angular"],
-] as const;
+import { automaticRootPaths, parseRecordedExclusionPolicy, type RecordedExclusionPolicy } from "../domain/exclusion-policy";
 const EXPLICIT_UNIT_FORMS = ["function", "arrow", "method", "constructor", "getter", "setter", "static-block"];
 const DECISION_KINDS = ["if", "loop", "case", "catch", "ternary", "logical-and", "logical-or", "nullish", "logical-and-assign", "logical-or-assign", "nullish-assign"];
 import { parseRepositoryReference } from "../domain/repository-reference";
@@ -19,7 +15,7 @@ export function hasSaveCapacity(count: number, usedBytes: number, uploadBytes: n
   return [count, usedBytes, uploadBytes].every(value => Number.isSafeInteger(value) && value >= 0)
     && count < SAVE_LIMITS.count && uploadBytes <= SAVE_LIMITS.snapshot && usedBytes + uploadBytes + 16384 <= SAVE_LIMITS.storage;
 }
-export const SNAPSHOT_MAGIC = new Uint8Array([67, 67, 83, 65, 86, 69, 51, 0]);
+export const SNAPSHOT_MAGIC = new Uint8Array([67, 67, 83, 65, 86, 69, 52, 0]);
 export type SavedUnit = [string, number, number, number[], number];
 export type SavedContribution = [number, string, number, number];
 export type SourceSection = { length: number; sha256: string };
@@ -28,7 +24,7 @@ export type SavedFile = {
   outcome: string; fact: { canonicalPath: string; S: number; U: number; M: number } | null;
   units: SavedUnit[]; contributions: SavedContribution[];
 };
-export type SavedHeader = { version: 3; analyzer: string; origin: InvestigationOrigin; exclusions: string[]; fixedExcludedSegments: string[]; hierarchy: string[]; files: SavedFile[]; city: unknown };
+export type SavedHeader = { version: 4; analyzer: string; origin: InvestigationOrigin; exclusionPolicy: RecordedExclusionPolicy; hierarchy: string[]; files: SavedFile[]; city: unknown };
 export type SavedRecord = { kind?: InvestigationOrigin["kind"]; id: string; savedAt: string; repository: string; ref: string; revision: string; bytes: number; sha256: string };
 export const validSavedId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value);
 const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
@@ -82,14 +78,14 @@ export function cityForSnapshot(city: CityPayload | null): unknown {
   return { geometry: { ...city.geometry, origins: Array.from(city.geometry.origins), sizes: Array.from(city.geometry.sizes), rgba: Array.from(city.geometry.rgba), bounds: Array.from(city.geometry.bounds) }, inspection: city.inspection };
 }
 export function validateSavedHeader(value: unknown): { header: SavedHeader; sections: SourceSection[]; payloadBytes: number } {
-  const data = record(value, ["version", "analyzer", "origin", "exclusions", "fixedExcludedSegments", "hierarchy", "files", "city"]);
+  const data = record(value, ["version", "analyzer", "origin", "exclusionPolicy", "hierarchy", "files", "city"]);
   requireValue(typeof data.analyzer === "string" && /^[0-9a-f]{64}$/u.test(data.analyzer));
-  requireValue(data.version === 3);
+  requireValue(data.version === 4);
   parseInvestigationOrigin(data.origin);
-  for (const field of ["exclusions", "hierarchy"] as const) requireValue(list(data[field], 100_000).every(path => typeof path === "string" && (field === "hierarchy" || path.length <= 4096) && path.isWellFormed()));
-  const fixedExcludedSegments = list(data.fixedExcludedSegments, 6);
-  requireValue(V3_FIXED_EXCLUSION_LISTS.some(rules => rules.length === fixedExcludedSegments.length
-    && rules.every((rule, index) => rule === fixedExcludedSegments[index])));
+  const policy = parseRecordedExclusionPolicy(data.exclusionPolicy);
+  if ((data.origin as InvestigationOrigin).kind === "working-tree") requireValue(!policy.detected.some(([path]) => path.split("/").some(segment => segment.toLowerCase() === ".git")));
+  requireValue(list(data.hierarchy, 100_000).every(path => typeof path === "string" && path.isWellFormed()));
+  const detectedPaths = new Set(policy.detected.map(([path]) => path)), includedPaths = new Set(policy.included);
   const files = list(data.files, MAX_ADMITTED_MODULES);
   requireValue(files.length > 0);
   const sections: SourceSection[] = [];
@@ -98,6 +94,9 @@ export function validateSavedHeader(value: unknown): { header: SavedHeader; sect
   for (const file of files) {
     const entry = record(file, ["path", "normalized", "outcome", "fact", "units", "contributions"]);
     requireValue(typeof entry.path === "string" && isCanonicalSourcePath(entry.path) && (!prior || compareUnsignedUtf8(prior, entry.path) < 0)); prior = entry.path;
+    requireValue(!policy.effective.some(root => entry.path === root || (entry.path as string).startsWith(`${root}/`)));
+    requireValue(automaticRootPaths(entry.path).every(root => includedPaths.has(root) && detectedPaths.has(root)));
+    if ((data.origin as InvestigationOrigin).kind === "working-tree") requireValue(!(entry.path as string).split("/").some(segment => segment.toLowerCase() === ".git"));
     const normalized = entry.normalized === null ? null : section(entry.normalized, MAX_NORMALIZED_MODULE_BYTES);
     if (normalized) { normalizedTotal += normalized.length; sections.push(normalized); }
     requireValue(["success", "Source text is not supported", "Syntax could not be analyzed", "Metrics could not be computed"].includes(entry.outcome as string));

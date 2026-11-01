@@ -26,8 +26,8 @@ Do not fall back to recursively enumerating a complete FileList: multi-gigabyte
 checkouts require pruning excluded directories before descending into them.
 
 Include supported-suffix regular files, whether tracked, untracked or ignored,
-after the xref:source-and-metrics.adoc#CC-CORE-SRC-05[fixed defaults, including
-`.angular`, and captured user exclusions]. Prune excluded directories before
+after the xref:automatic-exclusions.adoc[automatic catalogue, exact-root include
+exceptions and captured manual exclusions]. Prune excluded directories before
 entering them or reading their files. Do not read or interpret
 .gitignore or Git metadata. Skip .git files/directories at every depth with a
 case-insensitive local metadata rule. Nested checkouts and already populated
@@ -83,8 +83,8 @@ instance can read saved investigations and their retained code. State that share
 visibility in the local UI. This does not authorize new network exposure, TLS
 configuration, Internet hosting, automatic upload or access to internal repos.
 
-The version-3 snapshot records tagged GitHub/local origin, capture/revision
-identity, exclusions, hierarchy, outcomes, metrics, units/contribution ownership
+The version-4 snapshot records tagged GitHub/local origin, capture/revision
+identity, applied recorded exclusion policy, hierarchy, outcomes, metrics, units/contribution ownership
 and normalized byte locations, fixed presentation evidence and one hashed
 normalized source section per retained text file. Successful files and valid
 text with syntax/metric failures retain their normalized text; unsupported text

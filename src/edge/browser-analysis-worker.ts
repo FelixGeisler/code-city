@@ -1,3 +1,4 @@
+import { exclusionSettings, recordExclusionPolicy, type RecordedExclusionPolicy } from "../domain/exclusion-policy";
 import { createSourceColoring } from "./shiki-source-highlighting";
 import { createFileInspection, validateInspectionQuery, type InspectionEvidence } from "../application/unit-inspection";
 import { analyzeRepository } from "../application/analyze-repository";
@@ -33,7 +34,11 @@ let current: ProjectAnalysis | undefined;
 // origin distinguishes a Git revision from a content-identified working-tree capture.
 let selectedRevision: string | undefined;
 let origin: InvestigationOrigin | undefined;
-let exclusions: readonly string[] = [];
+let exclusions: RecordedExclusionPolicy = recordExclusionPolicy([]);
+const reportPolicy = (policy: RecordedExclusionPolicy, complete: boolean): void => {
+  exclusions = policy;
+  send("EXCLUSION_POLICY", { policy, complete });
+};
 let saved: SavedRecord | undefined;
 const capture = createInvestigationCapture();
 const send = (type: string, payload: Record<string, unknown> = {}): void => scope.postMessage({ type, ...identity, ...payload });
@@ -86,7 +91,7 @@ async function restore(id: string): Promise<void> {
   const context = snapshotIdentity(restored.header);
   if ((["repository", "ref", "revision"] as const).some(key => context[key] !== receipt[key]) || context.kind !== (receipt.kind ?? "github")) throw new Error("Saved identity differs");
   const restoredOrigin: InvestigationOrigin = restored.header.origin;
-  origin = restoredOrigin; selectedRevision = investigationIdentity(restoredOrigin); exclusions = restored.header.exclusions;
+  origin = restoredOrigin; selectedRevision = investigationIdentity(restoredOrigin); exclusions = restored.header.exclusionPolicy;
   const city = snapshotCity(restored.header.city);
   const sources: ProjectAnalysis["sources"] = []; let offset = 0;
   for (const file of restored.header.files) { if (file.normalized) sources.push({ canonicalPath: file.path, normalizedUtf8: restored.sourceBytes[offset++]! }); }
@@ -95,7 +100,8 @@ async function restore(id: string): Promise<void> {
   saved = receipt;
   // Keep the complete decoded snapshot for subsequent inspection, not just the city.
   retainedSnapshot = restored;
-  send("RESTORED", { origin, record: receipt, exclusions });
+  send("RESTORED", { origin, record: receipt, exclusionPolicy: exclusions });
+  reportPolicy(exclusions, true);
   if (restoredOrigin.kind === "working-tree") send("WORKING_TREE_CAPTURED", { origin: restoredOrigin });
   else send("REVISION_SELECTED", { revision: selectedRevision });
   publish();
@@ -143,6 +149,7 @@ scope.addEventListener("message", (event: MessageEvent<unknown>) => {
   const local = value.inputKind === "working-tree";
   const keys = local ? ["type", "sessionId", "generation", "inputKind", "root", "name", "additionalExclusions"]
     : ["type", "sessionId", "generation", "repositoryUrl", "additionalExclusions", ...(value.savedId === undefined ? [] : ["savedId"])];
+  if (value.included !== undefined) keys.push("included");
   if (Object.keys(value).length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) { scope.close(); return; }
   const repository = !local && typeof value.repositoryUrl === "string" ? parseRepositoryReference(value.repositoryUrl) : undefined;
   const parsedExclusions = parseAdditionalExclusions(value.additionalExclusions);
@@ -154,11 +161,12 @@ scope.addEventListener("message", (event: MessageEvent<unknown>) => {
       if (!validSavedId(value.savedId)) throw new Error("Invalid saved identity");
       await restore(value.savedId); return;
     }
-    exclusions = parsedExclusions!;
+    const settings = exclusionSettings({ manual: parsedExclusions!, included: value.included === undefined ? [] : value.included as string[] });
+    reportPolicy(recordExclusionPolicy(settings), false);
     if (local) {
       send("WORKING_TREE_STARTED", { name: value.name });
-      const acquired = await acquireLocalWorkingTree(value.name as string, exclusions, signal, createLocalFolderGateway(value.root),
-        (completed: number, total: number) => send("WORKING_TREE_PROGRESS", { completed, total }));
+      const acquired = await acquireLocalWorkingTree(value.name as string, settings, signal, createLocalFolderGateway(value.root),
+        (completed: number, total: number) => send("WORKING_TREE_PROGRESS", { completed, total }), reportPolicy);
       if (signal.aborted || acquired.kind === "cancelled") { send("ANALYSIS_CANCELLED"); scope.close(); return; }
       if (acquired.kind === "failure") { send("WORKING_TREE_FAILED", { category: acquired.category, ...("code" in acquired ? { code: acquired.code } : {}) }); scope.close(); return; }
       const capturedOrigin: InvestigationOrigin = acquired.origin;
@@ -181,9 +189,9 @@ scope.addEventListener("message", (event: MessageEvent<unknown>) => {
       if (analysis.kind === "failure") { send("ANALYSIS_FAILED", { revision: selectedRevision, category: analysis.category, code: analysis.code }); scope.close(); return; }
       current = analysis.result; publish(); return;
     }
-    const outcome = await analyzeRepository(repository!, exclusions, signal, {
+    const outcome = await analyzeRepository(repository!, settings, signal, {
       revisionGateway: createGithubRevisionGateway(fetch), sourceGateway: createGithubRawSourceGateway(fetch), parser: createTreeSitterAdapter(assets), capture,
-    }, revision => { selectedRevision = revision; origin = { kind: "github", repositoryUrl: value.repositoryUrl as string, revision }; send("REVISION_SELECTED", { revision }); }, progress => send("ANALYSIS_PROGRESS", { revision: selectedRevision, ...progress }));
+    }, revision => { selectedRevision = revision; origin = { kind: "github", repositoryUrl: value.repositoryUrl as string, revision }; send("REVISION_SELECTED", { revision }); }, progress => send("ANALYSIS_PROGRESS", { revision: selectedRevision, ...progress }), reportPolicy);
     if (outcome.kind === "cancelled") { send("ANALYSIS_CANCELLED"); scope.close(); return; }
     if (outcome.kind === "failure") { send("ANALYSIS_FAILED", { category: outcome.category, ...(outcome.revision === undefined ? {} : { revision: outcome.revision }), ...(outcome.code === undefined ? {} : { code: outcome.code }) }); scope.close(); return; }
     current = outcome.result; publish();

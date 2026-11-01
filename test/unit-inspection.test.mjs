@@ -7,6 +7,7 @@ const{createInvestigationCapture}=await import('../src/application/investigation
 const{analyzeProjectSources}=await import('../src/application/project-analysis.ts');
 const{createNodeTreeSitterAdapter}=await import('../src/edge/node/parser-assets.ts');
 const{decodeSnapshot}=await import('../src/application/saved-investigation.ts');
+const{recordExclusionPolicy}=await import('../src/domain/exclusion-policy.ts');
 const encoder=new TextEncoder(),decoder=new TextDecoder();
 async function analyze(path,source){
  const bytes=encoder.encode(source),capture=createInvestigationCapture();let calls=0;const real=createNodeTreeSitterAdapter();
@@ -39,15 +40,15 @@ test('JSX, TSX and C# callable evidence survives parser release',async()=>{
   assert.equal((await f.read({type:'contributions',path,unit:unit.id,offset:0,cursor:null})).rows.length,1);assert.equal(f.calls(),1);
  }
 });
-test('a version-3 source-once snapshot restores identical unit/source/contribution views without analysis',async()=>{
- const f=await analyze('nested.js',nested);const blob=await f.capture.snapshot({kind:'github',repositoryUrl:'https://github.com/fixture/repository',revision:'a'.repeat(40)},[],f.result,'f'.repeat(64));const restored=await decodeSnapshot(new Uint8Array(await blob.arrayBuffer()));
+test('a version-4 source-once snapshot restores identical unit/source/contribution views without analysis',async()=>{
+ const f=await analyze('nested.js',nested);const blob=await f.capture.snapshot({kind:'github',repositoryUrl:'https://github.com/fixture/repository',revision:'a'.repeat(40)},recordExclusionPolicy([]),f.result,'f'.repeat(64));const restored=await decodeSnapshot(new Uint8Array(await blob.arrayBuffer()));
  const file=restored.header.files[0];const read=createFileInspection(file.path,restored.sourceBytes[0],{units:{length:file.units.length,at(index){const row=file.units[index];return{kind:row[0],startByte:row[1],endByte:row[2],complexity:row[4]};}},contributionCount:file.contributions.length,contributions:()=>file.contributions});
  for(const query of [{type:'units',path:file.path,offset:0},{type:'source',path:file.path,unit:1,cursor:null},{type:'contributions',path:file.path,unit:1,offset:0,cursor:null},{type:'contributions',path:file.path,unit:1,offset:0,cursor:(await read({type:'source',path:file.path,unit:1,cursor:null})).cursor}])assert.deepEqual(await read(query),await f.read(query));assert.equal(f.calls(),1);
 });
 test('Save capture budget exhaustion does not remove unit inspection evidence',async()=>{
  const f=await analyze('nested.js',nested);f.capture.contribution('unpublished.js',0,'x'.repeat(12*1048576),0,1);
  const read=createFileInspection('nested.js',f.result.sources[0].normalizedUtf8,f.capture.inspection('nested.js'));assert.equal((await read({type:'units',path:'nested.js',offset:0})).total,3);
- await assert.rejects(()=>f.capture.snapshot({kind:'github',repositoryUrl:'https://github.com/fixture/repository',revision:'a'.repeat(40)},[],f.result,'f'.repeat(64)),/Save limits/u);
+ await assert.rejects(()=>f.capture.snapshot({kind:'github',repositoryUrl:'https://github.com/fixture/repository',revision:'a'.repeat(40)},recordExclusionPolicy([]),f.result,'f'.repeat(64)),/Save limits/u);
 });
 test('source and contribution pages are bounded but cover a dense long line completely',async()=>{
  const source='a&&b;'.repeat(10000),path='dense.js',bytes=encoder.encode(source);

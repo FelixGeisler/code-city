@@ -17,6 +17,7 @@
 *** xref:adr/0018-recursive-district-presentation.adoc[ADR 0018: Recursive district presentation]
 *** xref:adr/0019-local-working-tree-acquisition.adoc[ADR 0019: Browser-owned local working-tree acquisition]
 *** xref:adr/0020-source-once-shared-investigation-snapshots.adoc[ADR 0020: Shared source-once investigation snapshots]
+*** xref:adr/0021-recorded-automatic-exclusion-policy.adoc[ADR 0021: Recorded automatic exclusion policy]
 * xref:10-quality-requirements.adoc[10. Quality Requirements]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]

@@ -2,7 +2,8 @@ import { parseWorkerMessage, readGeneration, type ParsedWorkerMessage, type Work
 import type { InspectionFact, NumericPresentation, ValidatedCity, ValidatedGeometry } from "./city-payload";
 import type { FailureCode } from "./resolution";
 import { parseRepositoryReference } from "../domain/repository-reference";
-import { FIXED_EXCLUDED_SEGMENTS, parseAdditionalExclusions } from "../domain/source-admission";
+import { parseAdditionalExclusions } from "../domain/source-admission";
+import { AUTOMATIC_EXCLUSION_RULES } from "../domain/exclusion-policy";
 import {
   createBuildingRevealCommand,
   type BuildingRevealCommand,
@@ -649,7 +650,7 @@ export function createMainController(
       return false;
     }
 
-    view.effectiveExclusions(Object.freeze([...FIXED_EXCLUDED_SEGMENTS, ...additionalExclusions]));
+    view.effectiveExclusions(Object.freeze([...AUTOMATIC_EXCLUSION_RULES.map(rule => rule.path), ...additionalExclusions]));
     view.working(cancel);
     try {
       transport.send({ type: "START", generation: nextGeneration, repository, additionalExclusions });

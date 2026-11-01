@@ -1,3 +1,4 @@
+import type { ExclusionInput, ExclusionReport } from "../domain/exclusion-policy";
 import { resolveRevision, type RevisionGateway } from "./resolution";
 import { acquireProjectSources, type ImmutableRawSourceGateway } from "./source-retrieval";
 import { analyzeProjectSources, type ProjectAnalysis } from "./project-analysis";
@@ -22,11 +23,12 @@ export type RepositoryAnalysisDependencies = Readonly<{
 /** One execution-neutral acquisition/analysis path; edges own worker lifetime. */
 export async function analyzeRepository(
   repository: RepositoryReference,
-  additionalExclusions: readonly string[],
+  additionalExclusions: ExclusionInput,
   signal: AbortSignal,
   dependencies: RepositoryAnalysisDependencies,
   onRevision: (revision: string) => void,
   onProgress: (progress: AnalysisProgress) => void,
+  report: ExclusionReport = () => {},
 ): Promise<RepositoryAnalysisResult> {
   let revision: string | undefined;
   try {
@@ -40,7 +42,7 @@ export async function analyzeRepository(
         && ownership.candidateIndex !== undefined && ownership.candidateCount !== undefined) {
         onProgress({ stage: "acquisition", completed: ownership.candidateIndex, total: ownership.candidateCount });
       }
-    }, additionalExclusions);
+    }, additionalExclusions, report);
     if (signal.aborted || acquired.kind === "cancelled") return { kind: "cancelled" };
     if (acquired.kind === "failure") return { ...acquired, revision };
     onProgress({ stage: "analysis-initialization" });
