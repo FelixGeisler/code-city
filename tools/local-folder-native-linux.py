@@ -28,9 +28,51 @@ def require(condition, message):
 def proc(pid):
     base = Path('/proc') / str(pid)
     fields = (base / 'stat').read_text().rsplit(')', 1)[1].split()
-    return {'pid': pid, 'ppid': int(fields[1]), 'start': fields[19],
+    return {'pid': pid, 'ppid': int(fields[1]), 'pgid': int(fields[2]), 'start': fields[19],
             'args': (base / 'cmdline').read_bytes().split(b'\0'),
             'exe': os.readlink(base / 'exe'), 'uid': base.stat().st_uid}
+
+
+def profile_matches(args, profile):
+    """Exactly one real switch, in either Chrome spelling; never substring matching."""
+    expected, values, i = os.fsencode(profile), [], 1
+    while i < len(args) and args[i] != b'--':
+        arg = args[i]
+        if arg == b'--user-data-dir':
+            i += 1
+            values.append(args[i] if i < len(args) else None)
+        elif arg.startswith(b'--user-data-dir='):
+            values.append(arg[len(b'--user-data-dir='):])
+        elif arg.startswith(b'--user-data-dir'):
+            return False
+        i += 1
+    return values == [expected]
+
+
+def verify_processes(a, owner, lookup=proc, uid=None, environment=None):
+    """Fail before loading X11 unless the actual CDP browser is still our process."""
+    uid = os.getuid() if uid is None else uid
+    linux = owner['linux']
+    require(a.xvfb_pid == linux['xvfbPid'], 'Xvfb PID ownership mismatch')
+    require(a.chrome_pid == linux['chromePid'], 'Chrome PID ownership mismatch')
+    xvfb, chrome = lookup(a.xvfb_pid), lookup(a.chrome_pid)
+    require(xvfb['start'] == linux['xvfbStart'], 'Xvfb PID identity changed')
+    require(chrome['start'] == linux['chromeStart'], 'Chrome PID identity changed')
+    require(xvfb['uid'] == chrome['uid'] == linux['chromeUid'] == uid, 'Process UID mismatch')
+    require(Path(xvfb['exe']).name == 'Xvfb' and b'-displayfd' in xvfb['args']
+            and b'-nolisten' in xvfb['args'] and b'tcp' in xvfb['args'], 'Not our isolated Xvfb')
+    require(chrome['exe'] == linux['chromeExe'], 'Chrome executable changed')
+    launcher = linux['launcher']
+    require(launcher['uid'] == uid and launcher['pgid'] == launcher['pid']
+            and chrome['pgid'] == linux['chromePgid'] == launcher['pgid']
+            and int(chrome['start']) >= int(launcher['start']), 'Chrome launch group mismatch')
+    if chrome['pid'] == launcher['pid']:
+        require(chrome['start'] == launcher['start'], 'Launcher PID identity changed')
+    require(profile_matches(chrome['args'], a.profile), 'Chrome profile mismatch')
+    if environment is None:
+        environment = (Path('/proc') / str(a.chrome_pid) / 'environ').read_bytes()
+    require(os.fsencode('DISPLAY=' + a.display) in environment.split(b'\0'), 'Chrome not on our Xvfb')
+    return xvfb, chrome
 
 
 def key_symbol(name, lookup):
@@ -49,7 +91,57 @@ if sys.argv[1:] == ['--self-test']:
     require(key_symbol('Return', lambda name: 0xff0d if name == b'Return' else 0) == 0xff0d,
             'Named keysym regression')
     require([typing_modifiers(c) for c in 'C_/-az'] == [1, 1, 0, 0, 0, 0], 'Shift-mask regression')
-    print(json.dumps({'status': 'passed', 'scope': 'ASCII/named keysyms and Shift masks only; no X11/native runtime'}))
+    profile = '/tmp/owned'
+    for args in [[b'chrome', b'--user-data-dir=/tmp/owned'],
+                 [b'chrome', b'--user-data-dir', b'/tmp/owned']]:
+        require(profile_matches(args, profile), 'Recognized profile switch rejected')
+    for args in [[], [b'chrome'], [b'chrome', b'--user-data-dir'],
+                 [b'chrome', b'--user-data-dir='], [b'chrome', b'--user-data-dir', b''],
+                 [b'chrome', b'--user-data-dir=/tmp/owned-extra'],
+                 [b'chrome', b'--user-data-dir=/wrong'],
+                 [b'chrome', b'--user-data-directory=/tmp/owned'],
+                 [b'chrome', b'--other=--user-data-dir=/tmp/owned'],
+                 [b'chrome', b'--', b'--user-data-dir=/tmp/owned'],
+                 [b'chrome', b'--user-data-dir=/tmp/owned', b'--user-data-dir=/tmp/owned'],
+                 [b'chrome', b'--user-data-dir', b'/tmp/owned', b'--user-data-dir=/wrong'],
+                 [b'chrome', b'--user-data-dir=/wrong', b'--user-data-dir', b'/tmp/owned']]:
+        require(not profile_matches(args, profile), 'Ambiguous/wrong profile accepted: ' + repr(args))
+    require(profile_matches([b'chrome', b'--user-data-dir=/tmp/owned-\xff'], b'/tmp/owned-\xff'),
+            'Profile comparison must preserve filesystem bytes')
+    a = argparse.Namespace(xvfb_pid=90, chrome_pid=101, profile=profile, display=':7')
+    xvfb = {'pid': 90, 'start': '100', 'uid': 42, 'exe': '/usr/bin/Xvfb',
+            'args': [b'Xvfb', b'-displayfd', b'3', b'-nolisten', b'tcp']}
+    chrome = {'pid': 101, 'pgid': 100, 'start': '201', 'uid': 42, 'exe': '/opt/google/chrome/chrome',
+              'args': [b'chrome', b'--user-data-dir=/tmp/owned']}
+    launcher = {'pid': 100, 'pgid': 100, 'start': '200', 'uid': 42}
+    linux = {'xvfbPid': 90, 'xvfbStart': '100', 'chromePid': 101, 'chromeStart': '201',
+             'chromeExe': chrome['exe'], 'chromeUid': 42, 'chromePgid': 100, 'launcher': launcher}
+
+    def check(c=chrome, x=xvfb, l=linux, env=b'DISPLAY=:7\0'):
+        return verify_processes(a, {'linux': l}, lambda pid: x if pid == 90 else c, 42, env)
+
+    def refuses(f):
+        try:
+            f()
+        except RuntimeError:
+            return
+        raise RuntimeError('Ownership guard accepted invalid identity')
+
+    check()
+    check(c={**chrome, 'args': [b'chrome', b'--user-data-dir', b'/tmp/owned']})
+    check(l={**linux, 'launcher': {**launcher, 'pid': 101, 'pgid': 101, 'start': '201'}, 'chromePgid': 101},
+          c={**chrome, 'pgid': 101})
+    for change in [{'uid': 43}, {'start': '202'}, {'exe': '/other'}, {'pgid': 99},
+                   {'args': [b'chrome', b'--user-data-dir=/wrong']}]:
+        refuses(lambda change=change: check(c={**chrome, **change}))
+    for change in [{'uid': 43}, {'start': '101'}, {'exe': '/other'}, {'args': [b'Xvfb']}]:
+        refuses(lambda change=change: check(x={**xvfb, **change}))
+    for change in [{'chromePid': 102}, {'xvfbPid': 91}, {'chromeUid': 43}, {'chromePgid': 99},
+                   {'launcher': {**launcher, 'start': '202'}},
+                   {'launcher': {**launcher, 'pgid': 99}}, {'launcher': {**launcher, 'uid': 43}}]:
+        refuses(lambda change=change: check(l={**linux, **change}))
+    refuses(lambda: check(env=b'DISPLAY=:70\0'))
+    print(json.dumps({'status': 'passed', 'scope': 'synthetic process ownership, exact profile bytes, ASCII/named keysyms and Shift masks; no X11/native runtime'}))
     sys.exit(0)
 
 
@@ -67,17 +159,7 @@ owner = json.loads(Path(a.ownership).read_text())
 require(a.fixture in (owner['fixture'], owner['empty']), 'Not an owned fixture')
 require(a.profile == owner['profile'], 'Profile ownership mismatch')
 require(a.display == owner['linux']['display'], 'Display ownership mismatch')
-xvfb, chrome = proc(a.xvfb_pid), proc(a.chrome_pid)
-require(xvfb['start'] == owner['linux']['xvfbStart'], 'Xvfb PID identity changed')
-require(chrome['start'] == owner['linux']['chromeStart'], 'Chrome PID identity changed')
-require(xvfb['uid'] == chrome['uid'] == os.getuid(), 'Process UID mismatch')
-require(Path(xvfb['exe']).name == 'Xvfb' and b'-displayfd' in xvfb['args']
-        and b'-nolisten' in xvfb['args'] and b'tcp' in xvfb['args'], 'Not our isolated Xvfb')
-require(chrome['exe'] == owner['linux']['chromeExe'], 'Chrome executable changed')
-require(os.fsencode('--user-data-dir=' + a.profile) in chrome['args'], 'Chrome profile mismatch')
-require(os.fsencode('DISPLAY=' + a.display) in
-        (Path('/proc') / str(a.chrome_pid) / 'environ').read_bytes().split(b'\0'),
-        'Chrome not on our Xvfb')
+xvfb, chrome = verify_processes(a, owner)
 s = os.lstat(a.fixture)
 expected = owner['identities'][a.fixture]
 require(stat.S_ISDIR(s.st_mode) and not stat.S_ISLNK(s.st_mode)
