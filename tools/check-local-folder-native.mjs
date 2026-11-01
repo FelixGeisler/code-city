@@ -356,7 +356,10 @@ async function main() {
   }
   const worker = command => evaluate('rpc('+JSON.stringify(command)+')',true);
   async function pick(target) {
-    await assertOwned(target);await evaluate('pick();void 0',false,true);
+    await assertOwned(target);
+    await cdp.send('Page.bringToFront',{},sessionId);
+    await until(()=>evaluate('document.hasFocus()'),'Owned native picker page focus');
+    await evaluate('pick();void 0',false,true);
     if(process.platform==='win32') {
       await until(async()=>{const d=await dialog('inspect');return d.dialogs.length;},'Owned native chooser');
       await dialog('select',target); await delay(800);
