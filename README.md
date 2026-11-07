@@ -41,7 +41,7 @@ Save is optional. After Save, the action disappears and plain **Saved** confirms
 
 ## Initial release scope
 
-The private package's initial release version is **0.1.0**; this is not a claim of a published release or Git tag. Snapshot format **v4** is a separate data-format version.
+Initial version: **0.1.0**. Saved snapshots continue to use format **v4**.
 Supported sources are local working trees in secure desktop Chromium and anonymously accessible public GitHub repositories; supported languages and city dimensions are defined in [Source and Metrics](https://github.com/felixgeisler/code-city/blob/main/docs/modules/requirements/pages/source-and-metrics.adoc). Colours show magnitude, not code-health classifications. See the build/run support limits above.
 
 - Choose the Local folder or GitHub URL tab; only its input is shown. Select a folder, then Analyze working-tree files including uncommitted edits, or analyze an anonymously accessible public GitHub repository at an immutable revision.
