@@ -4,12 +4,15 @@ import { registerHooks } from "node:module";
 import test from "node:test";
 
 class Element extends EventTarget {
-  hidden = false; disabled = false; value = ""; textContent = ""; children = []; attributes = new Map(); open = false;
+  hidden = false; disabled = false; value = ""; textContent = ""; children = []; attributes = new Map(); open = false; dataset = {};
+  constructor(tag = 'div') { super(); this.tagName = tag.toUpperCase(); }
+  getAttribute(key) { return this.attributes.get(key) ?? null; }
+  getClientRects() { return []; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; this.textContent = ""; }
   setAttribute(key, value) { this.attributes.set(key, value); }
   removeAttribute(key) { this.attributes.delete(key); }
-  contains(child) { return this.children.includes(child); }
+  contains(child) { return child === this || this.children.some(node => node instanceof Element && node.contains(child)); }
   focus() { document.activeElement = this; }
   click() { this.dispatchEvent(new Event("click")); }
   showModal() { this.open = true; }
@@ -17,7 +20,7 @@ class Element extends EventTarget {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 let epoch = 0;
-async function fixture(picker) {
+async function fixture(picker, realInspection = false) {
   const elements = new Map();
   const node = selector => { if (!elements.has(selector)) elements.set(selector, new Element()); return elements.get(selector); };
   const state = { calls: [], view: undefined, restore: undefined, clears: 0, records: [] };
@@ -34,7 +37,7 @@ async function fixture(picker) {
   const originals = new Map();
   const set = (key, value) => { originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { configurable: true, writable: true, value }); };
   set("__shellFixture", state);
-  set("document", { querySelector: node, createElement: () => new Element() });
+  set("document", { querySelector: node, createElement: tag => new Element(tag) });
   const window = new EventTarget(); window.isSecureContext = true; window.showDirectoryPicker = picker;
   set("window", window);
   set("history", { replaceState() {} });
@@ -45,20 +48,80 @@ async function fixture(picker) {
       const mocks = {
         "./standalone-browser-controller": "export function createStandaloneBrowserController(transport,view) { globalThis.__shellFixture.view = view; return globalThis.__shellFixture.controller; }",
         "./browser-worker-transport": "export function createBrowserWorkerTransport(factory,restore) { globalThis.__shellFixture.restore = restore; return {}; }",
-        "./standalone-presentation-session": "export function createStandalonePresentationCoordinator() { const state=globalThis.__shellFixture; return {clear(){state.clears++;},publish(){return true;},dispose(){},failCurrent(){},cancelInspectionIntent(){}}; }",
+        "./standalone-presentation-session": realInspection
+          ? "export function createStandalonePresentationCoordinator(options) { return globalThis.__shellFixture.createPresentation(options); }"
+          : "export function createStandalonePresentationCoordinator() { const state=globalThis.__shellFixture; return {clear(){state.clears++;},publish(){return true;},dispose(){},failCurrent(){},cancelInspectionIntent(){}}; }",
         "./browser-saved-investigations": "export async function listSavedInvestigations(){return globalThis.__shellFixture.records;} export function savedUrl(id){return 'http://localhost/saved/'+id;}",
       };
       if (mocks[specifier]) return { url: `data:text/javascript,${encodeURIComponent(mocks[specifier])}`, shortCircuit: true };
     }
     return next(/^\.\.?\//u.test(specifier) && !/(?:\.[a-z]+|\?.*)$/iu.test(specifier) ? `${specifier}.ts` : specifier, context);
   } });
-  try { await import(`../src/edge/standalone-browser-main.ts?shell=${++epoch}`); }
+  try {
+    if (realInspection) {
+      const { stageStandaloneInventoryPublication, createInventoryState } = await import('../src/edge/standalone-presentation-session.ts');
+      state.createPresentation = ({ documentTarget, root, inspect }) => {
+        let publication, inventory;
+        return {
+          publish(generation, model) {
+            const methods = ['selectionAction','queryChanged','sortChanged','rowActivated','districtActivated','hierarchyFileActivated'];
+            const sink = Object.fromEntries(methods.map(method => [method, (...args) => inventory[method](...args)]));
+            publication = stageStandaloneInventoryPublication(documentTarget, model.inspection, generation, sink, [{root:true,identity:'_root'}], inspect);
+            inventory = createInventoryState({ inspection:model.inspection, districtCount:1, generation, identity:publication.identity,
+              publishProjection(projection) { publication.setProjection(projection, inventory.snapshot().selection); },
+              applyVisual() { return {kind:'applied'}; },
+              publishSelection(file) { publication.setSelection(file); },
+              cancelInspectionIntent() { publication.cancelInspectionIntent(); }, failed() { assert.fail('publication failed'); } });
+            root.replaceChildren(...publication.nodes); state.inventory = inventory;
+            return true;
+          },
+          clear() { state.clears++; }, failCurrent() { assert.fail('presentation failed'); },
+          cancelInspectionIntent() { publication?.cancelInspectionIntent(); },
+          dispose() { publication?.rollback(); inventory?.dispose(); },
+        };
+      };
+    }
+    await import(`../src/edge/standalone-browser-main.ts?shell=${++epoch}`);
+  }
   catch (error) { hooks.deregister(); for (const [key, value] of originals) { if (value) Object.defineProperty(globalThis, key, value); else delete globalThis[key]; } throw error; }
   hooks.deregister();
   const click = selector => node(selector).dispatchEvent(new Event("click"));
   const submit = () => node("form").dispatchEvent(new Event("submit", { cancelable: true }));
   return { state, node, click, submit, close() { window.dispatchEvent(new Event("pagehide")); for (const [key, value] of originals) { if (value) Object.defineProperty(globalThis, key, value); else delete globalThis[key]; } } };
 }
+
+const descendants = root => [root, ...root.children.flatMap(child => child instanceof Element ? descendants(child) : [])];
+test('actual shell source edits cancel held real unit-view authorization without discarding the city or staged settings', async () => {
+  for (const action of ['unchanged', 'repository', 'source-tab', 'exclusions', 'choose-folder']) {
+    let pickerResolve;
+    const f = await fixture(() => new Promise(resolve => { pickerResolve = resolve; }), true);
+    try {
+      const pending = [], reads = [];
+      f.state.controller.inspect = query => { reads.push(query); return new Promise(resolve => pending.push({query,resolve})); };
+      f.state.view.origin({kind:'github',repositoryUrl:'https://github.com/fixture/repo'});
+      f.state.view.succeeded(1, {inspection:[{canonicalPath:'a.js',S:2,U:1,M:2}]}, [], 'a'.repeat(40));
+      f.click('[data-change-repository]');
+      edit(f, 'staged');
+      const root = f.node('[data-presentation]');
+      const primary = descendants(root).find(e => 'inspectHighest' in e.dataset);
+      primary.click(); assert.equal(reads.length, 1, action);
+      if (action === 'repository') { f.node('input[name=repository]').value='https://github.com/fixture/next'; f.node('input[name=repository]').dispatchEvent(new Event('input')); }
+      if (action === 'source-tab') f.click('[data-source-local]');
+      if (action === 'exclusions') edit(f, 'staged\nnext');
+      if (action === 'choose-folder') { f.click('[data-choose-folder]'); assert.equal(typeof pickerResolve,'function'); } // deliberately never complete picker
+      const request = pending[0];
+      request.resolve({...request.query,total:1,rows:[{id:0,kind:'function',complexity:2,start:{line:1,column:1},end:{line:2,column:1}}]});
+      await flush();
+      assert.equal(reads.length, action === 'unchanged' ? 2 : 1, action+' source read count');
+      assert.equal(descendants(root).find(e => 'unitSource' in e.dataset)?.open === true, action === 'unchanged', action+' dialog state');
+      assert.equal(f.state.inventory.snapshot().selection,0);
+      assert.equal(f.state.clears,0);
+      assert.equal(f.node('[data-save]').hidden,false);
+      assert.equal(editor(f).value, action==='exclusions' ? 'staged\nnext' : 'staged');
+      assert.deepEqual(f.state.calls,[['start']], 'edit must not analyze or save');
+    } finally { f.close(); }
+  }
+});
 
 test("shell defaults to local-first setup with separate choose/Analyze and explicit shared-source Save notice", async () => {
   const html = await readFile(new URL("../standalone.html", import.meta.url), "utf8");

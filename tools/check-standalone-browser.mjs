@@ -14,7 +14,7 @@ import { expectCleanExit, launchStandalone, readyOrigin, request, sendGracefulSi
 import { createBrowserProviderHarness, FIXTURE_REVISION, providerRequestLeaksPrivateHeaders } from "./standalone-browser-provider-harness.mjs";
 import { exerciseLocalBrowser, reopenLocalBrowser, localPickerSubstitution } from "./standalone-local-browser-scenarios.mjs";
 import { exerciseAutomaticExclusions, reopenAutomaticExclusions } from "./standalone-automatic-exclusion-scenarios.mjs";
-import { exerciseWorkspace } from "./standalone-workspace-scenarios.mjs";
+import { exerciseWorkspace, assertContextualDetailsReachable } from "./standalone-workspace-scenarios.mjs";
 
 const WATCHDOG_MS = 600_000;
 const REPOSITORY = "https://github.com/fixture/standalone";
@@ -341,7 +341,15 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     assert.equal((await p.snapshot()).selectedFile, null);
     await p.evaluate(`window.__render.capturePixels=false;true`);
     await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, p.sessionId));
-    assert.equal(await p.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{const panel=document.querySelector('[data-selection-details]'),last=panel.querySelector('dl > div:last-child');last.scrollIntoView({block:'nearest'});const p=panel.getBoundingClientRect(),r=last.getBoundingClientRect();resolve(document.documentElement.scrollWidth<=innerWidth&&r.bottom<=p.bottom&&r.top>=p.top&&p.height<innerHeight*.5);})))`), true, "mobile district metrics were clipped or overflowed");
+    await p.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+    const mobileGeometry = () => p.evaluate(`(()=>{const c=document.querySelector('[data-city] canvas'),r=c.getBoundingClientRect();return {rect:[r.x,r.y,r.width,r.height],buffer:[c.width,c.height],matrix:window.__render.matrices.at(-1),uploads:window.__render.uploads};})()`);
+    const beforeMobilePanels = await mobileGeometry();
+    await assertContextualDetailsReachable(p);
+    await p.click('[data-navigation-toggle]');
+    assert.equal(await p.evaluate(`document.querySelector('[data-selection-details]').hidden`),true,'lookup must hide covered selected details');
+    await p.click('[data-close-navigation]');
+    await assertContextualDetailsReachable(p);
+    assert.deepEqual(await mobileGeometry(),beforeMobilePanels,'contextual panels changed canvas, matrix or buffers');
     await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 1365, height: 900, deviceScaleFactor: 1, mobile: false }, p.sessionId));
 
     process.stdout.write("Browser evidence: explicit Save and project/ref picker\n");

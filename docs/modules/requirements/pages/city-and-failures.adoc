@@ -351,7 +351,10 @@ setup and shows the captured project bar, actual phase progress, and Cancel.
 Change source is unavailable during analysis. After a result it opens setup as an
 overlay, without changing city size or selection; opening
 it focuses the active source input. Closing restores the city. Draft edits do
-not change the displayed investigation. Analyze submits the edited source and
+not change the displayed investigation. Repository, source-tab and exclusion edits,
+and folder-picker initiation (including cancellation or denial), cancel any
+pending primary inspection authorization without discarding draft or applied
+settings. Analyze submits the edited source and
 exclusions through the existing pipeline. Invalid submission restores setup with its error.
 There is no Discard or Reanalyze control. Closing the tab ends its browser-local
 investigation; no server analysis/session cleanup action is required.
@@ -376,6 +379,10 @@ Close and Escape hide it and return focus to Find a file. Search, sort and
 directory location persist within the investigation. Selecting a row shows
 contextual metrics/units in a dismissible overlay, not a reserved column.
 Close details uses the same guarded clear-selection action as the canvas.
+While lookup is open, selected details are hidden and cannot receive keyboard
+focus; closing lookup restores them without clearing selection. Details fit
+inside the viewport below the city tools, with scroll access to the last metric
+and an uncovered Close details control; they need not occupy half the screen.
 
 File, directory, clear-selection, navigation, legend and source-setup toggles
 never resize or move the canvas or change its camera, bitmap, geometry or GPU

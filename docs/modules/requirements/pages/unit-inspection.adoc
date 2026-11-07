@@ -39,7 +39,10 @@ scope controls remaining reachable and no outer-dialog scroll hunt. Narrow
 screens normally stack these panes. Short landscape screens (including 700×390)
 keep code beside a scrollable contribution region; narrower short screens scroll
 the stacked body beneath the fixed Close/title row. Contributions retain a useful
-list viewport even with Reading contributions expanded. Keyboard users can focus
+list viewport even with Reading contributions expanded: at least 120px, growing
+with enlarged list typography so a focused row remains readable. Short-screen
+source content scrolls inside its pane rather than overlapping contributions.
+Keyboard users can focus
 the named contribution region to scroll it, or Tab through scope, help, paging,
 and every row; focus reveals each control. Sorting/tie and location help is
 optional disclosure content, not default explanatory paragraphs. An

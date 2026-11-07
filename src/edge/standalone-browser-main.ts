@@ -42,7 +42,7 @@ const exclusions = requiredElement<HTMLTextAreaElement>("textarea[name=additiona
 const exclusionsEditor = createExclusionsEditor(exclusions);
 let sourceSettingsEpoch = 0, attemptSettingsEpoch = 0;
 let retainRestoredFolderSettings = false;
-const resetSourceSettings = (): void => { sourceSettingsEpoch++; folderPickerEpoch++; retainRestoredFolderSettings = false; exclusionsEditor.reset(); };
+const resetSourceSettings = (): void => { presentation.cancelInspectionIntent(); sourceSettingsEpoch++; folderPickerEpoch++; retainRestoredFolderSettings = false; exclusionsEditor.reset(); };
 let repositorySettingsUrl = repository.value;
 repository.addEventListener("input", () => { repositorySettingsUrl = repository.value; resetSourceSettings(); });
 const feedback = requiredElement<HTMLElement>("[data-feedback]");
@@ -170,6 +170,10 @@ const presentation = createStandalonePresentationCoordinator({
     replaceStatus("Presentation failed (M1-PRES-1)");
   },
 });
+
+// User edits cancel delayed authorization, not the retained result or staged settings.
+// Register after presentation initialization; programmatic restore remains event-free.
+exclusions.addEventListener("input", () => presentation.cancelInspectionIntent());
 
 const view: StandaloneBrowserView = Object.freeze({
   clear() {
@@ -308,6 +312,7 @@ function submitAnalysis(repositoryUrl: string): void {
 }
 for (const [tab, kind] of [[localTab, "working-tree"], [githubTab, "github"]] as const) {
   tab.addEventListener("click", () => {
+    presentation.cancelInspectionIntent();
     if (inputKind === kind) return;
     resetSourceSettings();
     selectSource(kind);
@@ -323,6 +328,7 @@ for (const [tab, kind] of [[localTab, "working-tree"], [githubTab, "github"]] as
 selectSource("working-tree");
 const directoryPicker = (window as Window & { showDirectoryPicker?: (options: { mode: "read" }) => Promise<{ name: string }> }).showDirectoryPicker;
 chooseFolder.addEventListener("click", () => {
+  presentation.cancelInspectionIntent();
   if (!secureAnalysis || !directoryPicker) { folderStatus.textContent = "Read-only folder selection requires secure desktop Chromium. Public GitHub remains available."; return; }
   const epoch = ++folderPickerEpoch;
   // No file access or analysis on the UI thread: pass the native handle only on Analyze.
@@ -344,6 +350,7 @@ chooseFolder.addEventListener("click", () => {
 if (!secureAnalysis || !directoryPicker) folderStatus.textContent = "Read-only folder selection requires secure desktop Chromium. Public GitHub remains available.";
 form.addEventListener("submit", (event) => {
   event.preventDefault();
+  presentation.cancelInspectionIntent();
   if (inputKind === "github") { submitAnalysis(repository.value); return; }
   if (!secureAnalysis || !directoryPicker) { folderStatus.textContent = "Read-only folder selection requires secure desktop Chromium."; return; }
   if (!selectedFolder) { folderStatus.textContent = "Choose a folder before Analyze."; return; }

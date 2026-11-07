@@ -587,6 +587,33 @@ test("navigation tabs do not select; explicit Close uses the guarded shared clea
   state.dispose();
 });
 
+test('lookup owns the covered focus surface without disposing selected details; every reveal restores it', () => {
+  const f=hierarchyPublication(facts);
+  const node=key=>byDataset(f.publication.nodes,key);
+  f.state.hierarchyFileActivated(13,f.publication.identity,0);
+  const inspector=f.inspector, content=[...inspector.children];
+  node('navigationToggle').click();
+  assert.equal(node('selectionDetails').hidden,true);
+  assert.equal(node('city').inert,true);
+  assert.equal(f.state.snapshot().selection,0);
+  node('closeNavigation').click();
+  assert.equal(node('selectionDetails').hidden,false);
+  assert.equal(node('city').inert,false);
+  assert.deepEqual(inspector.children,content);
+  node('navigationToggle').click();
+  node('analyzedRows').children.find(row=>row.children[0].children[0].textContent===facts[0].canonicalPath).children[0].click();
+  assert.equal(node('selectionDetails').hidden,false);
+  assert.equal(node('workspaceNavigation').hidden,true);
+  node('navigationToggle').click();
+  node('browseDirectories').click();
+  f.select('/');
+  assert.equal(node('selectionDetails').hidden,true,'district update must not reveal details underneath lookup');
+  node('closeNavigation').click();
+  assert.equal(node('selectionDetails').hidden,false);
+  assert.equal(node('districtPath').textContent,'/');
+  f.publication.rollback();f.state.dispose();
+});
+
 test("highest complexity uses recorded M, positive U and unsigned UTF8 paths, not S or navigation", () => {
   assert.equal(highestComplexityFile(facts), 3);
   assert.equal(highestComplexityFile([{ canonicalPath: 'x', S: 999, U: 0, M: 100 }, { canonicalPath: 'a', S: 1, U: 0, M: 0 }]), null);

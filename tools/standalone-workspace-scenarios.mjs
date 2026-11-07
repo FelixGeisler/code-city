@@ -4,6 +4,21 @@ import path from 'node:path';
 import { exerciseLocalBrowser, reopenLocalBrowser } from './standalone-local-browser-scenarios.mjs';
 import { exerciseAutomaticExclusions, reopenAutomaticExclusions } from './standalone-automatic-exclusion-scenarios.mjs';
 
+/** Contextual details are bounded overlays, not the former half-height sheet. */
+export async function assertContextualDetailsReachable(p) {
+  const proof = await p.evaluate(`(()=>{
+    const panel=document.querySelector('[data-selection-details]'),last=panel.querySelector('dl > div:last-child'),close=panel.querySelector('[data-close-details]');
+    const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};
+    const reachable=e=>{const r=e.getBoundingClientRect(),v=panel.getBoundingClientRect();return e.checkVisibility()&&r.width>0&&r.height>0&&r.left>=v.left&&r.right<=v.right&&r.top>=v.top&&r.bottom<=v.bottom&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));};
+    last.scrollIntoView({block:'nearest'});
+    const lastReachable=reachable(last),scrollTop=panel.scrollTop;
+    close.scrollIntoView({block:'nearest'});
+    return {panel:rect(panel),toolbar:rect(document.querySelector('[data-city-tools]')),viewport:{width:innerWidth,height:innerHeight},visible:panel.checkVisibility(),horizontalOverflow:document.documentElement.scrollWidth>innerWidth||panel.scrollWidth>panel.clientWidth,lastReachable,closeReachable:reachable(close),scrollTop};
+  })()`);
+  assert.ok(proof.visible&&!proof.horizontalOverflow&&proof.panel.left>=0&&proof.panel.right<=proof.viewport.width&&proof.panel.top>=proof.toolbar.bottom&&proof.panel.bottom<=proof.viewport.height&&proof.lastReachable&&proof.closeReachable,'contextual details must be bounded, below tools, scrollable and uncovered: '+JSON.stringify(proof));
+  return proof;
+}
+
 /** Bounded presentation acceptance using the packaged app and the existing synthetic provider. */
 export async function exerciseWorkspace({page,cdp,harness,origin,request,checked,evidenceDirectory,restart,expectEmpty=true}) {
   assert.ok(evidenceDirectory, 'Workspace evidence needs an explicit output directory');
@@ -22,7 +37,7 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   })()`);
   const recordSource=async(name,target=p)=>{const measurement=await sourceMeasurement(target);await writeFile(path.join(evidenceDirectory,name+'-proof.json'),JSON.stringify(measurement,null,2)+'\n');return measurement;};
   const pointer=async selector=>{const r=await p.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);for(const type of ['mouseMoved','mousePressed','mouseReleased'])await cdp.send('Input.dispatchMouseEvent',{type,...r,...(type==='mouseMoved'?{}:{button:'left',clickCount:1})},p.sessionId);};
-  const key=async(key,code,n)=>{await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,...(key==='Enter'?{text:'\r'}:{})},p.sessionId);await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n},p.sessionId);};
+  const key=async(key,code,n,modifiers=0)=>{await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,modifiers,...(key==='Enter'?{text:'\r'}:{})},p.sessionId);await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n,modifiers},p.sessionId);};
   const run=async(mode,predicate,exclusions='')=>{process.stdout.write('Workspace: '+mode+'\n');harness.setMode(mode);await p.submit(undefined,exclusions);return p.wait(predicate);};
   const openFind=async()=>{if(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden`))await pointer('[data-navigation-toggle]');};
   const selectFile=async name=>{await openFind();await p.click('#workspace-files-tab');await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(b=>b.querySelector('bdi').textContent===${JSON.stringify(name)}).click();true`);};
@@ -33,6 +48,19 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await p.submit('invalid');await p.wait(s=>s.feedback==='Invalid input');assert.equal((await p.snapshot()).setup,true);
   await run('districts',s=>s.canvases===1&&s.analyzed===5);await settled();await fits();await shot('desktop-completed');
   const initial=await geometry();
+  // Real hover, resolved browser colors, and WCAG luminance in each product theme.
+  const hoverProof=[];
+  for (const theme of ['light','dark']) {
+    await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:theme}]},p.sessionId);
+    const point=await p.evaluate(`(()=>{const r=document.querySelector('[data-inspect-highest]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',...point},p.sessionId);await settled();
+    const colors=await p.evaluate(`(()=>{const e=document.querySelector('[data-inspect-highest]'),s=getComputedStyle(e);return {hover:e.matches(':hover'),color:s.color,background:s.backgroundColor};})()`);
+    const luminance=color=>{const rgb=color.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;};
+    const a=luminance(colors.color),b=luminance(colors.background),contrast=(Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+    assert.ok(colors.hover&&contrast>=4.5,theme+' hovered primary contrast: '+JSON.stringify({...colors,contrast}));
+    hoverProof.push({theme,...colors,contrast});await shot('primary-hover-'+theme);
+  }
+  await writeFile(path.join(evidenceDirectory,'primary-hover-proof.json'),JSON.stringify(hoverProof,null,2)+'\n');
   assert.equal(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden&&document.querySelector('[data-selection-details]').hidden&&!document.querySelector('[data-analyzed-rows] button').checkVisibility()&&document.querySelector('[data-inspect-highest]').checkVisibility()&&window.__inspectionCalls.length===0`),true);
   assert.equal(await p.evaluate(`(()=>{const before=document.activeElement;document.querySelector('[data-analyzed-query]').focus();return document.activeElement===before;})()`),true,'default hidden inventory must be inert to focus');
   assert.equal(await p.evaluate(`(()=>{const c=document.querySelector('[data-city]').getBoundingClientRect();return c.width>innerWidth*.95&&c.height>innerHeight*.65;})()`),true);
@@ -66,10 +94,40 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();const mobile=await geometry();await shot('mobile-city');
   await pointer('[data-navigation-toggle]');assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-query]').checkVisibility()||document.querySelector('[data-district-navigation]').checkVisibility()`),true);
   await p.click('#workspace-files-tab');await pointer('[data-analyzed-rows] button');await p.wait(s=>s.units>0);await settled();assert.deepEqual(await geometry(),mobile);await fits();await shot('mobile-file');
-  assert.equal(await p.evaluate(`(()=>{const d=document.querySelector('[data-selection-details]').getBoundingClientRect();return d.height>100&&d.height<innerHeight*.9&&document.querySelector('[data-close-details]').checkVisibility();})()`),true);
+  proofs.push({mobileFileDetails:await assertContextualDetailsReachable(p)});
+  for(const [width,height] of [[700,390],[390,390]]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
+    const before=await geometry(),details=await assertContextualDetailsReachable(p);
+    assert.ok(details.scrollTop>0,'short details must actually scroll to reach the last metric');
+    await openFind();await pointer('[data-close-navigation]');await settled();assert.deepEqual(await geometry(),before);
+    proofs.push({shortFileDetails:details});
+  }
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();assert.deepEqual(await geometry(),mobile);
+  const selectedFile=(await p.snapshot()).selectedFile;
+  await openFind();await settled();await shot('mobile-selected-lookup');
+  assert.equal(await p.evaluate(`document.querySelector('[data-selection-details]').hidden&&!document.querySelector('[data-close-details]').checkVisibility()`),true);
+  assert.equal((await p.snapshot()).selectedFile,selectedFile,'lookup cleared selection');
+  const lookupFocus=[];
+  for (const modifiers of [0,8]) {
+    await p.evaluate(`document.querySelector('[data-close-navigation]').focus();true`);
+    let looped=false;
+    for(let step=0;step<40;step++) {
+      await key('Tab','Tab',9,modifiers);await settled();
+      const focus=await p.evaluate(`(()=>{const e=document.activeElement,r=e.getBoundingClientRect();return {tag:e.tagName,details:!!e.closest('[data-selection-details]'),visible:e.checkVisibility(),hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),close:e.matches('[data-close-navigation]')};})()`);
+      assert.ok(!focus.details&&focus.visible&&focus.hit,'lookup focus hidden/covered: '+JSON.stringify({modifiers,step,...focus}));lookupFocus.push({modifiers,step,...focus});
+      if(focus.close){looped=true;break;}
+    }
+    assert.ok(looped,'native lookup traversal did not complete a loop');
+  }
+  await pointer('[data-close-navigation]');await settled();
+  assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-navigation-toggle]')&&!document.querySelector('[data-selection-details]').hidden`),true);
+  assert.equal((await p.snapshot()).selectedFile,selectedFile);
+  await openFind();await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(b=>b.querySelector('bdi').textContent===${JSON.stringify(selectedFile)}).focus();true`);await key('Enter','Enter',13);
+  assert.equal(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden&&document.activeElement===document.querySelector('[data-inspector]')&&!document.querySelector('[data-selection-details]').hidden`),true,'same-file reveal must restore visible details focus');
+  await writeFile(path.join(evidenceDirectory,'mobile-selected-lookup-focus.json'),JSON.stringify(lookupFocus,null,2)+'\n');
   await pointer('[data-unit-rows] button');await p.wait(s=>s.sourceReady);await fits();await shot('mobile-code');await key('Escape','Escape',27);await p.wait(s=>!s.sourceOpen);
   await pointer('[data-close-details]');await settled();assert.deepEqual(await geometry(),mobile);
-  await openFind();await p.click('[data-browse-directories]');await p.click('[data-district-navigation] button:first-child');await p.wait(s=>s.district==='/');await p.click('[data-close-navigation]');await settled();assert.deepEqual(await geometry(),mobile);await shot('mobile-directory');
+  await openFind();await p.click('[data-browse-directories]');await p.click('[data-district-navigation] button:first-child');await p.wait(s=>s.district==='/');await p.click('[data-close-navigation]');await settled();assert.deepEqual(await geometry(),mobile);proofs.push({mobileDistrictDetails:await assertContextualDetailsReachable(p)});await shot('mobile-directory');
   // The primary path is also a single keyboard activation on mobile.
   await p.evaluate(`document.querySelector('[data-inspect-highest]').focus();true`);await key('Enter','Enter',13);await p.wait(s=>s.sourceReady&&s.contributions===1);await shot('mobile-primary-code');
   assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').textContent.includes('function choose(v)')`),true);
@@ -86,7 +144,11 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await shot('desktop-code-dense');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:700,height:390,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
   const landscape=[];
-  const focusedReachable=()=>p.evaluate(`(()=>{const e=document.activeElement,r=e.getBoundingClientRect(),dialog=document.querySelector('[data-unit-source]'),d=dialog.getBoundingClientRect();if(!(r.width>0&&r.height>0&&r.left>=d.left&&r.right<=d.right&&r.top>=d.top&&r.bottom<=d.bottom&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))))return false;for(let p=e.parentElement;p&&p!==dialog;p=p.parentElement){const s=getComputedStyle(p),v=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)&&(r.top<v.top||r.bottom>v.bottom))return false;if(/auto|scroll|hidden|clip/.test(s.overflowX)&&(r.left<v.left||r.right>v.right))return false;}return true;})()`);
+  // Native scrollTop is integer-quantized while font/layout rects are fractional;
+  // allow one CSS pixel at scroll edges, still requiring an uncovered center hit.
+  // A stacked scroll pane may exceed its outer viewport: require a useful visible
+  // intersection for that pane, but the full bounds for individual controls/rows.
+  const focusedReachable=()=>p.evaluate(`(()=>{const e=document.activeElement,r=e.getBoundingClientRect(),dialog=document.querySelector('[data-unit-source]'),d=dialog.getBoundingClientRect();if(e.matches('[data-owned-contributions]')){let left=Math.max(r.left,d.left),right=Math.min(r.right,d.right),top=Math.max(r.top,d.top),bottom=Math.min(r.bottom,d.bottom);for(let p=e.parentElement;p&&p!==dialog;p=p.parentElement){const s=getComputedStyle(p),v=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)){top=Math.max(top,v.top);bottom=Math.min(bottom,v.bottom);}if(/auto|scroll|hidden|clip/.test(s.overflowX)){left=Math.max(left,v.left);right=Math.min(right,v.right);}}return right-left>=100&&bottom-top>=100&&e.contains(document.elementFromPoint((left+right)/2,(top+bottom)/2));}if(!(r.width>0&&r.height>0&&r.left>=d.left&&r.right<=d.right&&r.top>=d.top&&r.bottom<=d.bottom&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))))return false;for(let p=e.parentElement;p&&p!==dialog;p=p.parentElement){const s=getComputedStyle(p),v=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)&&(r.top<v.top-1||r.bottom>v.bottom+1))return false;if(/auto|scroll|hidden|clip/.test(s.overflowX)&&(r.left<v.left-1||r.right>v.right+1))return false;}return true;})()`);
   const shortCamera=await geometry();
   for(const open of [false,true]) {
     // Toggle help with a real pointer. Then exercise native Tab scrolling, not DOM click().
@@ -119,7 +181,7 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
     assert.equal(harness.requests.length,networkBefore,'landscape inspection made provider requests');
     const measurement=await p.evaluate(`(()=>{const d=document.querySelector('[data-unit-source]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]'),s=document.querySelector('[data-owned-contributions]');return {helpOpen:${open},dialogHeight:d.clientHeight,dialogScrollHeight:d.scrollHeight,codeHeight:c.clientHeight,listHeight:r.clientHeight,contributionHeight:s.clientHeight,contributionScrollHeight:s.scrollHeight};})()`);
     measurement.layout=await recordSource('landscape-source-help-'+(open?'open':'closed'));
-    assert.ok(measurement.codeHeight>=140&&measurement.listHeight>=100&&measurement.dialogHeight===measurement.dialogScrollHeight,'short landscape panes must have useful height: '+JSON.stringify(measurement));
+    assert.ok(measurement.codeHeight>=140&&measurement.listHeight>=120&&measurement.dialogHeight===measurement.dialogScrollHeight,'short landscape panes must have useful height: '+JSON.stringify(measurement));
     landscape.push({...measurement,visited,scroll,camera:await geometry()});
     await shot('landscape-source-help-'+(open?'open':'closed')+'-list');
     // Also capture the disclosure content at the top of the scrollable region.
@@ -143,13 +205,41 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await p.evaluate(`document.querySelector('[data-owned-contributions] details').open=false;true`);
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();await shot('mobile-code-dense');
   const portrait=await recordSource('portrait-source');
-  assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').clientHeight>=150&&document.querySelector('[data-contribution-rows]').clientHeight>=70`),true,'mobile code and contribution panes must both be useful: '+JSON.stringify(portrait));
-  await p.evaluate(`(()=>{const s=document.createElement('style');s.id='type-stress';s.textContent='[data-unit-source] button,[data-source-body] p,[data-source-body] label,[data-source-body] summary,[data-contribution-rows] button{font-size:18px;line-height:1.6}';document.head.append(s);document.querySelector('[data-owned-contributions] details').open=true;return true;})()`);
-  await settled();await recordSource('portrait-typography-help-open');await shot('portrait-typography-help-open');
-  await p.evaluate(`document.querySelector('[data-contribution-rows] li:last-child button').focus();true`);assert.equal(await focusedReachable(),true,'typography stress clipped contribution focus');
-  await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:390,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await recordSource('narrow-short-typography-help-open');await shot('narrow-short-typography-help-open');
-  await p.evaluate(`document.querySelector('[data-close-source]').focus();document.querySelector('[data-contribution-rows] li:last-child button').focus();true`);assert.equal(await focusedReachable(),true,'short typography stress clipped contribution focus');await shot('narrow-short-typography-contributions');
-  await p.evaluate(`document.querySelector('#type-stress').remove();true`);
+  assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').clientHeight>=150&&document.querySelector('[data-contribution-rows]').clientHeight>=120`),true,'mobile code and contribution panes must both be useful: '+JSON.stringify(portrait));
+  // Existing same-origin external sheet CSSOM is trusted under style-src 'self'.
+  // No inline style node, CSP bypass, new product route, or product policy change.
+  await p.evaluate(`(()=>{const sheet=[...document.styleSheets].find(s=>s.href&&new URL(s.href).origin===location.origin&&new URL(s.href).pathname.endsWith('/browser.css'));if(!sheet)throw Error('trusted product sheet missing');const index=sheet.cssRules.length;sheet.insertRule('[data-unit-source] button,[data-source-body] p,[data-source-body] label,[data-source-body] summary,[data-contribution-rows],[data-contribution-rows] button{font-size:22px !important;line-height:1.6 !important}',index);window.__typeStress={sheet,index};return true;})()`);
+  const stressProof=[];
+  for(const [width,height,name] of [[390,844,'portrait'],[700,390,'landscape'],[390,390,'narrow-short']]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true},p.sessionId);
+    for(const open of [false,true]) {
+      await p.evaluate(`document.querySelector('[data-owned-contributions] details').open=${open};document.querySelector('[data-owned-contributions]').scrollTop=0;true`);await settled();
+      const fonts=await p.evaluate(`['[data-close-source]','[data-source-body] p','[data-source-body] summary','[data-contribution-rows]','[data-contribution-rows] button'].map(s=>({selector:s,fontSize:getComputedStyle(document.querySelector(s)).fontSize}))`);
+      for(const font of fonts)assert.equal(font.fontSize,'22px','typography stress did not apply: '+font.selector);
+      const nameWithState=name+'-typography-help-'+(open?'open':'closed');
+      const measurement=await recordSource(nameWithState);assert.ok(measurement.list.clientHeight>=120,'stress contribution list lost its 120px reading area');
+      await shot(nameWithState);
+      await p.evaluate(`document.querySelector('[data-contribution-rows] li:last-child button').focus();true`);assert.equal(await focusedReachable(),true,nameWithState+' clipped contribution focus');await shot(nameWithState+'-contributions');
+      await p.evaluate(`document.querySelector('[data-close-source]').focus();true`);assert.equal(await focusedReachable(),true,nameWithState+' clipped Close');
+      // Stress uses actual native traversal too, including nested-pane scrolling.
+      const visited=[];
+      for(let step=0;step<42;step++) {
+        await key('Tab','Tab',9);await settled();
+        const target=await p.evaluate(`(()=>{const e=document.activeElement;return e.matches('[data-close-source]')?'close':e.matches('[data-source-code]')?'code':e.matches('[data-owned-contributions]')?'pane':e.matches('[data-contribution-scope]')?'scope':e.matches('summary')?'help':e.closest('[data-contribution-paging]')?'paging':e.hasAttribute('data-contribution')?'row':null;})()`);
+        if(target){
+          const reachable=await focusedReachable();
+          if(!reachable){await recordSource(nameWithState+'-focus-failure');await shot(nameWithState+'-focus-failure');const focus=await p.evaluate(`(()=>{const a=[];for(let e=document.activeElement;e;e=e.parentElement){const r=e.getBoundingClientRect();a.push({tag:e.tagName,rect:[r.left,r.top,r.right,r.bottom],scroll:[e.scrollLeft,e.scrollTop],overflow:[getComputedStyle(e).overflowX,getComputedStyle(e).overflowY]});}return a;})()`);process.stdout.write(JSON.stringify(focus)+'\n');}
+          assert.equal(reachable,true,nameWithState+' clipped native '+target);visited.push(target);
+        }
+        if(target==='close')break;
+      }
+      for(const target of ['code','pane','scope','help','paging','row','close'])assert.ok(visited.includes(target),nameWithState+' missing '+target);
+      assert.equal(visited.filter(v=>v==='row').length,32,nameWithState+' must reach all rows');
+      stressProof.push({width,height,open,fonts,listHeight:measurement.list.clientHeight,visited});
+    }
+  }
+  await writeFile(path.join(evidenceDirectory,'typography-stress-proof.json'),JSON.stringify(stressProof,null,2)+'\n');
+  await p.evaluate(`window.__typeStress.sheet.deleteRule(window.__typeStress.index);delete window.__typeStress;true`);
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await p.closeSource();
   await selectFile('long.js');await p.wait(s=>s.units===2);await p.click('[data-unit-rows] button');await p.wait(s=>s.sourceReady&&s.contributionMessage.includes('0 of 27'));
   await p.evaluate(`const scope=document.querySelector('[data-contribution-scope]');scope.value='unit';scope.dispatchEvent(new Event('change'));true`);await p.wait(s=>s.contributions===27);

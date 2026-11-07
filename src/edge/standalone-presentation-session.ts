@@ -398,8 +398,8 @@ export function stageStandaloneInventoryPublication(
   const toggleNavigation = (): void => {
     if (rolledBack) return;
     cancelInspectionIntent();
-    const open = navigation.hidden;
-    mobileToggle.setAttribute("aria-expanded", String(open)); navigation.hidden = !open;
+    const open = navigation.hidden !== false;
+    setNavigationOpen(open);
     if (open) closeNavigation.focus({ preventScroll: true });
     else mobileToggle.focus({ preventScroll: true });
   };
@@ -417,8 +417,7 @@ export function stageStandaloneInventoryPublication(
     cancelInspectionIntent();
     const applied = sink.hierarchyFileActivated(generation, identity, winner);
     if (!applied || rolledBack || selected !== winner || !unitView) return;
-    navigation.hidden = true; mobileToggle.setAttribute("aria-expanded", "false");
-    detailsPanel.hidden = false;
+    setNavigationOpen(false);
     unitView.inspectFirst(primary, message => { if (!rolledBack) primaryStatus.textContent = message; });
   };
   primary.addEventListener("click", primaryListener);
@@ -451,8 +450,22 @@ export function stageStandaloneInventoryPublication(
   const cancelInspectionIntent = (): void => { unitView?.cancelIntent(); if (winner !== null) primaryStatus.textContent = ""; };
   resetControl.addEventListener("click", cancelInspectionIntent);
   let releaseDirectory = (): void => {};
+  // Selection owns content; lookup temporarily owns the overlay/focus surface.
+  // Hiding details must not dispose the selected file or its source dialog.
+  let detailsRequested = false;
+  const syncDetailsVisibility = (): void => { detailsPanel.hidden = !detailsRequested || !navigation.hidden; };
+  const setNavigationOpen = (open: boolean): void => {
+    navigation.hidden = !open;
+    // The canvas sits behind lookup on narrow screens; do not tab into a
+    // covered focus surface. Toolbar and native top-layer dialogs stay usable.
+    cityHost.inert = open;
+    mobileToggle.setAttribute("aria-expanded", String(open));
+    syncDetailsVisibility();
+  };
   const detailsVisible = (visible: boolean): void => {
-    closeDetails.hidden = !visible; detailsPanel.hidden = !visible; detailsPanel.dataset.selected = String(visible);
+    detailsRequested = visible;
+    closeDetails.hidden = !visible; detailsPanel.dataset.selected = String(visible);
+    syncDetailsVisibility();
   };
 
   const clearRowListeners = (): void => {
@@ -491,8 +504,8 @@ export function stageStandaloneInventoryPublication(
     const ownedUnits = unitView;
     releaseInspector = () => { releaseMetrics(); ownedUnits?.(); };
     inspector.hidden = false;
+    setNavigationOpen(false);
     detailsVisible(true);
-    navigation.hidden = true; mobileToggle.setAttribute("aria-expanded", "false");
     if (hadFocus) inspector.focus({ preventScroll: true });
   };
 
@@ -544,8 +557,7 @@ export function stageStandaloneInventoryPublication(
 
   const finishFileActivation = (): void => {
     const hadFocus = !!documentTarget.activeElement && navigation.contains(documentTarget.activeElement);
-    navigation.hidden = true; mobileToggle.setAttribute("aria-expanded", "false");
-    detailsPanel.hidden = false;
+    setNavigationOpen(false);
     if (hadFocus) inspector.focus({ preventScroll: true });
   };
   const activateHierarchyFile = (file: number): void => {
@@ -587,7 +599,7 @@ export function stageStandaloneInventoryPublication(
       inspector.hidden = false;
       detailsVisible(true);
       if (hadNavigationFocus) directoryPanel.focus({ preventScroll: true });
-      else if (hadFocus) inspector.focus({ preventScroll: true });
+      else if (hadFocus) (navigation.hidden ? inspector : directoryPanel).focus({ preventScroll: true });
     },
     cancelInspectionIntent,
     commitCanvas(canvas) { cityHost.replaceChildren(canvas as unknown as Node); },

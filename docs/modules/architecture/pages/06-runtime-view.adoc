@@ -75,7 +75,14 @@ The transport retains at most one pending read per operation kind and validates
 result shape, revision, path, source-page cursor, contribution scope and request
 identity. Contribution locations carry retained byte cursors for local source
 navigation. The view additionally gates asynchronous replies by source-page and
-file/dialog lifetime. Whole-unit row callbacks are bound to their list page and
+file/dialog lifetime. The shell forwards source-edit and picker-initiation intent
+to the unit view's cancellation epoch; programmatic saved-setting restoration
+does not dispatch those user-edit events. The presentation keeps selected-details
+ownership separate from lookup visibility: lookup temporarily hides the details
+surface without disposing its selected content or native top-layer dialog. The
+covered canvas is temporarily inert while lookup owns the focus surface; toolbar
+controls remain available.
+Whole-unit row callbacks are bound to their list page and
 unit lifetime, not to the source page reached by selecting them. In-page selection
 reuses rendered evidence; an out-of-page whole-unit source read leaves the list
 and its row elements intact. Replacement disposes the dialog
