@@ -6,6 +6,25 @@ xref:city-and-failures.adoc#CC-CORE-INV-04[Investigation Evidence Only].
 
 == Current interaction
 
+The primary path is Choose source → Analyze → `Inspect highest complexity` →
+read one unit's source and owned contributions. This explicit action selects the
+successful file with positive U and M and greatest recorded M; file ties use
+unsigned UTF-8 canonical path ascending. It activates the first retained unit
+in the existing canonical order (complexity descending, start ascending, end
+descending, canonical kind), independent of file query, sort, selection or unit
+page. It reads at most the winning file's first bounded metadata page before
+using the existing source/contribution requests; an in-flight first page is
+reused. No repository-wide unit scan, parser call or new index is involved.
+
+No selection, unit request or source dialog occurs on publication or saved
+reopen. If no successful file has executable units, disable the primary action
+and show `No executable units to inspect.` A pending/failed metadata read shows
+brief local feedback without removing the city or disabling Save; retry requires
+another explicit click. The one-shot intent is owned by publication, file and
+current user action. Other selection, clear, navigation/setup, replacement or
+leaving cancels it, so late results cannot open a surprising dialog. Closing
+primary source returns focus to the visible primary button.
+
 Selecting a building or file-list row shows raw file metrics and executable
 units. It does not open source or move the camera. Unit rows identify kind,
 normalized source range and exact recorded complexity. Kind labels use readable

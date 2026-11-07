@@ -45,7 +45,7 @@ test("requirements preserve per-file continuation and local inventory semantics 
   assert.match(city, /shared canonical-index selection/u);
   assert.match(city, /Selection, filtering, and sorting do not invoke search reveal, move or focus the camera/u);
   assert.match(city, /active composition mounts no contextual district row; its city toolbar reuses the authoritative complexity legend/u);
-  assert.match(city, /reserve.*right column even with no selection/iu);
+  assert.match(city, /No navigation inventory or empty details column is visible or keyboard reachable by default/u);
   assert.match(city, /file activation retains that directory location and its list rows/u);
   assert.match(city, /browser worker message boundary/u);
   assert.match(city, /inert `<bdi dir="auto">` nodes assigned through `textContent`/u);

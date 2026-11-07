@@ -45,6 +45,17 @@ test('source selection reveals the bounded body and rounds fractional scroll off
  all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0].click();
  assert.equal(code.scrollLeft,99);assert.ok(all(code,node=>node.tagName==='MARK')[0].getBoundingClientRect().left>=19);assert.equal(data(host,'sourceBody').scrollTop,0);assert.equal(data(host,'ownedContributions').scrollTop,90);assert.equal(calls.length,before);release();
 });
+test('explicit first-unit intent uses retained canonical ties rather than unit id and returns focus to its visible origin',async()=>{
+ const host=new Element('section'),calls=[],status=[];let focused=0;
+ const units=[{kind:'arrow',startByte:2,endByte:7,complexity:1},{kind:'function',startByte:0,endByte:7,complexity:1},{kind:'function',startByte:0,endByte:8,complexity:1},{kind:'method',startByte:0,endByte:8,complexity:1}];
+ const read=reader('abcdefgh',units),pending=Promise.withResolvers();
+ const view=attachUnitInspection(documentTarget,host,'file.js',query=>{calls.push(query);return query.type==='units'?pending.promise:Promise.resolve(read(query));});
+ view.inspectFirst({focus(){focused++;}},text=>status.push(text));
+ assert.equal(calls.length,1);pending.resolve(read({type:'units',path:'file.js',offset:0}));await flush();
+ assert.equal(data(host,'unitSource').open,true);assert.equal(calls.find(q=>q.type==='source').unit,2);assert.equal(data(host,'sourceCode').textContent,'1abcdefgh');
+ button(host,'Close source').click();assert.equal(focused,1);assert.equal(status.at(-1),'');view();
+});
+
 test('bounded unit pages preserve all entries and source is still explicit',async()=>{
  const source='x'.repeat(80),units=Array.from({length:35},(_,index)=>({kind:'arrow',startByte:index,endByte:80,complexity:1}));const host=new Element('section');
  let reads=0;const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{reads++;return reader(source,units)(query);});await flush();

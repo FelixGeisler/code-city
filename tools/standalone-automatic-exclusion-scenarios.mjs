@@ -58,10 +58,14 @@ async function assertApplied(harness,start,expected) {
   assert.deepEqual(reports.at(-1).value.policy,expected);
 }
 async function inspect(p,path,marker) {
+  const setupOpen=await p.evaluate(`!document.querySelector('form').hidden`);
+  if(setupOpen)await p.click('[data-change-repository]');
+  if(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden`))await p.click('[data-navigation-toggle]');
   await p.evaluate(`(()=>{document.querySelector('#workspace-files-tab').click();[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();return true;})()`);
   await p.wait(s=>s.units>0);await p.click('[data-unit-rows] button');await p.wait(s=>s.sourceReady);
   assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').textContent.includes(${JSON.stringify(marker)})`),true,`Actual code-unit inspection omitted ${marker}`);
   await p.closeSource();
+  if(setupOpen)await p.click('[data-change-repository]');
 }
 async function quietState(p,harness) {
   // Two rendered frames, not a sleep/retry: let any UI redraw be observable.

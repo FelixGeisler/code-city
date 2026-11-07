@@ -355,6 +355,7 @@ form.addEventListener("submit", (event) => {
 });
 changeRepository.addEventListener("click", () => {
   if (!hasAttempt || isWorking) return;
+  presentation.cancelInspectionIntent();
   form.hidden = !form.hidden;
   changeRepository.textContent = form.hidden ? "Change source" : "Close setup";
   changeRepository.setAttribute("aria-expanded", String(!form.hidden));
@@ -380,6 +381,7 @@ function openSaved(id: string): void {
   controller.openSaved(id);
 }
 requiredElement<HTMLButtonElement>("[data-open-saved]").addEventListener("click", () => {
+  presentation.cancelInspectionIntent();
   const epoch = ++pickerEpoch;
   savedProjects.replaceChildren(); savedMessage.textContent = "Loading saved investigations"; savedPicker.showModal();
   void listSavedInvestigations().then(records => {

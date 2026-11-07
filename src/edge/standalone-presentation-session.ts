@@ -1,5 +1,5 @@
 import { attachDistrictInspection, createDistrictInspectionIndex } from "./district-inspection-view";
-import { attachUnitInspection, type InspectInvestigation } from "./unit-inspection-view";
+import { attachUnitInspection, type UnitInspectionView, type InspectInvestigation } from "./unit-inspection-view";
 import type { DistrictDescriptor, InspectionFact, ValidatedCity } from "../application/city-payload";
 import { compareUnsignedUtf8 } from "../domain/source-admission";
 import {
@@ -48,6 +48,18 @@ export function projectAnalyzedFiles(
   return Object.freeze(indices);
 }
 
+/** Winner is independent of the secondary navigation's projection. */
+export function highestComplexityFile(inspection: readonly InspectionFact[]): number | null {
+  let winner: number | null = null;
+  for (let index = 0; index < inspection.length; index++) {
+    const fact = inspection[index]!;
+    if (fact.U <= 0 || fact.M <= 0) continue;
+    const best = winner === null ? undefined : inspection[winner]!;
+    if (!best || fact.M > best.M || (fact.M === best.M && compareUnsignedUtf8(fact.canonicalPath, best.canonicalPath) < 0)) winner = index;
+  }
+  return winner;
+}
+
 export type InventoryState = Readonly<{
   snapshot(): Readonly<InventoryProjection & { hover: number | null; selection: number | null; district: number | null }>;
   queryChanged(
@@ -70,8 +82,8 @@ export type InventoryState = Readonly<{
     query: string,
     sort: InventorySort,
     index: number,
-  ): void;
-  hierarchyFileActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
+  ): boolean;
+  hierarchyFileActivated(generation: number, identity: InventoryPublicationIdentity, index: number): boolean;
   cityHover(generation: number, identity: InventoryPublicationIdentity, index: number | null): void;
   cityActivated(generation: number, identity: InventoryPublicationIdentity, index: number | null): void;
   districtActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
@@ -87,6 +99,7 @@ export function createInventoryState(options: Readonly<{
   publishProjection(projection: InventoryProjection): void;
   applyVisual(hover: number | null, selection: number | null, district: number | null): VisualResult;
   publishSelection(selection: number | null, district: number | null): void;
+  cancelInspectionIntent?(): void;
   failed(): void;
 }>): InventoryState {
   const { inspection, generation, identity, publishProjection, applyVisual, publishSelection, failed } = options;
@@ -130,18 +143,19 @@ export function createInventoryState(options: Readonly<{
     }
   };
 
-  const setVisual = (nextHover: number | null, nextSelection: number | null, nextDistrict: number | null = null): void => {
+  const setVisual = (nextHover: number | null, nextSelection: number | null, nextDistrict: number | null = null): boolean => {
     try {
       const result = applyVisual(nextHover, nextSelection, nextDistrict);
-      if (result.kind === "failure") { fail(); return; }
-      if (result.kind !== "applied" || !active) return;
+      if (result.kind === "failure") { fail(); return false; }
+      if (result.kind !== "applied" || !active) return false;
       if (nextSelection !== selection || nextDistrict !== district) publishSelection(nextSelection, nextDistrict);
-      if (!active) return;
+      if (!active) return false;
       hover = nextHover;
       selection = nextSelection;
       district = nextDistrict;
+      return true;
     } catch {
-      fail();
+      fail(); return false;
     }
   };
 
@@ -158,14 +172,16 @@ export function createInventoryState(options: Readonly<{
       setProjection(query, nextSort as InventorySort);
     },
     rowActivated(callbackGeneration, callbackIdentity, expectedQuery, expectedSort, index) {
-      if (!current(callbackGeneration, callbackIdentity, expectedQuery, expectedSort)) return;
-      if (!validIndex(inspection, index) || !indices.includes(index)) { fail(); return; }
-      setVisual(hover, index);
+      if (!current(callbackGeneration, callbackIdentity, expectedQuery, expectedSort)) return false;
+      options.cancelInspectionIntent?.();
+      if (!validIndex(inspection, index) || !indices.includes(index)) { fail(); return false; }
+      return setVisual(hover, index);
     },
     hierarchyFileActivated(callbackGeneration, callbackIdentity, index) {
-      if (!current(callbackGeneration, callbackIdentity)) return;
-      if (!validIndex(inspection, index)) { fail(); return; }
-      setVisual(hover, index);
+      if (!current(callbackGeneration, callbackIdentity)) return false;
+      options.cancelInspectionIntent?.();
+      if (!validIndex(inspection, index)) { fail(); return false; }
+      return setVisual(hover, index);
     },
     cityHover(callbackGeneration, callbackIdentity, index) {
       if (!current(callbackGeneration, callbackIdentity)) return;
@@ -174,16 +190,19 @@ export function createInventoryState(options: Readonly<{
     },
     cityActivated(callbackGeneration, callbackIdentity, index) {
       if (!current(callbackGeneration, callbackIdentity)) return;
+      options.cancelInspectionIntent?.();
       if (!validIndex(inspection, index)) { fail(); return; }
       setVisual(hover, index);
     },
     districtActivated(callbackGeneration, callbackIdentity, index) {
       if (!current(callbackGeneration, callbackIdentity)) return;
+      options.cancelInspectionIntent?.();
       if (!Number.isSafeInteger(index) || index < 0 || index >= options.districtCount) { fail(); return; }
       setVisual(hover, null, index);
     },
     selectionAction(callbackGeneration, callbackIdentity, action) {
       if (!current(callbackGeneration, callbackIdentity)) return;
+      options.cancelInspectionIntent?.();
       const count = inspection.length;
       let next = selection;
       if (action === "clear") next = null;
@@ -200,7 +219,7 @@ export function createInventoryState(options: Readonly<{
 
 type InventoryPublicationSink = Readonly<{
   selectionAction(generation: number, identity: InventoryPublicationIdentity, action: SelectionAction): void;
-  hierarchyFileActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
+  hierarchyFileActivated(generation: number, identity: InventoryPublicationIdentity, index: number): boolean;
   districtActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
   queryChanged(
     generation: number,
@@ -222,7 +241,7 @@ type InventoryPublicationSink = Readonly<{
     query: string,
     sort: InventorySort,
     index: number,
-  ): void;
+  ): boolean;
 }>;
 
 type RowListener = Readonly<{ button: HTMLButtonElement; listener: () => void; index: number }>;
@@ -235,6 +254,7 @@ export type StandaloneInventoryPublication = Readonly<{
   setProjection(projection: InventoryProjection, selection: number | null): void;
   setSelection(selection: number | null): void;
   setDistrict(index: number): void;
+  cancelInspectionIntent(): void;
   commitCanvas(canvas: PresenterCanvas): void;
   rollback(): void;
 }>;
@@ -319,6 +339,10 @@ export function stageStandaloneInventoryPublication(
   tools.dataset.cityTools = "";
   const navigation = documentTarget.createElement("aside");
   navigation.dataset.workspaceNavigation = "";
+  navigation.hidden = true;
+  navigation.setAttribute("aria-label", "Find a file");
+  const closeNavigation = documentTarget.createElement("button");
+  closeNavigation.type = "button"; closeNavigation.textContent = "Close"; closeNavigation.dataset.closeNavigation = "";
   const tabs = documentTarget.createElement("div");
   tabs.setAttribute("role", "tablist");
   tabs.setAttribute("aria-label", "Navigation");
@@ -352,10 +376,10 @@ export function stageStandaloneInventoryPublication(
   showNavigation(false);
   const browseListener = (): void => {
     if (rolledBack) return;
+    cancelInspectionIntent();
     showNavigation(true);
-    sink.districtActivated(generation, identity, hierarchy.root);
   };
-  const filesListener = (): void => { if (!rolledBack) showNavigation(false); };
+  const filesListener = (): void => { if (!rolledBack) { cancelInspectionIntent(); showNavigation(false); } };
   const tabKey = (event: KeyboardEvent): void => {
     if (rolledBack || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
@@ -367,30 +391,55 @@ export function stageStandaloneInventoryPublication(
   filesTab.addEventListener("keydown", tabKey);
   browseDirectories.addEventListener("keydown", tabKey);
   tabs.append(filesTab, browseDirectories);
-  navigation.append(tabs, analyzed, directoryPanel);
+  navigation.append(closeNavigation, tabs, analyzed, directoryPanel);
   const mobileToggle = documentTarget.createElement("button");
-  mobileToggle.type = "button"; mobileToggle.textContent = "Files / directories"; mobileToggle.dataset.navigationToggle = "";
+  mobileToggle.type = "button"; mobileToggle.textContent = "Find a file"; mobileToggle.dataset.navigationToggle = "";
   mobileToggle.setAttribute("aria-expanded", "false");
   const toggleNavigation = (): void => {
     if (rolledBack) return;
-    const open = mobileToggle.getAttribute("aria-expanded") !== "true";
-    mobileToggle.setAttribute("aria-expanded", String(open)); navigation.dataset.open = String(open);
+    cancelInspectionIntent();
+    const open = navigation.hidden;
+    mobileToggle.setAttribute("aria-expanded", String(open)); navigation.hidden = !open;
+    if (open) closeNavigation.focus({ preventScroll: true });
+    else mobileToggle.focus({ preventScroll: true });
   };
+  const closeNavigationListener = (): void => { if (!rolledBack && !navigation.hidden) toggleNavigation(); };
+  const navigationKey = (event: KeyboardEvent): void => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeNavigationListener(); } };
+  closeNavigation.addEventListener("click", closeNavigationListener);
+  navigation.addEventListener("keydown", navigationKey);
   mobileToggle.addEventListener("click", toggleNavigation);
-  tools.append(mobileToggle, resetControl, complexityLegend(documentTarget));
+  const primary = documentTarget.createElement("button"); primary.type = "button"; primary.dataset.inspectHighest = ""; primary.textContent = "Inspect highest complexity";
+  const winner = highestComplexityFile(inspection); primary.disabled = winner === null || !inspect;
+  const primaryStatus = documentTarget.createElement("p"); primaryStatus.dataset.primaryInspectionStatus = ""; primaryStatus.setAttribute("role", "status");
+  if (winner === null) primaryStatus.textContent = "No executable units to inspect.";
+  const primaryListener = (): void => {
+    if (rolledBack || winner === null || !inspect) return;
+    cancelInspectionIntent();
+    const applied = sink.hierarchyFileActivated(generation, identity, winner);
+    if (!applied || rolledBack || selected !== winner || !unitView) return;
+    navigation.hidden = true; mobileToggle.setAttribute("aria-expanded", "false");
+    detailsPanel.hidden = false;
+    unitView.inspectFirst(primary, message => { if (!rolledBack) primaryStatus.textContent = message; });
+  };
+  primary.addEventListener("click", primaryListener);
+  const legend = documentTarget.createElement("details"); legend.dataset.legendDisclosure = "";
+  const legendSummary = documentTarget.createElement("summary"); legendSummary.textContent = "Color key";
+  legend.append(legendSummary, complexityLegend(documentTarget));
+  tools.append(primary, mobileToggle, resetControl, legend, primaryStatus);
   const center = documentTarget.createElement("section"); center.dataset.cityWorkspace = ""; center.append(tools, cityHost);
   const inspector = createInspector(documentTarget);
-  const detailsPanel = documentTarget.createElement("aside"); detailsPanel.dataset.selectionDetails = "";
+  const detailsPanel = documentTarget.createElement("aside"); detailsPanel.dataset.selectionDetails = ""; detailsPanel.hidden = true;
+  detailsPanel.setAttribute("aria-label", "Selected item details");
   const closeDetails = documentTarget.createElement("button"); closeDetails.type = "button"; closeDetails.textContent = "Close details"; closeDetails.dataset.closeDetails = ""; closeDetails.hidden = true;
   const clearListener = (): void => {
     if (rolledBack) return;
-    const hadFocus = documentTarget.activeElement === closeDetails;
     sink.selectionAction(generation, identity, "clear");
-    if (hadFocus) (mobileToggle.getClientRects().length ? mobileToggle : filesTab).focus({ preventScroll: true });
+    (primary.disabled ? mobileToggle : primary).focus({ preventScroll: true });
   };
   closeDetails.addEventListener("click", clearListener);
-  const emptyDetails = documentTarget.createElement("p"); emptyDetails.dataset.emptyDetails = ""; emptyDetails.textContent = "Select a file or directory to inspect.";
-  detailsPanel.append(closeDetails, emptyDetails, inspector);
+  const detailsKey = (event: KeyboardEvent): void => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); clearListener(); } };
+  detailsPanel.addEventListener("keydown", detailsKey);
+  detailsPanel.append(closeDetails, inspector);
 
   let query = "";
   let sort: InventorySort = "S";
@@ -398,9 +447,12 @@ export function stageStandaloneInventoryPublication(
   let rowListeners: RowListener[] = [];
   let rolledBack = false;
   let releaseInspector = (): void => {};
+  let unitView: UnitInspectionView | undefined;
+  const cancelInspectionIntent = (): void => { unitView?.cancelIntent(); if (winner !== null) primaryStatus.textContent = ""; };
+  resetControl.addEventListener("click", cancelInspectionIntent);
   let releaseDirectory = (): void => {};
   const detailsVisible = (visible: boolean): void => {
-    emptyDetails.hidden = visible; closeDetails.hidden = !visible; detailsPanel.dataset.selected = String(visible);
+    closeDetails.hidden = !visible; detailsPanel.hidden = !visible; detailsPanel.dataset.selected = String(visible);
   };
 
   const clearRowListeners = (): void => {
@@ -415,8 +467,10 @@ export function stageStandaloneInventoryPublication(
   const hasInspectorFocus = (): boolean => !!documentTarget.activeElement && inspector.contains(documentTarget.activeElement);
   const setSelection = (selection: number | null, restoreFocus = true): void => {
     if (!validIndex(inspection, selection)) throw new Error("Invalid inventory selection");
-    const hadFocus = restoreFocus && hasInspectorFocus();
+    const hadFocus = restoreFocus && (hasInspectorFocus() || (!!documentTarget.activeElement && navigation.contains(documentTarget.activeElement)));
+    cancelInspectionIntent();
     releaseInspector();
+    unitView = undefined;
     releaseInspector = (): void => {};
     selected = selection;
     updatePressed();
@@ -424,7 +478,7 @@ export function stageStandaloneInventoryPublication(
       inspector.replaceChildren();
       inspector.hidden = true;
       detailsVisible(false);
-      if (hadFocus) browseDirectories.focus({ preventScroll: true });
+      if (hadFocus) mobileToggle.focus({ preventScroll: true });
       return;
     }
     const fact = inspection[selection]!;
@@ -433,10 +487,12 @@ export function stageStandaloneInventoryPublication(
     const district = descriptor.root ? "/" : descriptor.identity;
     const releaseMetrics = replaceMetricInspectorContent(documentTarget, inspector, fact, district,
       () => sink.districtActivated(generation, identity, districtIndex));
-    const releaseUnits = inspect ? attachUnitInspection(documentTarget, inspector, fact.canonicalPath, inspect) : () => {};
-    releaseInspector = () => { releaseMetrics(); releaseUnits(); };
+    unitView = inspect ? attachUnitInspection(documentTarget, inspector, fact.canonicalPath, inspect) : undefined;
+    const ownedUnits = unitView;
+    releaseInspector = () => { releaseMetrics(); ownedUnits?.(); };
     inspector.hidden = false;
     detailsVisible(true);
+    navigation.hidden = true; mobileToggle.setAttribute("aria-expanded", "false");
     if (hadFocus) inspector.focus({ preventScroll: true });
   };
 
@@ -470,7 +526,10 @@ export function stageStandaloneInventoryPublication(
       button.append(path, metrics);
       const callbackQuery = projection.query;
       const callbackSort = projection.sort;
-      const listener = (): void => sink.rowActivated(generation, identity, callbackQuery, callbackSort, index);
+      const listener = (): void => {
+        if (rolledBack) return;
+        if (sink.rowActivated(generation, identity, callbackQuery, callbackSort, index) && selected === index) finishFileActivation();
+      };
       button.addEventListener("click", listener);
       rowListeners.push(Object.freeze({ button, listener, index }));
       item.append(button);
@@ -483,13 +542,25 @@ export function stageStandaloneInventoryPublication(
     selected = selection;
   };
 
-  const queryListener = (): void => sink.queryChanged(generation, identity, query, sort, queryInput.value);
-  const sortListener = (): void => sink.sortChanged(generation, identity, query, sort, sortSelect.value);
+  const finishFileActivation = (): void => {
+    const hadFocus = !!documentTarget.activeElement && navigation.contains(documentTarget.activeElement);
+    navigation.hidden = true; mobileToggle.setAttribute("aria-expanded", "false");
+    detailsPanel.hidden = false;
+    if (hadFocus) inspector.focus({ preventScroll: true });
+  };
+  const activateHierarchyFile = (file: number): void => {
+    if (!rolledBack && sink.hierarchyFileActivated(generation, identity, file) && selected === file) finishFileActivation();
+  };
+  const queryListener = (): void => { cancelInspectionIntent(); sink.queryChanged(generation, identity, query, sort, queryInput.value); };
+  const sortListener = (): void => { cancelInspectionIntent(); sink.sortChanged(generation, identity, query, sort, sortSelect.value); };
   queryInput.addEventListener("input", queryListener);
   sortSelect.addEventListener("change", sortListener);
 
   const initial = Object.freeze({ query: "", sort: "S" as const, indices: projectAnalyzedFiles(inspection, "", "S") });
   setProjection(initial, null);
+  releaseDirectory = attachDistrictInspection(documentTarget, directoryPanel, inspection, districts, hierarchy, hierarchy.root, hierarchy.members(hierarchy.root),
+    next => { if (!rolledBack) sink.districtActivated(generation, identity, next); },
+    activateHierarchyFile);
 
   return Object.freeze({
     nodes: Object.freeze([navigation, center, detailsPanel]),
@@ -511,17 +582,24 @@ export function stageStandaloneInventoryPublication(
       directoryPanel.replaceChildren();
       releaseDirectory = attachDistrictInspection(documentTarget, directoryPanel, inspection, districts, hierarchy, index, members,
         next => { if (!rolledBack) sink.districtActivated(generation, identity, next); },
-        file => { if (!rolledBack) sink.hierarchyFileActivated(generation, identity, file); });
+        activateHierarchyFile);
       showNavigation(true);
       inspector.hidden = false;
       detailsVisible(true);
       if (hadNavigationFocus) directoryPanel.focus({ preventScroll: true });
       else if (hadFocus) inspector.focus({ preventScroll: true });
     },
+    cancelInspectionIntent,
     commitCanvas(canvas) { cityHost.replaceChildren(canvas as unknown as Node); },
     rollback() {
       if (rolledBack) return;
       rolledBack = true;
+      cancelInspectionIntent();
+      primary.removeEventListener("click", primaryListener);
+      resetControl.removeEventListener("click", cancelInspectionIntent);
+      closeNavigation.removeEventListener("click", closeNavigationListener);
+      navigation.removeEventListener("keydown", navigationKey);
+      detailsPanel.removeEventListener("keydown", detailsKey);
       try { browseDirectories.removeEventListener("click", browseListener); } catch {}
       filesTab.removeEventListener("click", filesListener);
       filesTab.removeEventListener("keydown", tabKey);
@@ -557,6 +635,7 @@ export type StandalonePresentationCoordinator = Readonly<{
   publish(generation: number, city: ValidatedCity): boolean;
   clear(): void;
   failCurrent(): void;
+  cancelInspectionIntent(): void;
   dispose(): void;
 }>;
 
@@ -612,11 +691,11 @@ export function createStandalonePresentationCoordinator(options: Readonly<{
     try {
       const sink: InventoryPublicationSink = Object.freeze({
         selectionAction: (...args) => state?.selectionAction(...args),
-        hierarchyFileActivated: (...args) => state?.hierarchyFileActivated(...args),
+        hierarchyFileActivated: (...args) => state?.hierarchyFileActivated(...args) ?? false,
         districtActivated: (...args) => state?.districtActivated(...args),
         queryChanged: (...args) => state?.queryChanged(...args),
         sortChanged: (...args) => state?.sortChanged(...args),
-        rowActivated: (...args) => state?.rowActivated(...args),
+        rowActivated: (...args) => state?.rowActivated(...args) ?? false,
       });
       const publication = stageStandaloneInventoryPublication(documentTarget, city.inspection, generation, sink, city.districts, options.inspect);
       const presenter = createCityPresenter<number>({
@@ -640,6 +719,7 @@ export function createStandalonePresentationCoordinator(options: Readonly<{
         publishProjection: (projection) => publication.setProjection(projection, state?.snapshot().selection ?? null),
         applyVisual: (hover, selection, district) => presenter.setVisualState(generation, hover, selection, district),
         publishSelection: (selection, district) => district === null ? publication.setSelection(selection) : publication.setDistrict(district),
+        cancelInspectionIntent: () => publication.cancelInspectionIntent(),
         failed: () => { if (session) failClosed(session); },
       });
       session.state = state;
@@ -675,6 +755,7 @@ export function createStandalonePresentationCoordinator(options: Readonly<{
     publish,
     clear,
     failCurrent() { if (current) failClosed(current); },
+    cancelInspectionIntent() { current?.publication.cancelInspectionIntent(); },
     dispose() {
       if (disposed) return;
       disposed = true;
