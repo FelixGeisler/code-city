@@ -5,7 +5,7 @@ import {
   type BrowserFailedFile,
   type StandaloneBrowserView,
 } from "./standalone-browser-controller";
-import { listSavedInvestigations, savedUrl } from "./browser-saved-investigations";
+import { listSavedInvestigations } from "./browser-saved-investigations";
 import { validSavedId, type SavedRecord } from "../application/saved-investigation";
 import { createBrowserWorkerTransport } from "./browser-worker-transport";
 import { createStandalonePresentationCoordinator } from "./standalone-presentation-session";
@@ -59,7 +59,7 @@ const saveStatus = requiredElement<HTMLElement>("[data-save-status]");
 const savedPicker = requiredElement<HTMLDialogElement>("[data-saved-picker]");
 const savedProjects = requiredElement<HTMLElement>("[data-saved-projects]");
 const savedMessage = requiredElement<HTMLElement>("[data-saved-message]");
-let savedRecord: SavedRecord | undefined;
+let isSaved = false;
 let uiEpoch = 0, pickerEpoch = 0;
 let capturedRepositoryUrl: string | undefined;
 let attemptKind: InvestigationOrigin["kind"] | undefined;
@@ -189,10 +189,9 @@ exclusions.addEventListener("input", () => presentation.cancelInspectionIntent()
 const view: StandaloneBrowserView = Object.freeze({
   clear() {
     uiEpoch++;
-    savedRecord = undefined;
+    isSaved = false;
     saveButton.hidden = true;
     saveButton.disabled = false;
-    saveButton.textContent = "Save";
     saveStatus.replaceChildren();
     saveStatus.removeAttribute("title");
     hasAttempt = false;
@@ -263,7 +262,7 @@ const view: StandaloneBrowserView = Object.freeze({
     feedback.textContent = "";
     showRevision(revision);
     if (!presentation.publish(generation, model)) return;
-    saveButton.hidden = false;
+    saveButton.hidden = isSaved;
     try {
       renderFailures(failures);
       if (workingProgress) workingProgress.value = workingProgress.max;
@@ -282,13 +281,13 @@ const view: StandaloneBrowserView = Object.freeze({
     showRevision(revision);
     presentation.clear();
     renderFailures(failures);
-    saveButton.hidden = false;
+    saveButton.hidden = isSaved;
   },
 });
 
 function showSaved(record: SavedRecord): void {
-  savedRecord = record;
-  saveButton.textContent = "Copy link";
+  isSaved = true;
+  saveButton.hidden = true;
   saveStatus.textContent = "Saved";
   saveStatus.title = `Saved ${record.savedAt}`;
   history.replaceState(null, "", `/saved/${record.id}`);
@@ -380,10 +379,7 @@ changeRepository.addEventListener("click", () => {
   if (!form.hidden) (inputKind === "github" ? repository : chooseFolder).focus();
 });
 saveButton.addEventListener("click", () => {
-  if (savedRecord) {
-    void navigator.clipboard?.writeText(savedUrl(savedRecord.id)).catch(() => {});
-    return;
-  }
+  if (saveButton.hidden || saveButton.disabled) return;
   const epoch = uiEpoch;
   saveButton.disabled = true;
   saveStatus.textContent = "Saving investigation";

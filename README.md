@@ -31,7 +31,18 @@ npm run dev -- --port 55583
 
 Development output is `build/development/`. Browser analysis requires HTTPS or a secure localhost context for Web Crypto. Plain remote HTTP is not sufficient; this package does not supply a TLS ingress. Internet deployment, direct authenticated ADO acquisition, and Raspberry Pi capacity/performance are not qualified. Local folder access uses the read-only directory picker in secure desktop Chromium; unsupported browsers show an explicit message without a server/native-helper fallback.
 
-## Current behavior
+## Quickstart
+
+1. **Choose source:** select a local folder in secure desktop Chromium, or enter a public GitHub URL.
+2. **Analyze:** capture the selected source and build the city.
+3. **Inspect code:** open the highest-complexity unit, or find a file and inspect its units and branching evidence.
+
+Save is optional. After Save, the action disappears and plain **Saved** confirms persistence. Copy the canonical URL from the address bar, or use **Open saved** to reopen an investigation.
+
+## Initial release scope
+
+The private package's initial release version is **0.1.0**; this is not a claim of a published release or Git tag. Snapshot format **v4** is a separate data-format version.
+Supported sources are local working trees in secure desktop Chromium and anonymously accessible public GitHub repositories; supported languages and city dimensions are defined in [Source and Metrics](https://github.com/felixgeisler/code-city/blob/main/docs/modules/requirements/pages/source-and-metrics.adoc). Colours show magnitude, not code-health classifications. See the build/run support limits above.
 
 - Choose the Local folder or GitHub URL tab; only its input is shown. Select a folder, then Analyze working-tree files including uncommitted edits, or analyze an anonymously accessible public GitHub repository at an immutable revision.
 - Recognized dependency/output/framework-cache directories are pruned before descent and added to one editable Exclusions list. Remove a detected path to include that exact root on the next Analyze; readd it to exclude again. Siblings/nested matches stay independent and manual paths always win. Unchanged reruns preserve settings and capture identity. Local `.git` is never included. Source tabs, selection and setting edits perform no scan, reanalysis or upload. No Git operations or `.gitignore` interpretation occurs.
@@ -42,12 +53,12 @@ Development output is `build/development/`. Browser analysis requires HTTPS or a
 
 - Browse nested directory platforms and drill from root/parent directories to ranked files and units without camera movement.
 - Inspect read-only unit source with offline Shiki syntax colors, exact complexity and owned branching contributions; no reanalysis.
-- Save an immutable investigation, copy its URL, and reopen after a host restart without GitHub acquisition or parsing.
+- Save an immutable investigation and reopen after a host restart without GitHub acquisition or parsing.
 - Open saved investigations grouped by input kind and repository/folder, with separate GitHub revisions or local content-identified captures.
 
-Version-4 snapshots store one normalized source copy plus results for every retained text file and the applied versioned exclusion policy, not pending edits. Reopen restores original settings/source/results without folder or provider access; reanalysis requires explicit folder selection, retaining restored settings. Older payloads (including v3) are not migrated or deleted and do not reopen; their receipt inventory does not block new Save operations. See [automatic exclusions](docs/modules/requirements/pages/automatic-exclusions.adoc) and [ADR 0021](docs/modules/architecture/pages/adr/0021-recorded-automatic-exclusion-policy.adoc).
+Version-4 snapshots store one normalized source copy plus results for every retained text file and the applied versioned exclusion policy, not pending edits. Reopen restores original settings/source/results without folder or provider access; reanalysis requires explicit folder selection, retaining restored settings. Older payloads (including v3) are not migrated or deleted and do not reopen; their receipt inventory does not block new Save operations. See [automatic exclusions](https://github.com/felixgeisler/code-city/blob/main/docs/modules/requirements/pages/automatic-exclusions.adoc) and [ADR 0021](https://github.com/felixgeisler/code-city/blob/main/docs/modules/architecture/pages/adr/0021-recorded-automatic-exclusion-policy.adoc).
 
-There is no login, automatic saving, saved-entry management UI, or server metric certification. Snapshots include source and analysis evidence, are shared with anyone reaching the host, and never expire automatically. Back up/delete them as described in [Saved Investigations](docs/modules/requirements/pages/saved-investigations.adoc).
+There is no login, automatic saving, saved-entry management UI, or server metric certification. Snapshots include source and analysis evidence, are shared with anyone reaching the host, and never expire automatically. Back up/delete them as described in [Saved Investigations](https://github.com/felixgeisler/code-city/blob/main/docs/modules/requirements/pages/saved-investigations.adoc).
 
 ## Verification
 

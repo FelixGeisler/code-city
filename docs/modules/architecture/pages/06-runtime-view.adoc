@@ -119,9 +119,11 @@ xref:requirements:unit-inspection.adoc[Unit Source Inspection].
 The header binds the validated current origin/revision to the project-name
 native title; it has no separate identity disclosure/output. Clear and cancel
 remove the binding; correlated post-selection failures retain it. Save/reopen
-shows plain Saved status with UTC time in its native title, while Copy link
-uses the canonical saved address. Replacement clears status/time and record
-ownership using the existing UI epoch guard.
+shows plain Saved status with UTC time in its native title and hides Save;
+result publication preserves that saved state. The canonical address stays in
+browser history, with no clipboard API path. Replacement clears status/time
+and saved state using the existing UI epoch guard; stale Save completion or
+failure cannot alter the replacement's controls or history.
 
 The picker reads only receipt metadata and groups by input kind and
 repository/folder; refs/commits and local captures coexist under random IDs. Capacity, corruption and operator recovery are owned

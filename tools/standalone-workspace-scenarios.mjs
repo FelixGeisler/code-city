@@ -455,8 +455,11 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   assert.equal(await p.evaluate(`!document.querySelector('[data-save]').disabled&&document.querySelector('[data-city] canvas').checkVisibility()&&!document.querySelector('[data-unit-source]').open&&document.querySelector('[data-primary-inspection-status]').textContent==='Inspection unavailable. Click Inspect code to retry.'`),true);await shot('desktop-inspection-error');
   await p.evaluate(`window.__rejectUnits=false;true`);
   const failedCalls=await p.evaluate('window.__inspectionCalls.length');await settled();assert.equal(await p.evaluate('window.__inspectionCalls.length'),failedCalls,'inspection retried automatically');
+  const saveStart=harness.requests.length;
   await p.click('[data-save]');
-  await p.evaluate(`new Promise(resolve=>{const e=document.querySelector('[data-save]');const check=()=>{if(e.textContent==='Copy link'){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(e,{childList:true});check();})`);
+  const saved=await p.wait(s=>s.saved||s.saveMessage.includes('unchanged'));
+  assert.equal(saved.saved,true,saved.saveMessage);
+  assert.equal(harness.requests.slice(saveStart).filter(r=>r.method==='POST'&&r.url===origin+'/api/investigations').length,1,'one explicit Save must perform one real upload');
   await pointer('[data-inspect-highest]');await p.wait(s=>s.sourceReady&&s.contributions===1);await p.closeSource();
   const savedUrl=await p.evaluate('location.href');
   const savedId=new URL(savedUrl).pathname.split('/').at(-1);
@@ -466,16 +469,17 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   const savedHeader=await headerState();assert.equal(savedHeader.status,'Saved');assert.equal(savedHeader.time,'Saved '+savedRecord.savedAt);assert.equal(savedHeader.title,'Commit: '+savedRecord.revision);assert.equal(savedHeader.links,0);assert.equal(savedHeader.removed,0);
   const savedNetwork=harness.requests.length,savedWork=await headerWork();
   await p.click('[data-save-status]');assert.equal(await p.evaluate('location.href'),savedUrl,'plain Saved status navigated');
-  // Observe the real Copy link handler without changing the desktop clipboard.
-  const copied=await p.evaluate(`(async()=>{const clipboard=navigator.clipboard,own=Object.getOwnPropertyDescriptor(clipboard,'writeText');let copied;Object.defineProperty(clipboard,'writeText',{configurable:true,value:async value=>{copied=value;}});try{document.querySelector('[data-save]').click();await Promise.resolve();return copied;}finally{if(own)Object.defineProperty(clipboard,'writeText',own);else delete clipboard.writeText;}})()`);
-  assert.equal(copied,savedUrl,'Copy link did not use canonical current location');assert.equal(harness.requests.length,savedNetwork);assert.deepEqual(await headerWork(),savedWork);
-  for(const [width,height] of [[1365,900],[390,844]]){await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<800},p.sessionId);await settled();await fits();headerProof.push({width,height,saved:await headerState(),copied});await shot('header-saved-'+width);}
+  const absentAction=await p.evaluate(`document.querySelector('[data-save]').hidden&&document.querySelector('[data-save]').textContent==='Save'&&![...document.querySelectorAll('button,a')].some(e=>/copy link/i.test(e.textContent))&&window.__clipboardReads===0`);
+  assert.equal(absentAction,true,'saved header must have no Save/copy action, including hidden compatibility widgets');
+  assert.equal(harness.requests.length,savedNetwork);assert.deepEqual(await headerWork(),savedWork);
+  for(const [width,height] of [[1365,900],[390,844]]){await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<800},p.sessionId);await settled();await fits();headerProof.push({width,height,saved:await headerState(),absentAction});await shot('header-saved-'+width);}
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await settled();
   const retainedStart=harness.requests.length;
   harness.setMode('no-provider');const retained=await page({url:savedUrl});await retained.wait(s=>s.saved&&s.canvases===1);
   assert.equal((await retained.snapshot()).sourceIdentity,'Commit: '+savedRecord.revision);
   assert.equal(await retained.evaluate(`document.querySelector('[data-save-status]').title`),'Saved '+savedRecord.savedAt);
   assert.equal(await retained.evaluate(`document.querySelector('[data-save-status] a')`),null);
+  assert.equal(await retained.evaluate(`document.querySelector('[data-save]').hidden&&document.querySelector('[data-save]').textContent==='Save'&&window.__clipboardReads===0`),true);
   assert.equal(await retained.evaluate(`document.querySelector('[data-selection-details]').hidden&&!document.querySelector('[data-unit-source]')`),true);
   await retained.evaluate(`document.querySelector('[data-inspect-highest]').focus();true`);
   for(const type of ['keyDown','keyUp'])await cdp.send('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13,...(type==='keyDown'?{text:'\r'}:{})},retained.sessionId);

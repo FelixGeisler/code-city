@@ -2,6 +2,11 @@
 
 == Current implementation
 
+The initial release scope is the browser-owned analysis, inspection and optional
+shared persistence described here. The private package version is `0.1.0`, not
+a published-release or Git-tag claim. Snapshot format v4 is independent of the
+application release version.
+
 Code City analyzes a selected local working tree or anonymously accessible public
 GitHub repository in a browser Web Worker. The browser owns local capture or
 immutable GitHub revision selection, source acquisition, parsing, metrics, city
@@ -14,6 +19,22 @@ Stable admission, language, and metric behavior is defined in
 xref:source-and-metrics.adoc[Source and Metrics]. Presentation and the whole-core Save contract are defined in xref:city-and-failures.adoc[City and Failures].
 Current custody and network rules are defined in
 xref:browser-analysis-operating-policy.adoc[Browser Analysis Operating Policy].
+
+== Quickstart
+
+. Choose source: select a local folder in secure desktop Chromium, or enter an
+  anonymously accessible public GitHub URL.
+. Analyze: capture source and build the city.
+. Inspect code: open the highest-complexity unit, or find a file and inspect its
+  recorded units and branching evidence.
+
+Save is optional. After saving, copy the canonical URL from the address bar;
+Open saved also reopens investigations. See
+xref:saved-investigations.adoc[Saved Investigations] for shared visibility and
+persistence. Unsaved state lasts only while the browser retains the investigation.
+The xref:source-and-metrics.adoc#CC-CORE-MET-01[metric dimensions] and
+xref:source-and-metrics.adoc#CC-CORE-MET-05[non-classification rule] remain
+authoritative in Source and Metrics.
 
 == Local working-tree slice
 
@@ -50,6 +71,10 @@ session, attempt, command-reader, and retained-source capacity flags are not
 accepted. Browser Web Crypto requires HTTPS or a secure localhost context.
 The host supplies no TLS ingress, and an insecure browser context shows
 `Browser analysis requires HTTPS or localhost.` without starting a worker.
+Local folder access requires the read-only directory picker in secure desktop
+Chromium; unsupported browsers have no server/native-helper fallback. Internet
+deployment, direct authenticated ADO acquisition and Raspberry Pi
+capacity/performance are not qualified.
 
 == User-visible behavior
 
@@ -90,7 +115,7 @@ An idle tab creates no analysis worker or backend analysis request. Multiple
 completed tabs do not reserve shared analysis capacity. Filtering, sorting,
 selection, and camera interaction remain local.
 
-Explicit Save, Copy link, and Open saved provide immutable shared snapshots,
+Explicit Save and Open saved provide immutable shared snapshots,
 a repository-grouped branch/release picker, and restart-persistent reopening
 without GitHub acquisition or parsing. See
 xref:saved-investigations.adoc[Saved Investigations] for data, limits and recovery.
