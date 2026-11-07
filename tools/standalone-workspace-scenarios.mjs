@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { exerciseLocalBrowser, reopenLocalBrowser } from './standalone-local-browser-scenarios.mjs';
@@ -24,8 +25,15 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   assert.ok(evidenceDirectory, 'Workspace evidence needs an explicit output directory');
   await mkdir(evidenceDirectory,{recursive:true});
   const p=await page(); const proofs=[];
+  await cdp.send('Page.bringToFront',{},p.sessionId);
   const settled=()=>p.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
-  const shot=async (name,target=p)=>{await target.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');const {data}=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},target.sessionId);await writeFile(path.join(evidenceDirectory,name+'.png'),Buffer.from(data,'base64'));};
+  const shot=async (name,target=p)=>{await target.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');const clip=await target.evaluate('({x:0,y:0,width:innerWidth,height:innerHeight,scale:1})');const {data}=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,clip},target.sessionId);await writeFile(path.join(evidenceDirectory,name+'.png'),Buffer.from(data,'base64'));};
+  // Compare the unobscured city pixels, not just canvas dimensions or uniforms.
+  const cityPixels=async()=>{
+    const clip=await p.evaluate(`(()=>{const r=document.querySelector('[data-city] canvas').getBoundingClientRect(),y=Math.ceil(Math.max(r.top+160,r.top+r.height*.4));return {x:Math.ceil(r.left)+1,y,width:Math.floor(r.width)-2,height:Math.floor(r.bottom)-y-1,scale:1};})()`);
+    const {data}=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,clip},p.sessionId);
+    return createHash('sha256').update(Buffer.from(data,'base64')).digest('hex');
+  };
   const geometry=()=>p.evaluate(`(()=>{const c=document.querySelector('[data-city] canvas'),r=c.getBoundingClientRect();return {rect:[r.x,r.y,r.width,r.height],buffer:[c.width,c.height],matrix:window.__render.matrices.at(-1),uploads:window.__render.uploads};})()`);
   const fits=async()=>{assert.equal(await p.evaluate(`document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight`),true,'workspace overflows viewport');};
   const sourceMeasurement=(target=p)=>target.evaluate(`(()=>{
@@ -55,6 +63,83 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   const luminance=color=>{const rgb=color.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;};
   const contrastRatio=colors=>{const a=luminance(colors.color),b=luminance(colors.background);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);};
   const hoverColors=async selector=>{const point=await p.evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',...point},p.sessionId);await settled();return p.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),s=getComputedStyle(e);return {hover:e.matches(':hover'),color:s.color,background:s.backgroundColor};})()`);};
+  // Normal packaged gate and bounded workspace run share this native-input proof.
+  const toolbarProof=[];
+  for (const [width,height] of [[1365,900],[390,844],[700,390]]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<800},p.sessionId);await settled();
+    for (const theme of ['light','dark']) {
+      await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:theme}]},p.sessionId);
+      await pointer('[data-city-reset]'); // Establish native overview before measuring hint-only work.
+      await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:1,y:1},p.sessionId);
+      await p.evaluate(`document.activeElement.blur();true`);await settled();
+      const before=await geometry(),network=harness.requests.length;
+      const work=await p.evaluate(`({calls:window.__inspectionCalls.length,matrices:window.__render.matrices.length,frames:window.__render.frames.length})`);
+      assert.equal(await p.evaluate(`document.querySelector('[data-inspect-highest]').textContent`),'Inspect code');
+      assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-toolbar-tooltip]')].every(e=>!e.checkVisibility())`),true,'hints visible by default');
+      if(width!==700)await shot('toolbar-default-'+width+'-'+theme);
+      const bitmap=await cityPixels();
+      for (const [selector,label,modifiers] of [['[data-navigation-toggle]','Find a file',0],['[data-city-reset]','Reset view',8]]) {
+        const control=await p.evaluate(`(()=>{const b=document.querySelector('${selector}'),r=b.getBoundingClientRect(),s=b.querySelector('svg');return {name:b.getAttribute('aria-label'),width:r.width,height:r.height,hit:b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),svg:s.namespaceURI,decorative:s.getAttribute('aria-hidden'),focusable:s.getAttribute('focusable')};})()`);
+        assert.ok(control.width>=44&&control.height>=44&&control.hit,JSON.stringify(control));
+        assert.equal(control.name,label);assert.equal(control.svg,'http://www.w3.org/2000/svg');assert.equal(control.decorative,'true');assert.equal(control.focusable,'false');
+        const hint=()=>p.evaluate(`(()=>{const b=document.querySelector('${selector}'),e=b.querySelector('[data-toolbar-tooltip]'),r=e.getBoundingClientRect(),s=getComputedStyle(e),fg=s.color.match(/[\\d.]+/g).map(Number),bg=s.backgroundColor.match(/[\\d.]+/g).map(Number),alpha=fg[3]??1;return {visible:e.checkVisibility(),text:e.textContent,hover:b.matches(':hover'),focused:document.activeElement===b,focusVisible:b.matches(':focus-visible'),color:'rgb('+fg.slice(0,3).map((v,i)=>v*alpha+bg[i]*(1-alpha)).join(',')+')',background:s.backgroundColor,inside:r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight,hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};})()`);
+        await hoverColors(selector);let shown=await hint();
+        assert.ok(shown.visible&&shown.hover&&shown.inside&&shown.hit&&contrastRatio(shown)>=4.5,'native hover hint: '+JSON.stringify(shown));assert.equal(shown.text,label);
+        if(width!==700)await shot('toolbar-hover-'+(modifiers?'reset':'find')+'-'+width+'-'+theme);
+        assert.equal(await cityPixels(),bitmap,'hover changed the visible city bitmap');
+        // Moving onto the hint itself must keep it available; it takes no focus.
+        const point=await p.evaluate(`(()=>{const r=document.querySelector('${selector} [data-toolbar-tooltip]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+        const focused=await p.evaluate(`document.activeElement.tagName`);
+        await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',...point},p.sessionId);assert.equal((await hint()).visible,true);assert.equal(await p.evaluate(`document.activeElement.tagName`),focused);
+        await key('Escape','Escape',27);assert.equal((await hint()).visible,false,'Escape must dismiss a hovered hint even without button focus');
+        await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:1,y:1},p.sessionId);
+        // Seed an adjacent control only; the target receives actual Tab/ShiftTab.
+        await p.evaluate(`document.querySelector('${modifiers?'[data-legend-disclosure] summary':'[data-inspect-highest]'}').focus();true`);
+        await key('Tab','Tab',9,modifiers);await settled();shown=await hint();
+        assert.ok(shown.visible&&shown.focused&&shown.focusVisible&&shown.inside&&shown.hit&&contrastRatio(shown)>=4.5,'native focus hint: '+JSON.stringify(shown));
+        if(width!==700)await shot('toolbar-focus-'+(modifiers?'reset':'find')+'-'+width+'-'+theme);
+        assert.equal(await cityPixels(),bitmap,'keyboard focus changed the visible city bitmap');
+        await key('Escape','Escape',27);assert.equal((await hint()).visible,false);assert.equal((await hint()).focused,true);
+        await key('Tab','Tab',9);assert.equal((await hint()).visible,false,'blur must hide hint');
+        toolbarProof.push({width,height,theme,control,focus:shown,bitmap});
+      }
+      await settled();assert.deepEqual(await geometry(),before,'hints changed canvas rect/bitmap/matrix/uploads');
+      assert.deepEqual(await p.evaluate(`({calls:window.__inspectionCalls.length,matrices:window.__render.matrices.length,frames:window.__render.frames.length})`),work,'hints caused source work or GPU redraw');assert.equal(harness.requests.length,network,'hints caused network');
+      const ax=await cdp.send('Accessibility.getFullAXTree',{},p.sessionId);
+      for(const name of ['Reset view','Find a file','Inspect code'])assert.equal(ax.nodes.filter(n=>!n.ignored&&n.role?.value==='button'&&n.name?.value===name).length,1,'single native accessible button '+name);
+    }
+  }
+  // Existing callbacks, now through native icon pointer/Enter/Space activation.
+  const actionGeometry=await geometry(),actionNetwork=harness.requests.length;
+  const callsBefore=await p.evaluate('window.__inspectionCalls.length');
+  for(const activation of ['click','Enter',' ']) {
+    await p.evaluate(`document.querySelector('[data-inspect-highest]').focus();true`);await key('Tab','Tab',9);
+    if(activation==='click')await pointer('[data-navigation-toggle]');else await key(activation,activation===' '?'Space':'Enter',activation===' '?32:13);
+    assert.equal(await p.evaluate(`!document.querySelector('[data-workspace-navigation]').hidden&&document.querySelector('[data-city]').inert&&document.activeElement===document.querySelector('[data-close-navigation]')&&document.querySelector('[data-navigation-toggle]').getAttribute('aria-expanded')==='true'`),true,'Find native '+activation);
+    await key('Escape','Escape',27);
+    assert.equal(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden&&!document.querySelector('[data-city]').inert&&document.activeElement===document.querySelector('[data-navigation-toggle]')`),true);
+    // Native wheel changes the camera; the same Reset callback restores overview.
+    const point=await p.evaluate(`(()=>{const r=document.querySelector('[data-city] canvas').getBoundingClientRect();return {x:r.x+r.width*.8,y:r.y+r.height*.75};})()`);
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseWheel',...point,deltaX:0,deltaY:-120},p.sessionId);await settled();assert.notDeepEqual((await geometry()).matrix,actionGeometry.matrix,'wheel must change camera before Reset');
+    await p.evaluate(`document.querySelector('[data-navigation-toggle]').focus();true`);await key('Tab','Tab',9);
+    if(activation==='click')await pointer('[data-city-reset]');else await key(activation,activation===' '?'Space':'Enter',activation===' '?32:13);
+    await settled();assert.deepEqual(await geometry(),actionGeometry,'Reset native '+activation+' must restore overview without upload');
+  }
+  assert.equal(await p.evaluate('window.__inspectionCalls.length'),callsBefore);assert.equal(harness.requests.length,actionNetwork);
+  // The compact controls and labels remain usable with enlarged typography.
+  await p.evaluate(`(()=>{const sheet=[...document.styleSheets].find(s=>s.href&&new URL(s.href).pathname.endsWith('/browser.css')),index=sheet.cssRules.length;sheet.insertRule('[data-city-tools] button,[data-toolbar-tooltip]{font-size:22px !important;line-height:1.6 !important}',index);window.__toolbarStress={sheet,index};return true;})()`);
+  for(const [width,height] of [[390,844],[700,390],[390,390]]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();
+    for(const selector of ['[data-navigation-toggle]','[data-city-reset]']) {
+      await hoverColors(selector);
+      assert.equal(await p.evaluate(`(()=>{const b=document.querySelector('${selector}'),e=b.querySelector('[data-toolbar-tooltip]'),r=e.getBoundingClientRect();return e.checkVisibility()&&getComputedStyle(e).fontSize==='22px'&&r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&b.contains(document.elementFromPoint(b.getBoundingClientRect().x+22,b.getBoundingClientRect().y+22));})()`),true,'22px toolbar hint clipped');
+    }
+    await shot('toolbar-typography-'+width+'x'+height);
+  }
+  await p.evaluate(`window.__toolbarStress.sheet.deleteRule(window.__toolbarStress.index);delete window.__toolbarStress;document.activeElement.blur();true`);
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:1,y:1},p.sessionId);
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await settled();assert.deepEqual(await geometry(),initial);
+  await writeFile(path.join(evidenceDirectory,'toolbar-icons-proof.json'),JSON.stringify(toolbarProof,null,2)+'\n');
   for (const theme of ['light','dark']) {
     await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:theme}]},p.sessionId);
     const point=await p.evaluate(`(()=>{const r=document.querySelector('[data-inspect-highest]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
@@ -94,6 +179,33 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   assert.equal(await p.evaluate(`(()=>{const d=document.querySelector('[data-unit-source]'),c=document.querySelector('[data-source-code]').getBoundingClientRect(),r=document.querySelector('[data-owned-contributions]').getBoundingClientRect();return d.scrollHeight===d.clientHeight&&c.right<=r.left;})()`),true);
   await key('Escape','Escape',27);await p.wait(s=>!s.sourceOpen);assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-inspect-highest]')`),true);
   await settled();assert.deepEqual(await geometry(),initial);await shot('desktop-file');
+  // Mixed native keyboard/pointer input: a hovered Reset hint cannot steal the
+  // selected lookup's first Escape. Observe the real capture/bubble path.
+  const mixedBefore=await geometry(),mixedNetwork=harness.requests.length;
+  const mixedCalls=await p.evaluate('window.__inspectionCalls.length');
+  const mixedSelection=(await p.snapshot()).selectedFile;
+  await p.evaluate(`(()=>{window.__mixedEscape=[];const record=phase=>event=>{if(event.key==='Escape')window.__mixedEscape.push({phase,target:event.target.dataset.closeNavigation!==undefined?'close':event.target.tagName,prevented:event.defaultPrevented,lookupHidden:document.querySelector('[data-workspace-navigation]').hidden});};window.__mixedCapture=record('capture');window.__mixedBubble=record('lookup-bubble');document.addEventListener('keydown',window.__mixedCapture,true);document.querySelector('[data-workspace-navigation]').addEventListener('keydown',window.__mixedBubble);document.querySelector('[data-inspect-highest]').focus();return true;})()`);
+  await key('Tab','Tab',9);await key('Enter','Enter',13);
+  assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-close-navigation]')`),true);
+  await hoverColors('[data-city-reset]');await shot('mixed-lookup-hover-reset');
+  assert.equal(await p.evaluate(`!document.querySelector('[data-city-reset] [data-toolbar-tooltip]').hidden&&document.activeElement===document.querySelector('[data-close-navigation]')`),true);
+  await key('Escape','Escape',27);await settled();
+  const mixedProof=await p.evaluate(`({events:window.__mixedEscape,closed:document.querySelector('[data-workspace-navigation]').hidden,hintHidden:document.querySelector('[data-city-reset] [data-toolbar-tooltip]').hidden,focusReturned:document.activeElement===document.querySelector('[data-navigation-toggle]'),detailsVisible:!document.querySelector('[data-selection-details]').hidden})`);
+  assert.deepEqual(mixedProof.events,[{phase:'capture',target:'close',prevented:false,lookupHidden:false},{phase:'lookup-bubble',target:'close',prevented:true,lookupHidden:true}]);
+  assert.ok(mixedProof.closed&&mixedProof.hintHidden&&mixedProof.focusReturned&&mixedProof.detailsVisible);
+  assert.equal((await p.snapshot()).selectedFile,mixedSelection);
+  assert.deepEqual(await geometry(),mixedBefore);assert.equal(harness.requests.length,mixedNetwork);assert.equal(await p.evaluate('window.__inspectionCalls.length'),mixedCalls);
+  await shot('mixed-lookup-escape-closed');
+  // Escape on the hint's own native keyboard-focused button only dismisses it.
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:1,y:1},p.sessionId);
+  await p.evaluate(`document.querySelector('[data-navigation-toggle]').focus();true`);await key('Tab','Tab',9);
+  assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-city-reset]')&&!document.querySelector('[data-city-reset] [data-toolbar-tooltip]').hidden`),true);
+  await key('Escape','Escape',27);await settled();
+  mixedProof.ownFocused=await p.evaluate(`({event:window.__mixedEscape.at(-1),hintHidden:document.querySelector('[data-city-reset] [data-toolbar-tooltip]').hidden,focusRetained:document.activeElement===document.querySelector('[data-city-reset]')})`);
+  assert.deepEqual(mixedProof.ownFocused,{event:{phase:'capture',target:'BUTTON',prevented:true,lookupHidden:true},hintHidden:true,focusRetained:true});
+  assert.equal((await p.snapshot()).selectedFile,mixedSelection);assert.deepEqual(await geometry(),mixedBefore);assert.equal(harness.requests.length,mixedNetwork);assert.equal(await p.evaluate('window.__inspectionCalls.length'),mixedCalls);
+  await writeFile(path.join(evidenceDirectory,'mixed-escape-proof.json'),JSON.stringify(mixedProof,null,2)+'\n');
+  await p.evaluate(`document.removeEventListener('keydown',window.__mixedCapture,true);document.querySelector('[data-workspace-navigation]').removeEventListener('keydown',window.__mixedBubble);true`);
   await openFind();await p.evaluate(`document.querySelector('[data-analyzed-query]').value='';document.querySelector('[data-analyzed-query]').dispatchEvent(new Event('input'));document.querySelector('#workspace-files-tab').focus();true`);await key('ArrowRight','ArrowRight',39);
   assert.equal((await p.snapshot()).district,null);
   assert.equal(await p.evaluate(`document.activeElement.id==='workspace-directories-tab'`),true);
@@ -102,8 +214,29 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   assert.equal(await p.evaluate(`window.__directoryRow===document.querySelector('[data-district-rows="files"] button')`),true,'file selection destroyed directory location');
   await p.click('[data-close-details]');await p.wait(s=>s.selectedFile===null&&s.district===null);await settled();assert.deepEqual(await geometry(),initial);
   const requests=harness.requests.length;
-  await p.click('[data-change-repository]');await shot('desktop-source-setup');await settled();assert.deepEqual(await geometry(),initial);
-  await p.click('[data-change-repository]');await settled();assert.deepEqual(await geometry(),initial);assert.equal(harness.requests.length,requests);
+  const setupProof=[];
+  for(const [width,height] of [[1365,900],[390,844]]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<800},p.sessionId);await settled();
+    const before=await geometry(),calls=await p.evaluate('window.__inspectionCalls.length');
+    await p.click('[data-change-repository]');await settled();
+    // Challenge setup with a native keyboard hint behind it as well as hover.
+    await p.evaluate(`document.querySelector('[data-inspect-highest]').focus();true`);await key('Tab','Tab',9);
+    assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-navigation-toggle]')&&!document.querySelector('[data-navigation-toggle] [data-toolbar-tooltip]').hidden`),true);
+    const measure=()=>p.evaluate(`(()=>{const form=document.querySelector('form'),heading=form.querySelector('h2');const hit=e=>{const r=e.getBoundingClientRect(),h=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {text:e.textContent,visible:e.checkVisibility(),hit:e.contains(h),hitTag:h?.tagName,hitTab:h?.closest('[data-source-tabs] [role=tab]')?.id??null,focused:document.activeElement===e};};return {heading:hit(heading),tabs:[...form.querySelectorAll('[data-source-tabs] [role=tab]')].map(hit)};})()`);
+    let proof=await measure();assert.ok(proof.heading.visible&&proof.heading.hit&&proof.tabs.every(t=>t.visible&&t.hit&&t.hitTab),'setup covered: '+JSON.stringify(proof));
+    await shot('setup-covered-hint-'+width);
+    for(const selector of ['[data-source-local]','[data-source-github]']) {
+      await hoverColors(selector);proof=await measure();assert.ok(proof.tabs.every(t=>t.hit&&t.hitTab),'hover hit intercepted: '+JSON.stringify(proof));
+    }
+    // Actual native Tab enters the selected source tab from the header.
+    await p.evaluate(`document.querySelector('[data-save]').focus();true`);await key('Tab','Tab',9);await settled();
+    proof=await measure();assert.ok(proof.tabs.some(t=>t.focused&&t.hit&&t.hitTab),'source tab focus covered: '+JSON.stringify(proof));
+    setupProof.push({width,height,...proof});await shot(width===1365?'desktop-source-setup':'mobile-source-setup');
+    assert.deepEqual(await geometry(),before);assert.equal(await p.evaluate('window.__inspectionCalls.length'),calls);
+    await pointer('[data-change-repository]');await settled();assert.deepEqual(await geometry(),before);assert.equal(harness.requests.length,requests);
+  }
+  await writeFile(path.join(evidenceDirectory,'source-setup-layer-proof.json'),JSON.stringify(setupProof,null,2)+'\n');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await settled();assert.deepEqual(await geometry(),initial);
   proofs.push({desktop:initial,afterSelectionAndPanels:await geometry()});
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();const mobile=await geometry();await shot('mobile-city');
   await pointer('[data-navigation-toggle]');assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-query]').checkVisibility()||document.querySelector('[data-district-navigation]').checkVisibility()`),true);
@@ -303,7 +436,7 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await run('success',s=>s.canvases===1&&s.analyzed===5);
   await p.evaluate(`window.__rejectUnits=true;document.querySelector('[data-inspect-highest]').focus();true`);await key('Enter','Enter',13);
   await p.evaluate(`new Promise(resolve=>{const e=document.querySelector('[data-primary-inspection-status]');const check=()=>{if(e.textContent.includes('unavailable')){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(e,{childList:true});check();})`);
-  assert.equal(await p.evaluate(`!document.querySelector('[data-save]').disabled&&document.querySelector('[data-city] canvas').checkVisibility()&&!document.querySelector('[data-unit-source]').open`),true);await shot('desktop-inspection-error');
+  assert.equal(await p.evaluate(`!document.querySelector('[data-save]').disabled&&document.querySelector('[data-city] canvas').checkVisibility()&&!document.querySelector('[data-unit-source]').open&&document.querySelector('[data-primary-inspection-status]').textContent==='Inspection unavailable. Click Inspect code to retry.'`),true);await shot('desktop-inspection-error');
   await p.evaluate(`window.__rejectUnits=false;true`);
   const failedCalls=await p.evaluate('window.__inspectionCalls.length');await settled();assert.equal(await p.evaluate('window.__inspectionCalls.length'),failedCalls,'inspection retried automatically');
   await p.click('[data-save]');

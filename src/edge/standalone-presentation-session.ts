@@ -20,7 +20,7 @@ export type InventoryProjection = Readonly<{
 
 export type InventoryPublicationIdentity = Readonly<Record<never, never>>;
 
-type PresentationDocument = Pick<Document, "createElement"> & Partial<Pick<Document, "activeElement">>;
+type PresentationDocument = Pick<Document, "createElement" | "createElementNS" | "addEventListener" | "removeEventListener"> & Partial<Pick<Document, "activeElement">>;
 type PresentationRoot = Pick<HTMLElement, "hidden" | "replaceChildren">;
 type VisualResult = PresenterVisualResult;
 
@@ -259,6 +259,34 @@ export type StandaloneInventoryPublication = Readonly<{
   rollback(): void;
 }>;
 
+/** Local geometry only; the label is exposed once, on the native button. */
+function attachToolbarIcon(documentTarget: PresentationDocument, button: HTMLButtonElement, label: string, path: string) {
+  button.setAttribute("aria-label", label);
+  button.dataset.toolbarIcon = "";
+  const svg = documentTarget.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const [name, value] of Object.entries({ viewBox: "0 0 24 24", "aria-hidden": "true", focusable: "false", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round" })) svg.setAttribute(name, value);
+  const artwork = documentTarget.createElementNS("http://www.w3.org/2000/svg", "path");
+  artwork.setAttribute("d", path);
+  svg.append(artwork);
+  const tooltip = documentTarget.createElement("span");
+  tooltip.dataset.toolbarTooltip = "";
+  tooltip.setAttribute("aria-hidden", "true");
+  tooltip.textContent = label;
+  tooltip.hidden = true;
+  button.append(svg, tooltip);
+  const show = (): void => { tooltip.hidden = false; };
+  const hide = (): void => { tooltip.hidden = true; };
+  // Pointer-driven focus restoration after closing lookup is not a request for
+  // a hint. Native keyboard focus still reveals it without a second keystroke.
+  const focusHint = (): void => { if (button.matches(":focus-visible")) show(); };
+  const listeners = [["mouseenter", show], ["mouseleave", hide], ["focus", focusHint], ["blur", hide], ["click", hide]] as const;
+  for (const [event, listener] of listeners) button.addEventListener(event, listener);
+  return {
+    dismiss(): boolean { const visible = !tooltip.hidden; hide(); return visible; },
+    dispose(): void { hide(); for (const [event, listener] of listeners) button.removeEventListener(event, listener); },
+  };
+}
+
 function createInspector(documentTarget: PresentationDocument): HTMLElement {
   const inspector = documentTarget.createElement("section");
   inspector.dataset.inspector = "";
@@ -333,8 +361,7 @@ export function stageStandaloneInventoryPublication(
   const resetControl = documentTarget.createElement("button");
   resetControl.dataset.cityReset = "";
   resetControl.type = "button";
-  resetControl.textContent = "Reset view";
-  resetControl.title = "Drag to orbit · secondary drag to pan · wheel to zoom";
+  const resetTooltip = attachToolbarIcon(documentTarget, resetControl, "Reset view", "M3 10a9 9 0 1 1 2.6 8.4 M3 4v6h6");
   const tools = documentTarget.createElement("div");
   tools.dataset.cityTools = "";
   const navigation = documentTarget.createElement("aside");
@@ -393,7 +420,18 @@ export function stageStandaloneInventoryPublication(
   tabs.append(filesTab, browseDirectories);
   navigation.append(closeNavigation, tabs, analyzed, directoryPanel);
   const mobileToggle = documentTarget.createElement("button");
-  mobileToggle.type = "button"; mobileToggle.textContent = "Find a file"; mobileToggle.dataset.navigationToggle = "";
+  mobileToggle.type = "button"; mobileToggle.dataset.navigationToggle = "";
+  const findTooltip = attachToolbarIcon(documentTarget, mobileToggle, "Find a file", "M21 21l-6-6 M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0");
+  const tooltipKey = (event: KeyboardEvent): void => {
+    if (event.key !== "Escape") return;
+    const resetVisible = resetTooltip.dismiss(), findVisible = findTooltip.dismiss();
+    // A pointer hint must not steal Escape from lookup, dialogs or the canvas.
+    // Consume only a visible hint's own keyboard target; all hints still hide.
+    if ((resetVisible && event.target === resetControl) || (findVisible && event.target === mobileToggle)) {
+      event.preventDefault(); event.stopPropagation();
+    }
+  };
+  documentTarget.addEventListener("keydown", tooltipKey, true);
   mobileToggle.setAttribute("aria-expanded", "false");
   const toggleNavigation = (): void => {
     if (rolledBack) return;
@@ -408,7 +446,8 @@ export function stageStandaloneInventoryPublication(
   closeNavigation.addEventListener("click", closeNavigationListener);
   navigation.addEventListener("keydown", navigationKey);
   mobileToggle.addEventListener("click", toggleNavigation);
-  const primary = documentTarget.createElement("button"); primary.type = "button"; primary.dataset.inspectHighest = ""; primary.textContent = "Inspect highest complexity";
+  const primary = documentTarget.createElement("button"); primary.type = "button"; primary.dataset.inspectHighest = ""; primary.textContent = "Inspect code";
+  primary.title = "Open the unit with highest recorded complexity";
   const winner = highestComplexityFile(inspection); primary.disabled = winner === null || !inspect;
   const primaryStatus = documentTarget.createElement("p"); primaryStatus.dataset.primaryInspectionStatus = ""; primaryStatus.setAttribute("role", "status");
   if (winner === null) primaryStatus.textContent = "No executable units to inspect.";
@@ -607,6 +646,9 @@ export function stageStandaloneInventoryPublication(
       if (rolledBack) return;
       rolledBack = true;
       cancelInspectionIntent();
+      resetTooltip.dispose();
+      findTooltip.dispose();
+      documentTarget.removeEventListener("keydown", tooltipKey, true);
       primary.removeEventListener("click", primaryListener);
       resetControl.removeEventListener("click", cancelInspectionIntent);
       closeNavigation.removeEventListener("click", closeNavigationListener);

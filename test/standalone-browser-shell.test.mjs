@@ -37,7 +37,7 @@ async function fixture(picker, realInspection = false) {
   const originals = new Map();
   const set = (key, value) => { originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { configurable: true, writable: true, value }); };
   set("__shellFixture", state);
-  set("document", { querySelector: node, createElement: tag => new Element(tag) });
+  set("document", Object.assign(new EventTarget(), { querySelector: node, createElement: tag => new Element(tag), createElementNS: (namespace, tag) => Object.assign(new Element(tag), {namespaceURI: namespace}) }));
   const window = new EventTarget(); window.isSecureContext = true; window.showDirectoryPicker = picker;
   set("window", window);
   set("history", { replaceState() {} });

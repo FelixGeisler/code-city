@@ -6,7 +6,7 @@ xref:city-and-failures.adoc#CC-CORE-INV-04[Investigation Evidence Only].
 
 == Current interaction
 
-The primary path is Choose source → Analyze → `Inspect highest complexity` →
+The primary path is Choose source → Analyze → `Inspect code` →
 read one unit's source and owned contributions. This explicit action selects the
 successful file with positive U and M and greatest recorded M; file ties use
 unsigned UTF-8 canonical path ascending. It activates the first retained unit

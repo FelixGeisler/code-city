@@ -371,7 +371,8 @@ view publication fills the bar. Failure/cancellation ends it without fabricated
 completion. This is work progress, not equal-duration work or an ETA.
 
 The completed viewport-height workspace shows the full city and one primary
-action, `Inspect highest complexity`. No navigation inventory or empty details
+action, `Inspect code`. It opens the highest recorded complexity unit, not a
+new analysis. No navigation inventory or empty details
 column is visible or keyboard reachable by default. `Find a file` opens the
 secondary, scrollable Files/Directories overlay on every screen size. Opening
 it or switching its tabs does not select anything or request units/source.
@@ -386,7 +387,16 @@ and an uncovered Close details control; they need not occupy half the screen.
 
 File, directory, clear-selection, navigation, legend and source-setup toggles
 never resize or move the canvas or change its camera, bitmap, geometry or GPU
-buffers. Save and Reset remain secondary explicit controls. The app bar and
+buffers. Save and Reset remain secondary explicit controls. Reset view and
+Find a file are native icon-only buttons with those exact accessible names,
+decorative local SVG geometry, and 44px hit targets. Their short labels appear
+on hover and keyboard focus in both shell themes, without moving the workspace;
+Escape, activation and focus/pointer departure dismiss them. A hovered hint
+must not consume Escape belonging to another focused surface: lookup still
+closes on its first Escape. Only the hint's own keyboard-focused button consumes
+Escape to dismiss its hint. Source setup covers overlapping city tools and hints;
+hints remain above lookup when setup is closed. Hints do not take focus or repeat
+the accessible name to assistive technology. The app bar and
 project/capture controls stay reachable; full capture identity and the Color key
 are disclosures. At 390px there is no horizontal page overflow, and
 native source/saved dialogs remain in the top layer. Respect OS light/dark

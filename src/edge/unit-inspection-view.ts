@@ -257,7 +257,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
       void (unitsPending ?? Promise.resolve()).then(() => {
         if (!active || epoch !== intentEpoch) return;
         intentStatus = undefined;
-        if (!first || listFailed) { status("Inspection unavailable. Click Inspect highest complexity to retry."); return; }
+        if (!first || listFailed) { status("Inspection unavailable. Click Inspect code to retry."); return; }
         status(""); returnFocus = origin; openSource(first);
       });
     },
