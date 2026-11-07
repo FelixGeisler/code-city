@@ -31,6 +31,19 @@ verified Xvfb server and owned Chrome/chooser focus; it never uses the caller's
 `DISPLAY`. Qualification still requires a real native directory handle, granted
 read permission and successful acquisition, not merely completed UI actions.
 
+The native qualification tool observes its own Chrome child's startup immediately
+at launch, before asynchronous process metadata or helper inspection. Its CDP
+endpoint deadline remains 20 seconds from registration. Early spawn errors and
+exits (including already-terminal children) reject startup; an early rejection
+remains available to the owner after setup without an unhandled rejection.
+Startup settlement releases its listeners and timer. Failure console output
+includes available owned-child startup/exit state and at most 16 KiB of stderr;
+no profile upload or additional CI artifact is introduced. Endpoint acceptance,
+PID/profile/display ownership checks and shutdown qualification remain unchanged.
+A no-GUI Node regression demonstrates the lost-event race in the old waiter;
+this does not establish the cause of a prior hosted timeout whose startup state
+was unavailable.
+
 == Main publication path
 
 A protected-main push repeats the same gates and creates a publication record
