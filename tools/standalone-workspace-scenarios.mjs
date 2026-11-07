@@ -48,12 +48,67 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await p.click('[data-change-repository]');await settled();assert.deepEqual(await geometry(),mobile);await p.click('[data-change-repository]');
   proofs.push({mobile,afterSelectionAndPanels:await geometry()});
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);
-  await run('unit-evidence',s=>s.canvases===1&&s.analyzed>0);await selectFile('dense.js');await p.wait(s=>s.units===1);await p.click('[data-unit-rows] button');await p.wait(s=>s.sourceReady&&s.contributions===32);
+  await run('unit-evidence',s=>s.canvases===1&&s.analyzed>0);await selectFile('dense.js');await p.wait(s=>s.units===1);await pointer('[data-unit-rows] button');await p.wait(s=>s.sourceReady&&s.contributions===32);
   assert.equal(await p.evaluate(`(()=>{const c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]'),d=document.querySelector('[data-unit-source]');r.scrollTop=r.scrollHeight;window.__rows=[...r.querySelectorAll('button')];window.__scroll=r.scrollTop;window.__range=document.querySelector('[data-source-range]').textContent;return r.scrollTop>0&&c.clientHeight>300&&d.scrollHeight===d.clientHeight;})()`),true);
   const networkBefore=harness.requests.length;
   await p.evaluate(`window.__rows.at(-1).focus({preventScroll:true});true`);await key('Enter','Enter',13);await p.wait(s=>s.sourceReady&&s.contributions===32);
   assert.equal(await p.evaluate(`(()=>{const r=document.querySelector('[data-contribution-rows]');return window.__rows.every((b,i)=>b===r.querySelectorAll('button')[i])&&r.scrollTop===window.__scroll&&document.activeElement===document.querySelector('[data-source-code]')&&document.querySelector('[data-source-range]').textContent===window.__range&&document.querySelector('[data-source-code]').scrollLeft>0;})()`),true);
   await shot('desktop-code-dense');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:700,height:390,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
+  const landscape=[];
+  const focusedReachable=()=>p.evaluate(`(()=>{const e=document.activeElement,r=e.getBoundingClientRect(),dialog=document.querySelector('[data-unit-source]'),d=dialog.getBoundingClientRect();if(!(r.width>0&&r.height>0&&r.left>=d.left&&r.right<=d.right&&r.top>=d.top&&r.bottom<=d.bottom&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))))return false;for(let p=e.parentElement;p&&p!==dialog;p=p.parentElement){const s=getComputedStyle(p),v=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)&&(r.top<v.top||r.bottom>v.bottom))return false;if(/auto|scroll|hidden|clip/.test(s.overflowX)&&(r.left<v.left||r.right>v.right))return false;}return true;})()`);
+  const shortCamera=await geometry();
+  for(const open of [false,true]) {
+    // Toggle help with a real pointer. Then exercise native Tab scrolling, not DOM click().
+    if(await p.evaluate(`document.querySelector('[data-owned-contributions] details').open`)!==open)await pointer('[data-owned-contributions] summary');
+    assert.equal(await p.evaluate(`document.querySelector('[data-owned-contributions] details').open`),open);
+    await p.evaluate(`document.querySelector('[data-close-source]').focus();true`);
+    const visited=[];
+    for(let step=0;step<42;step++) {
+      await key('Tab','Tab',9);await settled();
+      const target=await p.evaluate(`(()=>{const e=document.activeElement;return e.matches('[data-close-source]')?'close':e.matches('[data-source-code]')?'code':e.matches('[data-owned-contributions]')?'pane':e.matches('[data-contribution-scope]')?'scope':e.matches('summary')?'help':e.closest('[data-contribution-paging]')?'paging':e.hasAttribute('data-contribution')?'row':null;})()`);
+      if(target){assert.equal(await focusedReachable(),true,'keyboard target clipped with help '+open+': '+target);visited.push(target);}
+      if(target==='close')break;
+    }
+    for(const target of ['code','pane','scope','help','paging','row','close'])assert.ok(visited.includes(target),'missing keyboard target '+target);
+    assert.equal(visited.filter(v=>v==='row').length,32,'Tab must reach all 32 native list rows');
+    // Native keyboard paging remains usable in both help states.
+    await p.evaluate(`document.querySelector('[data-contribution-paging] button:last-child').focus();true`);assert.equal(await focusedReachable(),true);
+    await key('Enter','Enter',13);await p.wait(s=>s.contributionStart===33&&s.contributions===32);
+    await p.evaluate(`document.querySelector('[data-contribution-paging] button:first-child').focus();true`);assert.equal(await focusedReachable(),true);
+    await key('Enter','Enter',13);await p.wait(s=>s.contributionStart===1&&s.contributions===32);
+    await p.evaluate(`window.__landscapeRows=[...document.querySelectorAll('[data-contribution-rows] button')];window.__landscapeRange=document.querySelector('[data-source-range]').textContent;window.__landscapeRows.at(-1).focus();true`);
+    assert.equal(await focusedReachable(),true);
+    const scroll=await p.evaluate(`({pane:document.querySelector('[data-owned-contributions]').scrollTop,list:document.querySelector('[data-contribution-rows]').scrollTop})`);
+    await key('Enter','Enter',13);await settled();
+    const selection=await p.evaluate(`(()=>{const c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]'),m=c.querySelector('mark').getBoundingClientRect(),v=c.getBoundingClientRect();return {focused:document.activeElement===c,identical:window.__landscapeRows.every((b,i)=>b===r.querySelectorAll('button')[i]),selected:window.__landscapeRows.at(-1).getAttribute('aria-current')==='true'&&window.__landscapeRows.at(-1).dataset.contribution==='31'&&c.querySelector('mark').textContent==='x&&x'&&document.querySelector('[data-source-body] [role=status]').textContent.includes('starts at column 156, ends before column 160'),range:document.querySelector('[data-source-range]').textContent===window.__landscapeRange,mark:[m.left,m.top,m.right,m.bottom],viewport:[v.left,v.top,v.right,v.bottom],visible:m.left>=v.left&&m.left<v.right&&m.top>=v.top&&m.top<v.bottom};})()`);
+    assert.ok(selection.focused&&selection.identical&&selection.selected&&selection.range&&selection.visible,'selection must retain native rows/range and focus visible exact source: '+JSON.stringify(selection));
+    assert.deepEqual(await p.evaluate(`({pane:document.querySelector('[data-owned-contributions]').scrollTop,list:document.querySelector('[data-contribution-rows]').scrollTop})`),scroll,'selection must retain both contribution scroll positions');
+    assert.equal(await focusedReachable(),true,'selected source must remain reachable');
+    assert.deepEqual(await geometry(),shortCamera,'landscape inspection moved camera/buffers');
+    assert.equal(harness.requests.length,networkBefore,'landscape inspection made provider requests');
+    const measurement=await p.evaluate(`(()=>{const d=document.querySelector('[data-unit-source]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]'),s=document.querySelector('[data-owned-contributions]');return {helpOpen:${open},dialogHeight:d.clientHeight,dialogScrollHeight:d.scrollHeight,codeHeight:c.clientHeight,listHeight:r.clientHeight,contributionHeight:s.clientHeight,contributionScrollHeight:s.scrollHeight};})()`);
+    assert.ok(measurement.codeHeight>=140&&measurement.listHeight>=100&&measurement.dialogHeight===measurement.dialogScrollHeight,'short landscape panes must have useful height: '+JSON.stringify(measurement));
+    landscape.push({...measurement,visited,scroll,camera:await geometry()});
+    await shot('landscape-source-help-'+(open?'open':'closed')+'-list');
+    // Also capture the disclosure content at the top of the scrollable region.
+    await p.evaluate(`document.querySelector('[data-owned-contributions]').scrollTop=0;true`);
+    await shot('landscape-source-help-'+(open?'open':'closed'));
+    await p.evaluate(`document.querySelector('[data-close-source]').focus();true`);assert.equal(await focusedReachable(),true);
+    await key('Enter','Enter',13);await p.wait(s=>!s.sourceOpen);
+    assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-unit-rows] button')`),true,'Close must restore unit focus');
+    await settled();assert.deepEqual(await geometry(),shortCamera);
+    await key('Enter','Enter',13);await p.wait(s=>s.sourceReady&&s.contributions===32);
+    assert.deepEqual(await geometry(),shortCamera,'reopening source moved camera/buffers');
+  }
+  await writeFile(path.join(evidenceDirectory,'landscape-source-proof.json'),JSON.stringify(landscape,null,2)+'\n');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:390,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
+  assert.equal(await p.evaluate(`(()=>{const b=document.querySelector('[data-source-body]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]');return b.scrollHeight>b.clientHeight&&c.clientHeight>=140&&r.clientHeight>=100;})()`),true,'narrow short screens need bounded stacked scrolling');
+  await p.evaluate(`document.querySelector('[data-contribution-rows] li:last-child button').focus();true`);assert.equal(await focusedReachable(),true);
+  await key('Enter','Enter',13);await settled();
+  assert.equal(await p.evaluate(`document.querySelector('[data-source-body]').scrollTop===0&&document.activeElement===document.querySelector('[data-source-code]')`),true,'narrow stacked selection must return to source');
+  assert.equal(await focusedReachable(),true,'narrow short code must remain reachable after selection');await fits();await shot('narrow-short-source');
+  await p.evaluate(`document.querySelector('[data-owned-contributions] details').open=false;true`);
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();await shot('mobile-code-dense');
   assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').clientHeight>=150&&document.querySelector('[data-contribution-rows]').clientHeight>=70`),true,'mobile code and contribution panes must both be useful');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await p.closeSource();

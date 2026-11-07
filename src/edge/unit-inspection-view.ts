@@ -62,6 +62,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
   sourcePaging.append(previousSource, sourceRange, nextSource);
   const sourceSection = element("section"); sourceSection.append(sourceMessage, sourcePaging, code);
   const contributionSection = element("section"); contributionSection.dataset.ownedContributions = "";
+  contributionSection.tabIndex = 0; contributionSection.setAttribute("aria-label", "Owned contributions");
   const scopeLabel = element("label", "Contributions for"); const scope = element("select"); scope.dataset.contributionScope = "";
   for (const [value, text] of [["shown", "Shown source"], ["unit", "Whole unit"]]) { const option = element("option", text); option.value = value!; scope.append(option); }
   scope.value = "shown"; scope.disabled = true; scopeLabel.append(scope);
@@ -138,11 +139,13 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
     for (const [id, button] of contributionButtons) button.setAttribute("aria-current", String(selectedContribution?.id === id));
   }
   function focusSelectedSource(): void {
-    dialog.scrollTop = 0;
+    dialog.scrollTop = 0; body.scrollTop = 0;
     if (firstMarked) {
       const target = firstMarked.getBoundingClientRect(), viewport = code.getBoundingClientRect();
-      if (target.top < viewport.top || target.bottom > viewport.bottom) code.scrollTop += target.top - viewport.top - code.clientTop;
-      if (target.left < viewport.left || target.left >= viewport.right) code.scrollLeft += target.left - viewport.left - code.clientLeft;
+      // Scroll offsets are integer-rounded by browsers; round toward the leading
+      // edge so a fractional glyph position cannot remain clipped after a jump.
+      if (target.top < viewport.top || target.bottom > viewport.bottom) code.scrollTop += Math.floor(target.top - viewport.top - code.clientTop);
+      if (target.left < viewport.left || target.left >= viewport.right) code.scrollLeft += Math.floor(target.left - viewport.left - code.clientLeft);
     }
     code.focus?.({ preventScroll: true });
   }

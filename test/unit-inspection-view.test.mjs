@@ -35,6 +35,16 @@ test('file selection lists units without opening source, then renders inert read
  assert.match(data(host,'contributionRows').textContent,/If statement\+1Line 1/u);assert.match(data(host,'contributionRows').textContent,/starts at column 1, ends before column/u);assert.match(data(host,'unitDetails').textContent,/Complexity 2/u);
  button(host,'Close source').click();assert.equal(data(host,'unitSource').open,false);release();
 });
+test('source selection reveals the bounded body and rounds fractional scroll offsets without clipping the selected glyph',async()=>{
+ const host=new Element('section'),source='if(x) x;',calls=[];let code;
+ const doc={createElement(tag){const node=new Element(tag);if(tag==='pre'){code=node;code.getBoundingClientRect=()=>({top:0,bottom:400,left:19,right:600});let left=0;Object.defineProperty(code,'scrollLeft',{get:()=>left,set:value=>{left=Math.round(value);}});}if(tag==='mark')node.getBoundingClientRect=()=>({top:10,bottom:25,left:118.984375-code.scrollLeft,right:160-code.scrollLeft});return node;}};
+ const read=reader(source,[{kind:'top-level',startByte:0,endByte:source.length,complexity:2}],[[0,'if',0,source.length]]);
+ const release=attachUnitInspection(doc,host,'file.js',async query=>{calls.push(query);return read(query);});await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
+ assert.equal(data(host,'ownedContributions').tabIndex,0);assert.equal(data(host,'ownedContributions').attributes['aria-label'],'Owned contributions');
+ data(host,'sourceBody').scrollTop=180;data(host,'ownedContributions').scrollTop=90;code.scrollLeft=100;const before=calls.length;
+ all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0].click();
+ assert.equal(code.scrollLeft,99);assert.ok(all(code,node=>node.tagName==='MARK')[0].getBoundingClientRect().left>=19);assert.equal(data(host,'sourceBody').scrollTop,0);assert.equal(data(host,'ownedContributions').scrollTop,90);assert.equal(calls.length,before);release();
+});
 test('bounded unit pages preserve all entries and source is still explicit',async()=>{
  const source='x'.repeat(80),units=Array.from({length:35},(_,index)=>({kind:'arrow',startByte:index,endByte:80,complexity:1}));const host=new Element('section');
  let reads=0;const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{reads++;return reader(source,units)(query);});await flush();
