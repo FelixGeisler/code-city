@@ -51,9 +51,12 @@ form h2 { margin-bottom:2px; } form button[type=submit], form button[type=submit
 [data-analyzed-metrics] { display:flex; gap:12px; color:var(--muted); font-size:11px; }
 [aria-pressed=true],[data-contribution-rows] button[aria-current=true] { border-color:var(--focus); background:color-mix(in srgb,var(--accent) 14%,var(--surface)); }
 [data-city-workspace] { min-width:0; min-height:0; height:100%; display:flex; padding:8px; position:relative; }
-[data-city-tools] { position:absolute; top:16px; left:16px; right:16px; z-index:2; display:flex; flex-wrap:wrap; gap:8px; align-items:start; pointer-events:none; }
+[data-city-tools] { position:absolute; top:16px; left:16px; right:16px; z-index:5; display:flex; flex-wrap:wrap; gap:8px; align-items:start; pointer-events:none; }
 [data-city-tools]>* { pointer-events:auto; }
 [data-city-tools]>button,[data-legend-disclosure] { box-shadow:0 2px 8px #0004; }
+[data-city-tools]>[data-toolbar-icon] { position:relative; display:grid; place-items:center; flex:0 0 44px; width:44px; height:44px; padding:10px; }
+[data-toolbar-icon] svg { width:22px; height:22px; pointer-events:none; }
+[data-toolbar-tooltip] { position:absolute; top:100%; left:0; z-index:1; width:max-content; max-width:12em; padding:7px 9px; border:1px solid var(--border); border-radius:4px; background:var(--surface); color:var(--text); font-size:14px; line-height:1.4; font-weight:500; text-align:left; box-shadow:0 2px 8px #0004; }
 [data-primary-inspection-status] { flex-basis:100%; width:fit-content; padding:6px; background:var(--surface); font-size:12px; border-radius:4px; }
 [data-legend-disclosure] { margin-left:auto; background:var(--surface); border:1px solid var(--border); border-radius:5px; padding:0 10px; }
 [data-legend-disclosure][open] { max-width:250px; }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
-import test from "node:test";
+import test, { mock } from "node:test";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -165,6 +165,7 @@ class FakeElement {
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   click() { this.dispatch("click"); }
   getClientRects() { return []; }
+  matches(selector) { assert.equal(selector, ':focus-visible'); return this.keyboardFocus !== false; }
   addEventListener(type, listener) {
     const entries = this.listeners.get(type) ?? new Set();
     entries.add(listener);
@@ -189,6 +190,8 @@ class FakeElement {
   }
 }
 
+function fakeDocument(members) { return Object.assign(new EventTarget(), members); }
+
 function descendants(element) {
   return element.children.flatMap((child) => child instanceof FakeElement ? [child, ...descendants(child)] : []);
 }
@@ -199,9 +202,10 @@ function byDataset(nodes, key) {
 
 test("browser-edge publication uses native bounded semantics, safe bdi text, pressed state, and exact callback snapshots", () => {
   const created = [];
-  const documentTarget = {
+  const documentTarget = fakeDocument({
     createElement(tagName) { const element = new FakeElement(tagName); created.push(element); return element; },
-  };
+    createElementNS(namespace, tag) { const node = this.createElement(tag); node.namespaceURI = namespace; return node; },
+  });
   const events = [];
   const sink = {
     hierarchyFileActivated(...args) { events.push(["hierarchy-file", ...args]); },
@@ -317,7 +321,7 @@ test("district selection survives hover/filter/sort, is exclusive with files, an
 
 test("district summaries keep exact integer totals and distinguish repository root from a real _root folder", () => {
   const created = [];
-  const documentTarget = { createElement(tag) { const node = new FakeElement(tag); created.push(node); return node; } };
+  const documentTarget = fakeDocument({ createElement(tag) { const node = new FakeElement(tag); created.push(node); return node; }, createElementNS(namespace, tag) { const node = this.createElement(tag); node.namespaceURI = namespace; return node; } });
   const values = [
     { canonicalPath: "src/a.ts", S: Number.MAX_SAFE_INTEGER, U: Number.MAX_SAFE_INTEGER, M: 2 },
     { canonicalPath: "src/b.ts", S: 1, U: 2, M: 7 },
@@ -357,7 +361,7 @@ function hierarchyDescriptors(values) {
 
 function hierarchyPublication(values, inspect, applyVisual = () => ({kind:'applied'})) {
   const created = [], visuals = [];
-  const documentTarget = { activeElement: null, createElement(tag) { const node = new FakeElement(tag); node.documentTarget = this; created.push(node); return node; } };
+  const documentTarget = fakeDocument({ activeElement: null, createElement(tag) { const node = new FakeElement(tag); node.documentTarget = this; created.push(node); return node; }, createElementNS(namespace, tag) { const node = this.createElement(tag); node.namespaceURI = namespace; return node; } });
   const districts = hierarchyDescriptors(values);
   let state;
   const sink = Object.fromEntries(["selectionAction", "queryChanged", "sortChanged", "rowActivated", "districtActivated", "hierarchyFileActivated"]
@@ -625,6 +629,43 @@ const flushInspection = async () => { for (let i = 0; i < 8; i++) await Promise.
 const retainedUnit = id => ({ id, kind: 'function', complexity: 80 - id, start: {line: id + 1, column: 1}, end: {line: id + 2, column: 1} });
 function metadata(query) { return { ...query, total: 40, rows: Array.from({length: Math.min(32,40-query.offset)}, (_,i)=>retainedUnit(query.offset+i)) }; }
 
+test("toolbar icons have single accessible names, decorative SVG, dismissible hover/focus hints and disposed listeners", () => {
+  const f = hierarchyPublication(facts);
+  assert.equal(byDataset(f.publication.nodes, 'inspectHighest').textContent, 'Inspect code');
+  for (const [key, label] of [['cityReset', 'Reset view'], ['navigationToggle', 'Find a file']]) {
+    const button = byDataset(f.publication.nodes, key);
+    assert.equal(button.tagName, 'BUTTON'); assert.equal(button.type, 'button');
+    assert.equal(button.getAttribute('aria-label'), label); assert.equal(button.title, undefined);
+    const [svg, hint] = button.children;
+    assert.equal(svg.namespaceURI, 'http://www.w3.org/2000/svg');
+    assert.equal(svg.getAttribute('aria-hidden'), 'true'); assert.equal(svg.getAttribute('focusable'), 'false');
+    assert.equal(svg.children[0].namespaceURI, svg.namespaceURI); assert.ok(svg.children[0].getAttribute('d'));
+    assert.equal(hint.getAttribute('aria-hidden'), 'true'); assert.equal(hint.textContent, label); assert.equal(hint.hidden, true);
+    for (const [show, hide] of [['mouseenter', 'mouseleave'], ['focus', 'blur'], ['focus', 'click']]) {
+      button.dispatch(show); assert.equal(hint.hidden, false);
+      button.dispatch(hide); assert.equal(hint.hidden, true);
+    }
+    button.keyboardFocus = false; button.dispatch('focus'); assert.equal(hint.hidden, true);
+    button.keyboardFocus = true; button.dispatch('focus');
+    const escape = new Event('keydown', {cancelable:true}); Object.defineProperty(escape, 'key', {value:'Escape'});
+    f.documentTarget.dispatchEvent(escape);
+    assert.equal(hint.hidden, true); assert.equal(escape.defaultPrevented, true);
+  }
+  const buttons = ['cityReset','navigationToggle'].map(key => byDataset(f.publication.nodes,key));
+  const removeDocumentListener = mock.method(f.documentTarget, 'removeEventListener');
+  buttons[0].dispatch('mouseenter'); f.publication.rollback(); f.state.dispose();
+  assert.equal(removeDocumentListener.mock.calls.length, 1);
+  const [event, listener, capture] = removeDocumentListener.mock.calls[0].arguments;
+  assert.equal(event, 'keydown'); assert.equal(typeof listener, 'function'); assert.equal(capture, true);
+  for (const button of buttons) {
+    button.dispatch('mouseenter'); button.dispatch('focus');
+    assert.equal(button.children[1].hidden, true);
+    for (const event of ['mouseenter','mouseleave','focus','blur','click']) assert.equal(button.listeners.get(event).size, 0);
+  }
+  const escape = new Event('keydown', {cancelable:true}); Object.defineProperty(escape, 'key', {value:'Escape'});
+  f.documentTarget.dispatchEvent(escape); assert.equal(escape.defaultPrevented, false);
+});
+
 test("one primary action bypasses query, reuses pending first page, and reactivates first unit from a later page", async () => {
   const pending = [], calls = [];
   const f = hierarchyPublication(facts, query => { calls.push(query); return new Promise(resolve=>pending.push({query,resolve})); });
@@ -667,7 +708,7 @@ test("pending primary intent is cancelled by same-generation selection, clear, l
   const pending=[]; const f=hierarchyPublication(facts,query=>new Promise(resolve=>pending.push({query,resolve})));
   const primary=byDataset(f.publication.nodes,'inspectHighest'); primary.click();
   pending[0].resolve({type:'units',path:'wrong',offset:0,total:1,rows:[]}); await flushInspection();
-  assert.match(byDataset(f.publication.nodes,'primaryInspectionStatus').textContent,/unavailable/u); assert.equal(pending.length,1);
+  assert.equal(byDataset(f.publication.nodes,'primaryInspectionStatus').textContent,'Inspection unavailable. Click Inspect code to retry.'); assert.equal(pending.length,1);
   assert.equal(byDataset(f.publication.nodes,'city').hidden,false);
   primary.click(); assert.equal(pending.length,2); pending[1].resolve(metadata(pending[1].query)); await flushInspection();
   assert.equal(pending[2].query.type,'source'); f.publication.rollback(); f.state.dispose();
