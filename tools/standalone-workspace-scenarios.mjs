@@ -51,15 +51,28 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   const initial=await geometry();
   // Real hover, resolved browser colors, and WCAG luminance in each product theme.
   const hoverProof=[];
+  const hubPalette={light:{page:'#efefef',surface:'#f5f5f5',raised:'#e7e7e7',navigation:'#f5f5f5',header:'#004696',accent:'#1976d2'},dark:{page:'#1a1a1a',surface:'#2d2d2d',raised:'#262626',navigation:'#212121',header:'#0b1a2d',accent:'#90caf9'}};
+  const luminance=color=>{const rgb=color.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;};
+  const contrastRatio=colors=>{const a=luminance(colors.color),b=luminance(colors.background);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);};
+  const hoverColors=async selector=>{const point=await p.evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',...point},p.sessionId);await settled();return p.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),s=getComputedStyle(e);return {hover:e.matches(':hover'),color:s.color,background:s.backgroundColor};})()`);};
   for (const theme of ['light','dark']) {
     await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:theme}]},p.sessionId);
     const point=await p.evaluate(`(()=>{const r=document.querySelector('[data-inspect-highest]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
     await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',...point},p.sessionId);await settled();
     const colors=await p.evaluate(`(()=>{const e=document.querySelector('[data-inspect-highest]'),s=getComputedStyle(e);return {hover:e.matches(':hover'),color:s.color,background:s.backgroundColor};})()`);
-    const luminance=color=>{const rgb=color.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;};
-    const a=luminance(colors.color),b=luminance(colors.background),contrast=(Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+    const contrast=contrastRatio(colors);
     assert.ok(colors.hover&&contrast>=4.5,theme+' hovered primary contrast: '+JSON.stringify({...colors,contrast}));
-    hoverProof.push({theme,...colors,contrast});await shot('primary-hover-'+theme);
+    const palette=await p.evaluate(`(()=>{const s=getComputedStyle(document.documentElement);return Object.fromEntries(['page','surface','raised','navigation','header','accent'].map(k=>[k,s.getPropertyValue('--'+k).trim()]));})()`);
+    assert.deepEqual(palette,hubPalette[theme],theme+' documented Hub palette');
+    assert.equal(await p.evaluate(`getComputedStyle(document.querySelector('[data-city]')).backgroundColor`),'rgb(7, 17, 31)','shell theme must not change the visualization palette');
+    await shot('primary-hover-'+theme);
+    await p.click('[data-change-repository]');
+    const controls=[];
+    for(const selector of ['form button[type=submit]','[data-source-tabs] [aria-selected=true]']){const colors=await hoverColors(selector),contrast=contrastRatio(colors);assert.ok(colors.hover&&contrast>=4.5,theme+' hovered source control: '+JSON.stringify({selector,...colors,contrast}));controls.push({selector,...colors,contrast});}
+    await shot('hub-setup-'+theme);await p.click('[data-change-repository]');
+    const header=await hoverColors('[data-open-saved]'),headerContrast=contrastRatio(header);
+    assert.ok(header.hover&&headerContrast>=4.5,theme+' header contrast: '+JSON.stringify({...header,headerContrast}));
+    hoverProof.push({theme,...colors,contrast,palette,sourceControls:controls,header:{...header,contrast:headerContrast}});
   }
   await writeFile(path.join(evidenceDirectory,'primary-hover-proof.json'),JSON.stringify(hoverProof,null,2)+'\n');
   assert.equal(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden&&document.querySelector('[data-selection-details]').hidden&&!document.querySelector('[data-analyzed-rows] button').checkVisibility()&&document.querySelector('[data-inspect-highest]').checkVisibility()&&window.__inspectionCalls.length===0`),true);

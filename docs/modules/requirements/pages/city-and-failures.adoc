@@ -391,6 +391,15 @@ project/capture controls stay reachable; full capture identity and the Color key
 are disclosures. At 390px there is no horizontal page overflow, and
 native source/saved dialogs remain in the top layer. Respect OS light/dark
 preference, visible keyboard focus and reduced motion.
+
+The shell uses the FLOW.Hub light/dark palette recorded in FLOW's shared
+documentation theme: neutral page/card/input surfaces, a blue header, and
+blue action accents. Executable token values are centralized in
+`src/edge/standalone-browser-shell.css`. This is color alignment, not an
+embedded integration or preference bridge: it adds no shared localStorage,
+host messaging, font download or theme synchronization. Visualization metrics,
+city colors/background and the source syntax theme remain independent and unchanged.
+
 Use primary drag to orbit, secondary drag to pan, wheel zoom, click/tap selection,
 and Reset view; retain the keyboard controls documented below. Navigation uses
 native controls and roving keyboard tabs. Switching views makes no provider
