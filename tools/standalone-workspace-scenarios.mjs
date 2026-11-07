@@ -1,0 +1,168 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { exerciseLocalBrowser, reopenLocalBrowser } from './standalone-local-browser-scenarios.mjs';
+import { exerciseAutomaticExclusions, reopenAutomaticExclusions } from './standalone-automatic-exclusion-scenarios.mjs';
+
+/** Bounded presentation acceptance using the packaged app and the existing synthetic provider. */
+export async function exerciseWorkspace({page,cdp,harness,origin,request,checked,evidenceDirectory,restart,expectEmpty=true}) {
+  assert.ok(evidenceDirectory, 'Workspace evidence needs an explicit output directory');
+  await mkdir(evidenceDirectory,{recursive:true});
+  const p=await page(); const proofs=[];
+  const settled=()=>p.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+  const shot=async (name,target=p)=>{await target.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');const {data}=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},target.sessionId);await writeFile(path.join(evidenceDirectory,name+'.png'),Buffer.from(data,'base64'));};
+  const geometry=()=>p.evaluate(`(()=>{const c=document.querySelector('[data-city] canvas'),r=c.getBoundingClientRect();return {rect:[r.x,r.y,r.width,r.height],buffer:[c.width,c.height],matrix:window.__render.matrices.at(-1),uploads:window.__render.uploads};})()`);
+  const fits=async()=>{assert.equal(await p.evaluate(`document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight`),true,'workspace overflows viewport');};
+  const sourceMeasurement=(target=p)=>target.evaluate(`(()=>{
+    const bounds=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height},clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop,overflowX:s.overflowX,overflowY:s.overflowY};};
+    const read=selector=>bounds(document.querySelector(selector));
+    return {viewport:{width:innerWidth,height:innerHeight},helpOpen:document.querySelector('[data-owned-contributions] details').open,
+      dialog:read('[data-unit-source]'),body:read('[data-source-body]'),code:read('[data-source-code]'),contributionRegion:read('[data-owned-contributions]'),list:read('[data-contribution-rows]'),
+      controls:[...document.querySelectorAll('[data-source-title], [data-unit-details], [data-source-paging], [data-owned-contributions]>:not([data-contribution-rows]), [data-owned-contributions] button, [data-contribution-scope]')].map(e=>({tag:e.tagName,text:e.textContent,...bounds(e)}))};
+  })()`);
+  const recordSource=async(name,target=p)=>{const measurement=await sourceMeasurement(target);await writeFile(path.join(evidenceDirectory,name+'-proof.json'),JSON.stringify(measurement,null,2)+'\n');return measurement;};
+  const pointer=async selector=>{const r=await p.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);for(const type of ['mouseMoved','mousePressed','mouseReleased'])await cdp.send('Input.dispatchMouseEvent',{type,...r,...(type==='mouseMoved'?{}:{button:'left',clickCount:1})},p.sessionId);};
+  const key=async(key,code,n)=>{await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,...(key==='Enter'?{text:'\r'}:{})},p.sessionId);await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n},p.sessionId);};
+  const run=async(mode,predicate,exclusions='')=>{process.stdout.write('Workspace: '+mode+'\n');harness.setMode(mode);await p.submit(undefined,exclusions);return p.wait(predicate);};
+  const selectFile=async name=>{await p.click('#workspace-files-tab');await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(b=>b.querySelector('bdi').textContent===${JSON.stringify(name)}).click();true`);};
+  await fits();await shot('desktop-empty');
+  await p.click('[data-open-saved]');await p.evaluate(`new Promise(resolve=>{const check=()=>{if(document.querySelector('[data-saved-message]').textContent==='No saved investigations yet.'||document.querySelectorAll('[data-saved-projects] button').length){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(document.querySelector('[data-saved-picker]'),{childList:true,subtree:true});check();})`);
+  assert.equal(await p.evaluate(`document.querySelector('[data-saved-message]').textContent==='No saved investigations yet.'`),expectEmpty,'initial saved inventory state');await p.click('[data-close-saved]');
+  await p.submit('invalid');await p.wait(s=>s.feedback==='Invalid input');assert.equal((await p.snapshot()).setup,true);
+  await run('districts',s=>s.canvases===1&&s.analyzed===5);await settled();await fits();await shot('desktop-completed');
+  const initial=await geometry();
+  assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-rows] button').checkVisibility()&&document.querySelector('[data-empty-details]').checkVisibility()`),true);
+  assert.equal(await p.evaluate(`(()=>{const c=document.querySelector('[data-city]').getBoundingClientRect(),d=document.querySelector('[data-selection-details]').getBoundingClientRect(),n=document.querySelector('[data-workspace-navigation]').getBoundingClientRect();return n.right<=c.left&&c.right<=d.left&&c.height>innerHeight*.65;})()`),true);
+  await pointer('[data-analyzed-rows] button');await p.wait(s=>s.selectedFile!==null&&s.units>0);assert.equal((await p.snapshot()).sourceOpen,false);await settled();assert.deepEqual(await geometry(),initial);await shot('desktop-file');
+  await pointer('[data-unit-rows] button');await p.wait(s=>s.sourceReady);await shot('desktop-code');
+  assert.equal(await p.evaluate(`(()=>{const d=document.querySelector('[data-unit-source]'),c=document.querySelector('[data-source-code]').getBoundingClientRect(),r=document.querySelector('[data-owned-contributions]').getBoundingClientRect();return d.scrollHeight===d.clientHeight&&c.right<=r.left;})()`),true);
+  await key('Escape','Escape',27);await p.wait(s=>!s.sourceOpen);assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-unit-rows] button')`),true);
+  await p.evaluate(`document.querySelector('#workspace-files-tab').focus();true`);await key('ArrowRight','ArrowRight',39);await p.wait(s=>s.district==='/');
+  assert.equal(await p.evaluate(`document.activeElement.id==='workspace-directories-tab'`),true);
+  await pointer('[data-district-rows="directories"] button');await p.wait(s=>s.district!=='/');await shot('desktop-directory');await settled();assert.deepEqual(await geometry(),initial);
+  await p.evaluate(`window.__directoryRow=document.querySelector('[data-district-rows="files"] button');window.__directoryRow.click();true`);await p.wait(s=>s.selectedFile!==null);
+  assert.equal(await p.evaluate(`window.__directoryRow===document.querySelector('[data-district-rows="files"] button')`),true,'file selection destroyed directory location');
+  await p.click('[data-close-details]');await p.wait(s=>s.selectedFile===null&&s.district===null);await settled();assert.deepEqual(await geometry(),initial);
+  const requests=harness.requests.length;
+  await p.click('[data-change-repository]');await shot('desktop-source-setup');await settled();assert.deepEqual(await geometry(),initial);
+  await p.click('[data-change-repository]');await settled();assert.deepEqual(await geometry(),initial);assert.equal(harness.requests.length,requests);
+  proofs.push({desktop:initial,afterSelectionAndPanels:await geometry()});
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();const mobile=await geometry();await shot('mobile-city');
+  await pointer('[data-navigation-toggle]');assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-query]').checkVisibility()||document.querySelector('[data-district-navigation]').checkVisibility()`),true);
+  await p.click('#workspace-files-tab');await pointer('[data-analyzed-rows] button');await p.wait(s=>s.units>0);await p.click('[data-navigation-toggle]');await settled();assert.deepEqual(await geometry(),mobile);await fits();await shot('mobile-file');
+  assert.equal(await p.evaluate(`(()=>{const d=document.querySelector('[data-selection-details]').getBoundingClientRect();return d.height>100&&d.height<innerHeight*.5&&document.querySelector('[data-close-details]').checkVisibility();})()`),true);
+  await pointer('[data-unit-rows] button');await p.wait(s=>s.sourceReady);await fits();await shot('mobile-code');await key('Escape','Escape',27);await p.wait(s=>!s.sourceOpen);
+  await pointer('[data-close-details]');await settled();assert.deepEqual(await geometry(),mobile);
+  await p.click('[data-navigation-toggle]');await p.click('[data-browse-directories]');await p.wait(s=>s.district==='/');await p.click('[data-navigation-toggle]');await settled();assert.deepEqual(await geometry(),mobile);await shot('mobile-directory');await p.click('[data-close-details]');
+  await p.click('[data-change-repository]');await settled();assert.deepEqual(await geometry(),mobile);await p.click('[data-change-repository]');
+  proofs.push({mobile,afterSelectionAndPanels:await geometry()});
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);
+  await run('unit-evidence',s=>s.canvases===1&&s.analyzed>0);await selectFile('dense.js');await p.wait(s=>s.units===1);await pointer('[data-unit-rows] button');await p.wait(s=>s.sourceReady&&s.contributions===32);
+  assert.equal(await p.evaluate(`(()=>{const c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]'),d=document.querySelector('[data-unit-source]');r.scrollTop=r.scrollHeight;window.__rows=[...r.querySelectorAll('button')];window.__scroll=r.scrollTop;window.__range=document.querySelector('[data-source-range]').textContent;return r.scrollTop>0&&c.clientHeight>300&&d.scrollHeight===d.clientHeight;})()`),true);
+  const networkBefore=harness.requests.length;
+  await p.evaluate(`window.__rows.at(-1).focus({preventScroll:true});true`);await key('Enter','Enter',13);await p.wait(s=>s.sourceReady&&s.contributions===32);
+  assert.equal(await p.evaluate(`(()=>{const r=document.querySelector('[data-contribution-rows]');return window.__rows.every((b,i)=>b===r.querySelectorAll('button')[i])&&r.scrollTop===window.__scroll&&document.activeElement===document.querySelector('[data-source-code]')&&document.querySelector('[data-source-range]').textContent===window.__range&&document.querySelector('[data-source-code]').scrollLeft>0;})()`),true);
+  await shot('desktop-code-dense');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:700,height:390,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
+  const landscape=[];
+  const focusedReachable=()=>p.evaluate(`(()=>{const e=document.activeElement,r=e.getBoundingClientRect(),dialog=document.querySelector('[data-unit-source]'),d=dialog.getBoundingClientRect();if(!(r.width>0&&r.height>0&&r.left>=d.left&&r.right<=d.right&&r.top>=d.top&&r.bottom<=d.bottom&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))))return false;for(let p=e.parentElement;p&&p!==dialog;p=p.parentElement){const s=getComputedStyle(p),v=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)&&(r.top<v.top||r.bottom>v.bottom))return false;if(/auto|scroll|hidden|clip/.test(s.overflowX)&&(r.left<v.left||r.right>v.right))return false;}return true;})()`);
+  const shortCamera=await geometry();
+  for(const open of [false,true]) {
+    // Toggle help with a real pointer. Then exercise native Tab scrolling, not DOM click().
+    if(await p.evaluate(`document.querySelector('[data-owned-contributions] details').open`)!==open)await pointer('[data-owned-contributions] summary');
+    assert.equal(await p.evaluate(`document.querySelector('[data-owned-contributions] details').open`),open);
+    await p.evaluate(`document.querySelector('[data-close-source]').focus();true`);
+    const visited=[];
+    for(let step=0;step<42;step++) {
+      await key('Tab','Tab',9);await settled();
+      const target=await p.evaluate(`(()=>{const e=document.activeElement;return e.matches('[data-close-source]')?'close':e.matches('[data-source-code]')?'code':e.matches('[data-owned-contributions]')?'pane':e.matches('[data-contribution-scope]')?'scope':e.matches('summary')?'help':e.closest('[data-contribution-paging]')?'paging':e.hasAttribute('data-contribution')?'row':null;})()`);
+      if(target){assert.equal(await focusedReachable(),true,'keyboard target clipped with help '+open+': '+target);visited.push(target);}
+      if(target==='close')break;
+    }
+    for(const target of ['code','pane','scope','help','paging','row','close'])assert.ok(visited.includes(target),'missing keyboard target '+target);
+    assert.equal(visited.filter(v=>v==='row').length,32,'Tab must reach all 32 native list rows');
+    // Native keyboard paging remains usable in both help states.
+    await p.evaluate(`document.querySelector('[data-contribution-paging] button:last-child').focus();true`);assert.equal(await focusedReachable(),true);
+    await key('Enter','Enter',13);await p.wait(s=>s.contributionStart===33&&s.contributions===32);
+    await p.evaluate(`document.querySelector('[data-contribution-paging] button:first-child').focus();true`);assert.equal(await focusedReachable(),true);
+    await key('Enter','Enter',13);await p.wait(s=>s.contributionStart===1&&s.contributions===32);
+    await p.evaluate(`window.__landscapeRows=[...document.querySelectorAll('[data-contribution-rows] button')];window.__landscapeRange=document.querySelector('[data-source-range]').textContent;window.__landscapeRows.at(-1).focus();true`);
+    assert.equal(await focusedReachable(),true);
+    const scroll=await p.evaluate(`({pane:document.querySelector('[data-owned-contributions]').scrollTop,list:document.querySelector('[data-contribution-rows]').scrollTop})`);
+    await key('Enter','Enter',13);await settled();
+    const selection=await p.evaluate(`(()=>{const c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]'),m=c.querySelector('mark').getBoundingClientRect(),v=c.getBoundingClientRect();return {focused:document.activeElement===c,identical:window.__landscapeRows.every((b,i)=>b===r.querySelectorAll('button')[i]),selected:window.__landscapeRows.at(-1).getAttribute('aria-current')==='true'&&window.__landscapeRows.at(-1).dataset.contribution==='31'&&c.querySelector('mark').textContent==='x&&x'&&document.querySelector('[data-source-body] [role=status]').textContent.includes('starts at column 156, ends before column 160'),range:document.querySelector('[data-source-range]').textContent===window.__landscapeRange,mark:[m.left,m.top,m.right,m.bottom],viewport:[v.left,v.top,v.right,v.bottom],visible:m.left>=v.left&&m.left<v.right&&m.top>=v.top&&m.top<v.bottom};})()`);
+    assert.ok(selection.focused&&selection.identical&&selection.selected&&selection.range&&selection.visible,'selection must retain native rows/range and focus visible exact source: '+JSON.stringify(selection));
+    assert.deepEqual(await p.evaluate(`({pane:document.querySelector('[data-owned-contributions]').scrollTop,list:document.querySelector('[data-contribution-rows]').scrollTop})`),scroll,'selection must retain both contribution scroll positions');
+    assert.equal(await focusedReachable(),true,'selected source must remain reachable');
+    assert.deepEqual(await geometry(),shortCamera,'landscape inspection moved camera/buffers');
+    assert.equal(harness.requests.length,networkBefore,'landscape inspection made provider requests');
+    const measurement=await p.evaluate(`(()=>{const d=document.querySelector('[data-unit-source]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]'),s=document.querySelector('[data-owned-contributions]');return {helpOpen:${open},dialogHeight:d.clientHeight,dialogScrollHeight:d.scrollHeight,codeHeight:c.clientHeight,listHeight:r.clientHeight,contributionHeight:s.clientHeight,contributionScrollHeight:s.scrollHeight};})()`);
+    measurement.layout=await recordSource('landscape-source-help-'+(open?'open':'closed'));
+    assert.ok(measurement.codeHeight>=140&&measurement.listHeight>=100&&measurement.dialogHeight===measurement.dialogScrollHeight,'short landscape panes must have useful height: '+JSON.stringify(measurement));
+    landscape.push({...measurement,visited,scroll,camera:await geometry()});
+    await shot('landscape-source-help-'+(open?'open':'closed')+'-list');
+    // Also capture the disclosure content at the top of the scrollable region.
+    await p.evaluate(`document.querySelector('[data-owned-contributions]').scrollTop=0;true`);
+    await shot('landscape-source-help-'+(open?'open':'closed'));
+    await p.evaluate(`document.querySelector('[data-close-source]').focus();true`);assert.equal(await focusedReachable(),true);
+    await key('Enter','Enter',13);await p.wait(s=>!s.sourceOpen);
+    assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-unit-rows] button')`),true,'Close must restore unit focus');
+    await settled();assert.deepEqual(await geometry(),shortCamera);
+    await key('Enter','Enter',13);await p.wait(s=>s.sourceReady&&s.contributions===32);
+    assert.deepEqual(await geometry(),shortCamera,'reopening source moved camera/buffers');
+  }
+  await writeFile(path.join(evidenceDirectory,'landscape-source-proof.json'),JSON.stringify(landscape,null,2)+'\n');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:390,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
+  const narrow=await recordSource('narrow-short-source');
+  assert.equal(await p.evaluate(`(()=>{const b=document.querySelector('[data-source-body]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]');return b.scrollHeight>b.clientHeight&&c.clientHeight>=140&&r.clientHeight>=100;})()`),true,'narrow short screens need bounded stacked scrolling: '+JSON.stringify(narrow));
+  await p.evaluate(`document.querySelector('[data-contribution-rows] li:last-child button').focus();true`);assert.equal(await focusedReachable(),true);
+  await key('Enter','Enter',13);await settled();
+  assert.equal(await p.evaluate(`document.querySelector('[data-source-body]').scrollTop===0&&document.activeElement===document.querySelector('[data-source-code]')`),true,'narrow stacked selection must return to source');
+  assert.equal(await focusedReachable(),true,'narrow short code must remain reachable after selection');await fits();await shot('narrow-short-source');
+  await p.evaluate(`document.querySelector('[data-owned-contributions] details').open=false;true`);
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();await shot('mobile-code-dense');
+  const portrait=await recordSource('portrait-source');
+  assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').clientHeight>=150&&document.querySelector('[data-contribution-rows]').clientHeight>=70`),true,'mobile code and contribution panes must both be useful: '+JSON.stringify(portrait));
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await p.closeSource();
+  await selectFile('long.js');await p.wait(s=>s.units===2);await p.click('[data-unit-rows] button');await p.wait(s=>s.sourceReady&&s.contributionMessage.includes('0 of 27'));
+  await p.evaluate(`const scope=document.querySelector('[data-contribution-scope]');scope.value='unit';scope.dispatchEvent(new Event('change'));true`);await p.wait(s=>s.contributions===27);
+  await p.evaluate(`window.__whole=[...document.querySelectorAll('[data-contribution-rows] button')];window.__whole[9].click();true`);await p.wait(s=>s.sourceRange.startsWith('Shown source: 1101:2'));
+  assert.equal(await p.evaluate(`window.__whole.every((b,i)=>b===document.querySelectorAll('[data-contribution-rows] button')[i])&&document.activeElement===document.querySelector('[data-source-code]')`),true);
+  await p.click('[data-source-paging] button:first-child');await p.wait(s=>s.sourceRange.startsWith('Shown source: 660:'));
+  assert.equal(await p.evaluate(`document.querySelectorAll('[data-contribution-rows] [aria-current=true]').length`),0);assert.equal(harness.requests.length,networkBefore);await p.closeSource();
+  const start=harness.events.length;harness.setMode('parser-held');await p.submit();await checked(harness.waitFor(e=>harness.events.indexOf(e)>=start&&e.kind==='parser-held'));await shot('desktop-progress');await p.click('[data-status] button');await p.wait(s=>s.status==='Cancelled'&&s.setup&&s.canvases===0);
+  await run('all-failed',s=>s.failed===2&&s.canvases===0);assert.equal((await p.snapshot()).failuresOpen,false);await shot('desktop-failure');await p.click('[data-failed] summary');assert.equal(await p.evaluate(`document.querySelector('[data-failed-rows]').checkVisibility()`),true);
+  await run('success',s=>s.status.includes('No supported')||s.status.includes('No files'), 'a.js\nb.ts\nc.tsx\nd.cs\nempty.js');assert.equal((await p.snapshot()).canvases,0);assert.equal((await p.snapshot()).setup,true);
+  await run('success',s=>s.canvases===1&&s.analyzed===5);
+  await p.click('[data-save]');await p.wait(s=>s.saved);
+  const local=await exerciseLocalBrowser({page,cdp,harness,origin,request,checked});
+  const automatic=await exerciseAutomaticExclusions({page,cdp,harness,origin,request,checked});
+  await p.click('[data-open-saved]');await p.evaluate(`new Promise(resolve=>{const check=()=>{if(document.querySelectorAll('[data-saved-projects] button').length){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(document.querySelector('[data-saved-projects]'),{childList:true,subtree:true});check();})`);await pointer('[data-saved-projects] summary');await shot('desktop-saved');
+  assert.equal(await p.evaluate(`document.querySelectorAll('[data-saved-projects] details').length>=2&&[...document.querySelectorAll('[data-saved-projects] button')].every(b=>b.querySelector('small')&&b.title)`),true);
+  await p.click('[data-close-saved]');
+  await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'light'},{name:'prefers-reduced-motion',value:'reduce'}]},p.sessionId);await fits();await shot('desktop-light');
+  await restart();await reopenLocalBrowser({page,cdp,harness,checked,origin,saved:local});await reopenAutomaticExclusions({page,cdp,harness,checked,origin,request,saved:automatic});
+  process.stdout.write('Workspace: long mobile source identity\n');
+  harness.setMode('no-provider');
+  const long=await page({localPicker:true});
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},long.sessionId);
+  await long.evaluate(`(async()=>{const root=await navigator.storage.getDirectory();window.__localRoot=await root.getDirectoryHandle('synthetic-long-project-'+ 'name'.repeat(25),{create:true});let dir=window.__localRoot;for(let i=0;i<3;i++)dir=await dir.getDirectoryHandle('long-directory-'+String(i)+'-'.repeat(60),{create:true});const file=await dir.getFileHandle('long-file-name-'+ 'x'.repeat(80)+'.ts',{create:true});const w=await file.createWritable();await w.write('export function choose(x:number) { if(x) return 1; return 0; }');await w.close();return true;})()`);
+  process.stdout.write('Workspace: long synthetic OPFS prepared\n');
+  await long.click('[data-choose-folder]');await long.evaluate(`new Promise(resolve=>{const check=()=>{if(document.querySelector('[data-folder-status]').textContent==='Folder selected.'){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(document.querySelector('[data-folder-status]'),{childList:true});check();})`);
+  process.stdout.write('Workspace: long folder selected\n');
+  await long.evaluate(`document.querySelector('form').requestSubmit();true`);
+  const longResult=await long.wait(s=>s.canvases===1||(s.setup&&s.progress===null&&s.status!==''));
+  assert.equal(longResult.canvases,1,JSON.stringify(longResult));
+  process.stdout.write('Workspace: long city published\n');
+  await long.click('[data-navigation-toggle]');await long.click('[data-analyzed-rows] button');
+  await long.wait(s=>s.units>0);await long.click('[data-navigation-toggle]');
+  process.stdout.write('Workspace: long units ready\n');
+  await long.click('[data-unit-rows] button');
+  await long.wait(s=>s.sourceReady);
+  process.stdout.write('Workspace: long source ready\n');
+  assert.equal(await long.evaluate(`document.documentElement.scrollWidth<=innerWidth&&document.querySelector('[data-unit-source]').scrollHeight===document.querySelector('[data-unit-source]').clientHeight&&document.querySelector('[data-source-code]').clientHeight>=150`),true,'long source identity must not displace the useful mobile code pane');
+  process.stdout.write('Workspace: long layout fits\n');
+  await shot('mobile-long-path',long);await long.closeSource();
+  process.stdout.write('Workspace: long source closed\n');
+  await writeFile(path.join(evidenceDirectory,'workspace-dom-proof.json'),JSON.stringify(proofs,null,2)+'\n');
+}

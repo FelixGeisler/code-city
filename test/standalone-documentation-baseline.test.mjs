@@ -44,7 +44,9 @@ test("requirements preserve per-file continuation and local inventory semantics 
   assert.match(city, /asset host owns no analysis session, unsaved source\/result dataset, or analysis capacity/u);
   assert.match(city, /shared canonical-index selection/u);
   assert.match(city, /Selection, filtering, and sorting do not invoke search reveal, move or focus the camera/u);
-  assert.match(city, /active composition mounts no contextual district row and no persistent complexity legend/u);
+  assert.match(city, /active composition mounts no contextual district row; its city toolbar reuses the authoritative complexity legend/u);
+  assert.match(city, /reserve.*right column even with no selection/iu);
+  assert.match(city, /file activation retains that directory location and its list rows/u);
   assert.match(city, /browser worker message boundary/u);
   assert.match(city, /inert `<bdi dir="auto">` nodes assigned through `textContent`/u);
   assert.match(city, /current milestone implements read-only unit source and owned contribution inspection for fresh and saved investigations/u);

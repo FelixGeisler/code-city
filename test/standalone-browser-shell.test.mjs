@@ -67,6 +67,9 @@ test("shell defaults to local-first setup with separate choose/Analyze and expli
   assert.match(html, /type="button" data-choose-folder/u);
   assert.match(html, /type="submit">Analyze/u);
   assert.match(html, /data-github-setup hidden/u);
+  assert.match(html, /<div data-workspace>[\s\S]*<form[\s\S]*<section data-presentation hidden><\/section>[\s\S]*<\/div>/u);
+  assert.match(html, /<details data-origin-identity><summary>Capture identity<\/summary>/u);
+  assert.ok(html.indexOf('data-investigation hidden') < html.indexOf('data-workspace'), 'project controls precede workspace in keyboard order');
   assert.match(html, /Save uploads code and results\. Everyone with access can read them\./u);
 });
 
@@ -159,6 +162,15 @@ test("restoring local origin never reopens the folder and groups saved local/Git
     f.state.records = [record, { ...record, kind: "github", ref: "main" }];
     f.click("[data-open-saved]"); await flush();
     assert.equal(f.node("[data-saved-projects]").children.length, 2);
+    for (const group of f.node('[data-saved-projects]').children) {
+      const button = group.children[1].children[0].children[0];
+      assert.equal(button.children.length, 2, 'ref/capture and metadata have separate hierarchy');
+      assert.match(button.children[1].textContent, /cccccccccccc · now/u);
+      assert.ok(button.title.includes(record.revision), 'full identity remains reachable');
+    }
+    const savedLink=f.node('[data-save-status]').children[1];
+    assert.equal(savedLink.textContent,'Saved investigation');
+    assert.equal(savedLink.href,'http://localhost/saved/'+record.id);
   } finally { f.close(); }
 });
 

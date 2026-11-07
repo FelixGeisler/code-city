@@ -24,7 +24,7 @@ test('file selection lists units without opening source, then renders inert read
  const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);const result=await read(query);if(query.type==='source')sourceReply.resolve();return result;});await flush();
  assert.deepEqual(calls.map(row=>row.type),['units']);assert.equal(data(host,'unitSource').open,false);
  const open=all(host,node=>Object.hasOwn(node.dataset,'unit'))[0];open.click();await sourceReply.promise;await flush();
- assert.equal(data(host,'unitSource').open,true);assert.ok(data(host,'sourceCode').textContent.includes('<img src=x onerror=alert(1)>'));
+ assert.equal(data(host,'unitSource').open,true);assert.equal(all(host,node=>node.id==='unit-source-title')[0].title,'file.js');assert.ok(data(host,'sourceCode').textContent.includes('<img src=x onerror=alert(1)>'));
  assert.equal(all(host,node=>node.tagName==='IMG'||node.tagName==='SCRIPT').length,0);assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,1);assert.equal(all(host,node=>node.attributes['aria-current']==='true').length,1);
  all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0].click();await flush();assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').length,1);
  data(host,'unitSource').dispatchEvent(new Event('close'));assert.ok(data(host,'sourceCode').children.length>0,'a queued prior close event must not clear a reopened dialog');
@@ -32,8 +32,18 @@ test('file selection lists units without opening source, then renders inert read
  assert.ok(colored.some(node=>node.dataset.syntaxColor==='5'&&node.textContent==='if'));
  assert.ok(colored.some(node=>node.dataset.syntaxColor==='6'&&node.textContent.includes('<img')));
  assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='CODE').map(node=>node.textContent).join('\n'),source);
- assert.match(data(host,'contributionRows').textContent,/If statement\+1 complexityLine 1/u);assert.match(data(host,'contributionRows').textContent,/starts at column 1, ends before column/u);assert.match(data(host,'unitDetails').textContent,/Complexity 2/u);
+ assert.match(data(host,'contributionRows').textContent,/If statement\+1Line 1/u);assert.match(data(host,'contributionRows').textContent,/starts at column 1, ends before column/u);assert.match(data(host,'unitDetails').textContent,/Complexity 2/u);
  button(host,'Close source').click();assert.equal(data(host,'unitSource').open,false);release();
+});
+test('source selection reveals the bounded body and rounds fractional scroll offsets without clipping the selected glyph',async()=>{
+ const host=new Element('section'),source='if(x) x;',calls=[];let code;
+ const doc={createElement(tag){const node=new Element(tag);if(tag==='pre'){code=node;code.getBoundingClientRect=()=>({top:0,bottom:400,left:19,right:600});let left=0;Object.defineProperty(code,'scrollLeft',{get:()=>left,set:value=>{left=Math.round(value);}});}if(tag==='mark')node.getBoundingClientRect=()=>({top:10,bottom:25,left:118.984375-code.scrollLeft,right:160-code.scrollLeft});return node;}};
+ const read=reader(source,[{kind:'top-level',startByte:0,endByte:source.length,complexity:2}],[[0,'if',0,source.length]]);
+ const release=attachUnitInspection(doc,host,'file.js',async query=>{calls.push(query);return read(query);});await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
+ assert.equal(data(host,'ownedContributions').tabIndex,0);assert.equal(data(host,'ownedContributions').attributes['aria-label'],'Owned contributions');
+ data(host,'sourceBody').scrollTop=180;data(host,'ownedContributions').scrollTop=90;code.scrollLeft=100;const before=calls.length;
+ all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0].click();
+ assert.equal(code.scrollLeft,99);assert.ok(all(code,node=>node.tagName==='MARK')[0].getBoundingClientRect().left>=19);assert.equal(data(host,'sourceBody').scrollTop,0);assert.equal(data(host,'ownedContributions').scrollTop,90);assert.equal(calls.length,before);release();
 });
 test('bounded unit pages preserve all entries and source is still explicit',async()=>{
  const source='x'.repeat(80),units=Array.from({length:35},(_,index)=>({kind:'arrow',startByte:index,endByte:80,complexity:1}));const host=new Element('section');
@@ -81,8 +91,8 @@ test('whole-unit source jumps preserve scope, order, row identity and usable ret
  assert.equal(data(host,'contributionRows').children.length,0);assert.match(data(host,'contributionStatus').textContent,/0 of 27/u);assert.match(data(host,'sourceRange').textContent,/Shown source: 660:1/u);assert.match(data(host,'unitDetails').textContent,/Complexity 28 \(whole unit\).*660:1–1371:2/u);
  const scope=data(host,'contributionScope');await action(()=>{scope.value='unit';scope.dispatchEvent(new Event('change'));});
  const original=[...data(host,'contributionRows').children],buttons=all(host,node=>Object.hasOwn(node.dataset,'contribution')),target=buttons[9],metadataReads=calls.filter(query=>query.type==='contributions').length;
- assert.equal(original.length,27);data(host,'unitSource').scrollTop=500;
- await action(()=>target.click(),'source');assert.equal(data(host,'unitSource').scrollTop,0);assert.equal(scope.value,'unit');assert.equal(data(host,'sourceCode').children[0].children[0].textContent,'1101');assert.equal(data(host,'contributionRows').children.length,27);assert.ok(original.every((row,index)=>data(host,'contributionRows').children[index]===row));assert.equal(target.attributes['aria-current'],'true');
+ assert.equal(original.length,27);data(host,'unitSource').scrollTop=500;data(host,'contributionRows').scrollTop=260;
+ await action(()=>target.click(),'source');assert.equal(data(host,'unitSource').scrollTop,0);assert.equal(data(host,'contributionRows').scrollTop,260,'source navigation preserves independent contribution scroll');assert.equal(scope.value,'unit');assert.equal(data(host,'sourceCode').children[0].children[0].textContent,'1101');assert.equal(data(host,'contributionRows').children.length,27);assert.ok(original.every((row,index)=>data(host,'contributionRows').children[index]===row));assert.equal(target.attributes['aria-current'],'true');
  await action(()=>buttons[0].click(),'source');assert.equal(data(host,'sourceCode').children[0].children[0].textContent,'975');assert.equal(calls.filter(query=>query.type==='contributions').length,metadataReads);assert.ok(original.every((row,index)=>data(host,'contributionRows').children[index]===row));
  await action(()=>button(host,'Previous source').click());assert.match(data(host,'sourceRange').textContent,/Shown source: 1101:2/u);assert.equal(scope.value,'unit');const before=calls.length;target.click();await flush();assert.equal(calls.length,before,'row detached by explicit source navigation must be inert');release();
 });
@@ -129,7 +139,7 @@ test('opening a unit preselects its first shown contribution without source navi
  const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{calls.push(query);return read(query);});data(host,'sourceCode').focus=()=>focuses++;await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
  assert.equal(focuses,0);assert.equal(calls.filter(query=>query.type==='source').length,1);assert.equal(calls.find(query=>query.type==='source').cursor,null);assert.match(data(host,'sourceRange').textContent,/Shown source: 1:1/u);
  assert.equal(all(data(host,'sourceCode'),node=>node.tagName==='MARK').map(node=>node.textContent).join(''),'if(x) x++;');assert.equal(all(host,node=>node.attributes['aria-current']==='true')[0].dataset.contribution,'0');
- assert.equal(data(host,'contributionComplexity').dataset.contributionComplexity,'1');assert.equal(data(host,'contributionComplexity').textContent,'+1 complexity');assert.match(data(host,'contributionSort').textContent,/highest first.*ties use source order/u);assert.match(all(host,node=>node.dataset.contribution==='0')[0].attributes['aria-label'],/If statement\. Adds 1 complexity\. Line 2/u);release();
+ assert.equal(data(host,'contributionComplexity').dataset.contributionComplexity,'1');assert.equal(data(host,'contributionComplexity').textContent,'+1');assert.match(data(host,'contributionSort').textContent,/highest first.*ties use source order/u);assert.match(all(host,node=>node.dataset.contribution==='0')[0].attributes['aria-label'],/If statement\. Adds 1 complexity\. Line 2/u);release();
 });
 test('selecting on the second shown-source list page preserves row objects, offset, order and counts without any read',async()=>{
  const line='if(x) x++;\n',source=line.repeat(70),bytes=new TextEncoder().encode(source),host=new Element('section'),calls=[];

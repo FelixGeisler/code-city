@@ -14,10 +14,11 @@ import { expectCleanExit, launchStandalone, readyOrigin, request, sendGracefulSi
 import { createBrowserProviderHarness, FIXTURE_REVISION, providerRequestLeaksPrivateHeaders } from "./standalone-browser-provider-harness.mjs";
 import { exerciseLocalBrowser, reopenLocalBrowser, localPickerSubstitution } from "./standalone-local-browser-scenarios.mjs";
 import { exerciseAutomaticExclusions, reopenAutomaticExclusions } from "./standalone-automatic-exclusion-scenarios.mjs";
+import { exerciseWorkspace } from "./standalone-workspace-scenarios.mjs";
 
 const WATCHDOG_MS = 600_000;
 const REPOSITORY = "https://github.com/fixture/standalone";
-const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,units:document.querySelectorAll('[data-unit-rows] li').length,unitMessage:document.querySelector('[data-units] > [role=status]')?.textContent??'',sourceOpen:document.querySelector('[data-unit-source]')?.open??false,sourceReady:document.querySelectorAll('[data-source-code] [data-source-line]').length>0,sourceRange:document.querySelector('[data-source-range]')?.textContent??'',sourceMessage:document.querySelector('[data-source-body] [role=status]')?.textContent??'',contributionMessage:document.querySelector('[data-owned-contributions] [role=status]')?.textContent??'',contributions:document.querySelectorAll('[data-contribution-rows] li').length,contributionStart:document.querySelector('[data-contribution-rows]')?.start??0,saved:document.querySelector('[data-save]')?.textContent==='Copy link',saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,findOpen:document.querySelector('[data-analyzed]')?.open??null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
+const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,units:document.querySelectorAll('[data-unit-rows] li').length,unitMessage:document.querySelector('[data-units] > [role=status]')?.textContent??'',sourceOpen:document.querySelector('[data-unit-source]')?.open??false,sourceReady:document.querySelectorAll('[data-source-code] [data-source-line]').length>0,sourceRange:document.querySelector('[data-source-range]')?.textContent??'',sourceMessage:document.querySelector('[data-source-body] [role=status]')?.textContent??'',contributionMessage:document.querySelector('[data-owned-contributions] [role=status]')?.textContent??'',contributions:document.querySelectorAll('[data-contribution-rows] li').length,contributionStart:document.querySelector('[data-contribution-rows]')?.start??0,saved:document.querySelector('[data-save]')?.textContent==='Copy link',saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,filesVisible:document.querySelector('[data-analyzed]')? !document.querySelector('[data-analyzed]').hidden : null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
 const renderObservation = `(() => {
  window.__render={matrices:[],uploads:0,integers:{},frames:[],capturePixels:false,progress:[]};
  const progressIds=new WeakMap();let nextProgress=0;
@@ -52,19 +53,19 @@ const renderObservation = `(() => {
  window.__drainProgress=count=>{if(count===null)window.__gate.active=false;while(window.__gate.queue.length){const item=window.__gate.queue.shift();item.deliver();if(count!==null&&item.data.type==='ANALYSIS_PROGRESS'&&item.data.stage==='analysis'&&item.data.completed===count)break;}};
 })()`;
 
-export async function checkStandaloneBrowser() {
+export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDirectory, artifactRoot = canonicalStandaloneRoot } = {}) {
   const failure = Promise.withResolvers();
   const checked = promise => Promise.race([promise, failure.promise]);
-  const timer = setTimeout(() => failure.reject(new Error("Standalone browser evidence exceeded its watchdog")), WATCHDOG_MS);
+  const timer = setTimeout(() => failure.reject(new Error("Standalone browser evidence exceeded its watchdog")), workspaceOnly ? 180_000 : WATCHDOG_MS);
   let temporary, processUnderTest, chrome, cdp, harness;
   let chromeLaunchAttempted = false;
   const exceptions = [];
   try {
-    const manifest = await checked(auditStandaloneArtifact(canonicalStandaloneRoot));
+    const manifest = await checked(auditStandaloneArtifact(artifactRoot));
     temporary = await checked(mkdtemp(path.join(os.tmpdir(), "code-city-browser-worker-evidence-")));
     const preload = await checked(writeSignalPreload(temporary));
     const dataDirectory = path.join(temporary, "saved-data");
-    processUnderTest = launchStandalone({ preload, serverArguments: ["--port", "0", "--data-dir", dataDirectory] });
+    processUnderTest = launchStandalone({ preload, serverArguments: ["--port", "0", "--data-dir", dataDirectory], artifactRoot });
     const origin = await checked(readyOrigin(processUnderTest));
     const discovery = await checked(discoverInstalledChrome());
     const version = await checked(readInstalledChromeVersion(discovery));
@@ -116,6 +117,18 @@ export async function checkStandaloneBrowser() {
       const p = { targetId, sessionId, evaluate, wait, submit, click, closeSource, snapshot: () => evaluate(snapshotExpression) };
       pages.push(p);return p;
     }
+    const restart = async () => {
+      sendGracefulSignal(processUnderTest, "SIGTERM"); await checked(expectCleanExit(processUnderTest));
+      processUnderTest = launchStandalone({ preload, serverArguments: ["--port", new URL(origin).port, "--data-dir", dataDirectory], artifactRoot });
+      assert.equal(await checked(readyOrigin(processUnderTest)), origin);
+    };
+    if (workspaceOnly) {
+      await exerciseWorkspace({page,cdp,harness,origin,request,checked,evidenceDirectory,restart});
+      assert.deepEqual(exceptions, []);
+      sendGracefulSignal(processUnderTest, "SIGTERM"); await expectCleanExit(processUnderTest);
+      process.stdout.write("Bounded packaged workspace browser checks passed.\n");
+      return;
+    }
     const p = await page();
     const idle = await page();
     const idleThird = await page();
@@ -163,8 +176,8 @@ export async function checkStandaloneBrowser() {
     assert.equal(ordinary.result.summary, true);
     assert.equal(ordinary.result.repository, REPOSITORY);
     assert.equal(ordinary.result.controls, true);
-    assert.equal(ordinary.result.findOpen, false);
-    assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-rows] button').checkVisibility()`), false);
+    assert.equal(ordinary.result.filesVisible, true);
+    assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-rows] button').checkVisibility()`), true);
     assert.equal(await p.evaluate(`document.querySelector('[data-city-navigation]')`), null);
     assert.equal(await p.evaluate(`document.querySelector('[data-reanalyze], [data-actions]')`), null);
     const layout = await p.evaluate(`({top:document.querySelector('[data-city]').getBoundingClientRect().top,height:document.querySelector('[data-city]').getBoundingClientRect().height,viewport:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth})`);
@@ -175,9 +188,9 @@ export async function checkStandaloneBrowser() {
       await checked(cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: virtualKeyCode, ...(key === "Enter" ? { text: "\r" } : {}) }, p.sessionId));
       await checked(cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: virtualKeyCode }, p.sessionId));
     }
-    await p.evaluate(`document.querySelector('[data-analyzed] > summary').focus();true`);
+    await p.evaluate(`document.querySelector('#workspace-files-tab').focus();true`);
     await key("Enter", "Enter", 13);
-    assert.equal((await p.snapshot()).findOpen, true, "Enter did not open file navigation");
+    assert.equal((await p.snapshot()).filesVisible, true, "Files tab did not retain file navigation");
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-rows] button').checkVisibility()`), true);
     await p.click("[data-analyzed-rows] button");
     assert.equal(await p.evaluate(`document.querySelector('[data-canonical-path]').textContent`), "a.js");
@@ -192,7 +205,7 @@ export async function checkStandaloneBrowser() {
     assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-source-line] code')].map(row=>row.textContent).join('\\n')`), 'function choose(v) { return v ? 1 : 0; }');
     assert.ok(await p.evaluate(`document.querySelector('[data-contribution-rows]').textContent.includes('Conditional expression')`));
     assert.equal(await p.evaluate(`document.querySelector('[data-contribution-rows] [aria-current="true"]').dataset.contribution`),'0');
-    assert.equal(await p.evaluate(`document.querySelector('[data-contribution-complexity]').textContent`),'+1 complexity');
+    assert.equal(await p.evaluate(`document.querySelector('[data-contribution-complexity]').textContent`),'+1');
     assert.ok(await p.evaluate(`document.querySelector('[data-contribution-location]').textContent.includes('starts at column')`));
     assert.equal(await p.evaluate(`document.querySelector('[data-unit-details]').textContent.startsWith('Function ·')`),true);
     assert.equal(await p.evaluate(`(()=>{const code=document.querySelector('[data-source-code]'),keyword=code.querySelector('[data-syntax-color="5"]'),number=code.querySelector('[data-syntax-color="2"]'),owned=code.querySelector('mark [data-syntax-color]');return keyword.textContent==='function'&&getComputedStyle(keyword).color!==getComputedStyle(number).color&&!!owned&&code.querySelector('mark').textContent==='v ? 1 : 0';})()`),true);
@@ -208,9 +221,9 @@ export async function checkStandaloneBrowser() {
     assert.equal(await p.evaluate(`document.querySelectorAll('[data-analyzed-rows] li').length`), 1);
     await p.evaluate(`(()=>{const q=document.querySelector('[data-analyzed-query]');q.value='';q.dispatchEvent(new Event('input'));const s=document.querySelector('[data-analyzed-sort]');s.value='M';s.dispatchEvent(new Event('change'));return true;})()`);
     assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`), initial, "inventory changed camera or geometry uploads");
-    await p.evaluate(`document.querySelector('[data-analyzed] > summary').focus();true`);
+    await p.evaluate(`document.querySelector('[data-browse-directories]').focus();true`);
     await key("Enter", "Enter", 13);
-    assert.equal((await p.snapshot()).findOpen, false, "Enter did not close file navigation");
+    assert.equal((await p.snapshot()).filesVisible, false, "Directories tab did not replace file navigation");
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-query]').value`), "");
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-sort]').value`), "M");
     await p.evaluate(`document.querySelector('[data-city] canvas').focus();true`);
@@ -235,7 +248,7 @@ export async function checkStandaloneBrowser() {
     assert.equal(changed.analyzed, 4, "Analyze did not apply the edited exclusions");
     assert.equal(changed.repository, REPOSITORY);
     assert.equal(changed.setup, false);
-    assert.equal(changed.findOpen, false);
+    assert.equal(changed.filesVisible, true);
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-sort]').value`), "S");
     process.stdout.write("Browser evidence: narrow workspace\n");
     await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, p.sessionId));
@@ -320,7 +333,7 @@ export async function checkStandaloneBrowser() {
     assert.equal((await p.snapshot()).selectedFile, null);
     await p.evaluate(`window.__render.capturePixels=false;true`);
     await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, p.sessionId));
-    assert.equal(await p.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{const panel=document.querySelector('[data-inspector]'),last=panel.querySelector('dl > div:last-child');resolve(document.documentElement.scrollWidth<=innerWidth&&last.getBoundingClientRect().bottom<=panel.getBoundingClientRect().bottom);})))`), true, "mobile district metrics were clipped or overflowed");
+    assert.equal(await p.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{const panel=document.querySelector('[data-selection-details]'),last=panel.querySelector('dl > div:last-child');last.scrollIntoView({block:'nearest'});const p=panel.getBoundingClientRect(),r=last.getBoundingClientRect();resolve(document.documentElement.scrollWidth<=innerWidth&&r.bottom<=p.bottom&&r.top>=p.top&&p.height<innerHeight*.5);})))`), true, "mobile district metrics were clipped or overflowed");
     await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 1365, height: 900, deviceScaleFactor: 1, mobile: false }, p.sessionId));
 
     process.stdout.write("Browser evidence: explicit Save and project/ref picker\n");
@@ -361,7 +374,7 @@ export async function checkStandaloneBrowser() {
     assert.equal(await p.evaluate(`document.querySelector('[data-failed-rows] li').checkVisibility()`), true);
     await run("all-failed", s => s.canvases === 0 && s.failed === 2 && s.controls);
     assert.equal((await p.snapshot()).failuresOpen, false);
-    assert.equal((await p.snapshot()).findOpen, null);
+    assert.equal((await p.snapshot()).filesVisible, null);
     assert.equal((await p.snapshot()).status, "No files could be analyzed.");
     for (const mode of ["integrity", "cors-failure"]) {
       await run(mode, s => s.status === "Provider/resolution failure" && s.canvases === 0);
@@ -479,13 +492,14 @@ export async function checkStandaloneBrowser() {
     await p.click('[data-contribution-paging] button:last-child'); await p.wait(s=>s.contributionStart===33&&s.contributions===32);
     const denseRange=await p.evaluate(`document.querySelector('[data-source-range]').textContent`);
     await p.evaluate(`window.__stableContributionButtons=[...document.querySelectorAll('[data-contribution-rows] button')];true`);
-    assert.equal(await p.evaluate(`(()=>{const dialog=document.querySelector('[data-unit-source]');dialog.scrollTop=dialog.scrollHeight;window.__stableContributionButtons.at(-1).focus({preventScroll:true});return dialog.scrollTop>0;})()`),true);
+    assert.equal(await p.evaluate(`(()=>{const rows=document.querySelector('[data-contribution-rows]');rows.scrollTop=rows.scrollHeight;window.__contributionScroll=rows.scrollTop;window.__stableContributionButtons.at(-1).focus({preventScroll:true});return rows.scrollTop>0&&document.querySelector('[data-unit-source]').scrollHeight===document.querySelector('[data-unit-source]').clientHeight;})()`),true);
     await key('Enter','Enter',13); await p.wait(s=>s.sourceReady&&s.contributions===32&&s.contributionStart===33);
     assert.equal(await p.evaluate(`document.querySelector('[data-source-range]').textContent`),denseRange,'in-page selection changed the source window');
     assert.equal(await p.evaluate(`window.__stableContributionButtons.every((button,index)=>button===document.querySelectorAll('[data-contribution-rows] button')[index])`),true,'selection replaced or reordered rows');
     assert.equal(await p.evaluate(`document.querySelector('[data-contribution-rows] [aria-current="true"]').dataset.contribution`),'63');
     assert.ok(await p.evaluate(`document.querySelector('[data-source-code]').scrollLeft>0`),'selected in-page span was not revealed');
-    assert.equal(await p.evaluate(`document.querySelector('[data-unit-source]').scrollTop`),0,'selection from a long list must bring the source back into view');
+    assert.equal(await p.evaluate(`document.querySelector('[data-unit-source]').scrollTop`),0,'source stays visible without outer dialog scrolling');
+    assert.equal(await p.evaluate(`document.querySelector('[data-contribution-rows]').scrollTop===window.__contributionScroll`),true,'code focus must preserve contribution scroll');
     const firstSourceRange=await p.evaluate(`document.querySelector('[data-source-range]').textContent`);
     await p.click('[data-source-paging] button:last-child');
     await p.evaluate(`new Promise(resolve=>{let observer;const check=()=>{if(document.querySelector('[data-source-range]').textContent!==${JSON.stringify(firstSourceRange)}){observer?.disconnect();resolve(true);}};observer=new MutationObserver(check);observer.observe(document.querySelector('[data-source-range]'),{subtree:true,childList:true,characterData:true});check();})`);
@@ -570,7 +584,7 @@ export async function checkStandaloneBrowser() {
     }
     process.stdout.write("Browser evidence: restart and fresh-context reopen without provider/parser\n");
     sendGracefulSignal(processUnderTest, "SIGTERM"); await checked(expectCleanExit(processUnderTest));
-    processUnderTest = launchStandalone({ preload, serverArguments: ["--port", new URL(origin).port, "--data-dir", dataDirectory] });
+    processUnderTest = launchStandalone({ preload, serverArguments: ["--port", new URL(origin).port, "--data-dir", dataDirectory], artifactRoot });
     assert.equal(await checked(readyOrigin(processUnderTest)), origin);
     const restoreStart = harness.requests.length;
     harness.setMode("no-provider");
@@ -583,6 +597,9 @@ export async function checkStandaloneBrowser() {
     await checked(cdp.send("Target.disposeBrowserContext", { browserContextId }));
     await reopenLocalBrowser({page,cdp,harness,checked,origin,saved:localSaved});
     await reopenAutomaticExclusions({page,cdp,harness,checked,origin,request,saved:automaticSaved});
+    process.stdout.write("Browser evidence: complete workspace and short-height source regression\n");
+    await exerciseWorkspace({page,cdp,harness,origin,request,checked,restart,
+      evidenceDirectory: evidenceDirectory ?? path.join(temporary, "workspace-evidence"), expectEmpty: false});
     for (const item of harness.requests) {
       const url = new URL(item.url);
       assert.ok([origin,"https://api.github.com","https://raw.githubusercontent.com"].includes(url.origin));

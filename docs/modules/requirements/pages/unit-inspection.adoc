@@ -13,7 +13,17 @@ names: `Arrow function` for JS/TS arrows, `Lambda expression` for C# lambdas,
 and `Top-level code` for the file-level unit. A zero-unit file says
 `No executable units.`; no synthetic unit or complexity is invented.
 
-Activating a unit explicitly opens a native read-only source dialog. An
+Activating a unit explicitly opens a near-full-viewport native read-only code
+workspace. Desktop code is primary on the left; contributions are bounded on
+the right. Code and contribution rows scroll independently, with paging and
+scope controls remaining reachable and no outer-dialog scroll hunt. Narrow
+screens normally stack these panes. Short landscape screens (including 700×390)
+keep code beside a scrollable contribution region; narrower short screens scroll
+the stacked body beneath the fixed Close/title row. Contributions retain a useful
+list viewport even with Reading contributions expanded. Keyboard users can focus
+the named contribution region to scroll it, or Tab through scope, help, paging,
+and every row; focus reveals each control. Sorting/tie and location help is
+optional disclosure content, not default explanatory paragraphs. An
 explicit callable shows its exact normalized syntax span; top-level shows the
 whole normalized file. The header's complexity and range describe the whole unit;
 the separate `Shown source` range describes the currently rendered page. Source
@@ -54,7 +64,7 @@ xref:source-and-metrics.adoc[existing metric rules]. Show this added amount on
 every row. Order by added complexity descending; because all records add one,
 all entries tie. Resolve ties globally before filtering and paging by source start
 ascending, source end descending, then canonical decision-kind order. Explain the
-tie in the UI. Do not count nested records as additional weight on an enclosing
+tie in the optional Reading contributions help. Do not count nested records as additional weight on an enclosing
 span or change the metric to manufacture differences.
 
 The contribution list defaults to `Shown source`: include only this unit's recorded
@@ -76,9 +86,11 @@ the latest source request; older replies cannot replace it. Retained whole-unit
 buttons remain usable during these reads. Source failure stays local and leaves
 the list available for another explicit selection.
 
-Explicit activation brings the source dialog to its top, reveals the first
-highlighted span by scrolling only the code pane as needed, and focuses the code.
-This also works when activating a location far down a long contribution list.
+Explicit activation brings the source dialog and any stacked-body scroll to their
+top, reveals the first highlighted span by scrolling the code pane as needed,
+and focuses the code.
+This also works when activating a location far down a long contribution list,
+without changing that pane's scroll position or its native row identities.
 Previous source returns through navigation history. This moves only the source
 window, not the city camera, selection or geometry. It performs no provider read,
 parsing or metric computation. Selecting a different record already intersecting the shown page rerenders it

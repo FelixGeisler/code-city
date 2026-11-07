@@ -274,7 +274,7 @@ function showSaved(record: SavedRecord): void {
   saveButton.textContent = "Copy link";
   const link = document.createElement("a");
   link.href = savedUrl(record.id);
-  link.textContent = link.href;
+  link.textContent = "Saved investigation";
   const time = document.createElement("span");
   time.textContent = `Saved ${record.savedAt} · `;
   saveStatus.replaceChildren(time, link);
@@ -400,8 +400,10 @@ requiredElement<HTMLButtonElement>("[data-open-saved]").addEventListener("click"
       const list = document.createElement("ul");
       for (const record of records) {
         const row = document.createElement("li"), button = document.createElement("button"); button.type = "button";
-        const label = document.createElement("bdi"); label.dir = "auto"; label.textContent = `${local ? "Working-tree capture" : record.ref} · ${record.revision.slice(0, 12)} · ${record.savedAt}`;
-        button.append(label); button.addEventListener("click", () => { savedPicker.close(); openSaved(record.id); }); row.append(button); list.append(row);
+        const label = document.createElement("bdi"); label.dir = "auto"; label.textContent = local ? "Working-tree capture" : record.ref;
+        const metadata = document.createElement("small"); metadata.textContent = `${record.revision.slice(0, 12)} · ${record.savedAt}`;
+        button.title = `${record.repository} · ${record.ref} · ${record.revision} · ${record.savedAt}`;
+        button.append(label, metadata); button.addEventListener("click", () => { savedPicker.close(); openSaved(record.id); }); row.append(button); list.append(row);
       }
       group.append(list); savedProjects.append(group);
     }
