@@ -161,6 +161,9 @@ class FakeElement {
   set textContent(value) { this.ownText = String(value); this.replaceChildren(); }
   get textContent() { return this.ownText + this.children.map((child) => child.textContent ?? "").join(""); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  click() { this.dispatch("click"); }
+  getClientRects() { return []; }
   addEventListener(type, listener) {
     const entries = this.listeners.get(type) ?? new Set();
     entries.add(listener);
@@ -214,13 +217,15 @@ test("browser-edge publication uses native bounded semantics, safe bdi text, pre
   const panel = byDataset(publication.nodes, "analyzedPanel");
 
   const disclosure = byDataset(publication.nodes, "analyzed");
-  assert.equal(disclosure.tagName, "DETAILS");
-  assert.equal(disclosure.open, false);
-  assert.equal(disclosure.children[0].tagName, "SUMMARY");
-  assert.equal(disclosure.children[0].textContent, "Find file (5 files)");
-  assert.equal(publication.nodes[0].dataset.cityTools, "");
-  assert.equal(publication.nodes[1], publication.cityHost);
-  assert.equal(publication.nodes.length, 2);
+  assert.equal(disclosure.tagName, "SECTION");
+  assert.equal(disclosure.hidden, false);
+  assert.equal(disclosure.children[0].tagName, "H2");
+  assert.equal(disclosure.children[0].textContent, "5 files");
+  assert.equal(publication.nodes[0].dataset.workspaceNavigation, "");
+  assert.equal(publication.nodes[1].dataset.cityWorkspace, "");
+  assert.equal(publication.nodes[2].dataset.selectionDetails, "");
+  assert.equal(publication.nodes.length, 3);
+  assert.equal(byDataset(publication.nodes, "emptyDetails").hidden, false);
   assert.equal(query.tagName, "INPUT");
   assert.equal(query.type, "search");
   assert.equal(sort.tagName, "SELECT");
@@ -351,7 +356,7 @@ function hierarchyPublication(values, inspect) {
   const documentTarget = { activeElement: null, createElement(tag) { const node = new FakeElement(tag); node.documentTarget = this; created.push(node); return node; } };
   const districts = hierarchyDescriptors(values);
   let state;
-  const sink = Object.fromEntries(["queryChanged", "sortChanged", "rowActivated", "districtActivated", "hierarchyFileActivated"]
+  const sink = Object.fromEntries(["selectionAction", "queryChanged", "sortChanged", "rowActivated", "districtActivated", "hierarchyFileActivated"]
     .map(method => [method, (...args) => state[method](...args)]));
   const publication = stageStandaloneInventoryPublication(documentTarget, values, 13, sink, districts, inspect);
   state = createInventoryState({ inspection: values, districtCount: districts.length, generation: 13, identity: publication.identity,
@@ -362,11 +367,12 @@ function hierarchyPublication(values, inspect) {
   const inspector = created.find(node => Object.hasOwn(node.dataset, "inspector"));
   const select = path => state.districtActivated(13, publication.identity,
     path === "/" ? 0 : districts.findIndex(district => !district.root && district.identity === path));
-  return { publication, state, inspector, districts, visuals, select, documentTarget };
+  const navigation = byDataset(publication.nodes, "directoryPanel");
+  return { publication, state, inspector, navigation, districts, visuals, select, documentTarget };
 }
 
-function directoryRows(inspector, kind) {
-  return descendants(inspector).find(node => node.dataset.districtRows === kind);
+function directoryRows(navigation, kind) {
+  return descendants(navigation).find(node => node.dataset.districtRows === kind);
 }
 function rowPaths(rows) { return rows.children.map(item => item.children[0].children[0].textContent); }
 function paging(inspector, kind) { return descendants(inspector).find(node => node.dataset.districtPaging === kind); }
@@ -379,27 +385,27 @@ function paging(inspector, kind) { return descendants(inspector).find(node => no
     { canonicalPath: "ab/no.ts", S: 100, U: 100, M: 100 },
     { canonicalPath: "_root/real.ts", S: 11, U: 1, M: 2 },
   ];
-  const { publication, state, inspector, select, visuals } = hierarchyPublication(values);
+  const { publication, state, inspector, navigation, select, visuals } = hierarchyPublication(values);
   const browse = byDataset(publication.nodes, "browseDirectories");
   assert.equal(browse.tagName, "BUTTON");
   assert.equal(browse.type, "button");
-  assert.equal(browse.textContent, "Browse directories");
+  assert.equal(browse.textContent, "Directories");
   browse.dispatch("click");
   assert.equal(byDataset([inspector], "districtPath").textContent, "/");
-  assert.deepEqual(rowPaths(directoryRows(inspector, "directories")), ["ab", "a", "_root"]);
-  assert.equal(directoryRows(inspector, "files").children.length, 5);
-  const rootNavigation = byDataset([inspector], "districtNavigation");
+  assert.deepEqual(rowPaths(directoryRows(navigation, "directories")), ["ab", "a", "_root"]);
+  assert.equal(directoryRows(navigation, "files").children.length, 5);
+  const rootNavigation = byDataset([navigation], "districtNavigation");
   assert.equal(rootNavigation.children[0].disabled, true);
   assert.equal(rootNavigation.children[1].disabled, true);
   select("a");
-  assert.deepEqual(rowPaths(directoryRows(inspector, "directories")), ["a/deep"]);
-  assert.deepEqual(rowPaths(directoryRows(inspector, "files")), ["a/deep/nested/<b>é.ts", "a/direct.ts"]);
+  assert.deepEqual(rowPaths(directoryRows(navigation, "directories")), ["a/deep"]);
+  assert.deepEqual(rowPaths(directoryRows(navigation, "files")), ["a/deep/nested/<b>é.ts", "a/direct.ts"]);
   const metric = name => descendants(inspector).find(node => node.attributes.has(name)).textContent;
   assert.equal(metric("data-file-count"), "2");
   assert.equal(metric("data-source-lines"), "12");
   assert.equal(metric("data-executable-units"), "6");
   assert.equal(metric("data-maximum-complexity"), "9");
-  const fileButton = directoryRows(inspector, "files").children[0].children[0];
+  const fileButton = directoryRows(navigation, "files").children[0].children[0];
   const staleFile = [...fileButton.listeners.get("click")][0];
   const query = byDataset(publication.nodes, "analyzedQuery");
   query.value = "ab/no";
@@ -411,20 +417,21 @@ function paging(inspector, kind) { return descendants(inspector).find(node => no
   assert.equal(byDataset([inspector], "canonicalPath").textContent, values[2].canonicalPath);
   const districtButton = byDataset([inspector], "selectDistrict");
   assert.equal(districtButton.textContent, "a/deep/nested");
+  assert.equal(directoryRows(navigation, "files").children[0].children[0], fileButton, "opening a file must retain directory location and rows");
   districtButton.dispatch("click");
-  const breadcrumbs = byDataset([inspector], "districtBreadcrumbs");
+  const breadcrumbs = byDataset([navigation], "districtBreadcrumbs");
   assert.equal(breadcrumbs.tagName, "OL");
   assert.deepEqual(breadcrumbs.children.map(item => item.textContent), ["/", "a", "a/deep", "a/deep/nested"]);
   assert.equal(breadcrumbs.children.at(-1).children[0].attributes.get("aria-current"), "location");
-  assert.equal(directoryRows(inspector, "directories").children.length, 0);
+  assert.equal(directoryRows(navigation, "directories").children.length, 0);
   const previousVisuals = visuals.length;
   staleFile();
   fileButton.dispatch("click");
   districtButton.dispatch("click");
   assert.equal(visuals.length, previousVisuals, "disposed callbacks changed selection");
-  byDataset([inspector], "districtNavigation").children[1].dispatch("click");
+  byDataset([navigation], "districtNavigation").children[1].dispatch("click");
   assert.equal(byDataset([inspector], "districtPath").textContent, "a/deep");
-  byDataset([inspector], "districtBreadcrumbs").children[1].children[0].dispatch("click");
+  byDataset([navigation], "districtBreadcrumbs").children[1].children[0].dispatch("click");
   assert.equal(byDataset([inspector], "districtPath").textContent, "a");
   browse.dispatch("click");
   assert.equal(byDataset([inspector], "districtPath").textContent, "/");
@@ -438,26 +445,26 @@ function paging(inspector, kind) { return descendants(inspector).find(node => no
 
 test("inspector-owned navigation restores focus without scrolling; browsing and external selection do not steal focus", () => {
   const values = [{ canonicalPath: "a/deep/file.ts", S: 1, U: 1, M: 1 }];
-  const { publication, inspector, select, state, documentTarget } = hierarchyPublication(values);
+  const { publication, inspector, navigation, select, state, documentTarget } = hierarchyPublication(values);
   const browse = byDataset(publication.nodes, "browseDirectories");
   browse.focus(); browse.dispatch("click");
   assert.equal(documentTarget.activeElement, browse);
-  const directory = directoryRows(inspector, "directories").children[0].children[0];
+  const directory = directoryRows(navigation, "directories").children[0].children[0];
   directory.focus(); directory.dispatch("click");
-  assert.equal(documentTarget.activeElement, inspector);
-  assert.deepEqual(inspector.focusOptions, { preventScroll: true });
-  const file = directoryRows(inspector, "files").children[0].children[0];
+  assert.equal(documentTarget.activeElement, navigation);
+  assert.deepEqual(navigation.focusOptions, { preventScroll: true });
+  const file = directoryRows(navigation, "files").children[0].children[0];
   file.focus(); file.dispatch("click");
-  assert.equal(documentTarget.activeElement, inspector);
+  assert.equal(documentTarget.activeElement, file, "retained directory row keeps keyboard focus");
   const containingDirectory = byDataset([inspector], "selectDistrict");
   containingDirectory.focus(); containingDirectory.dispatch("click");
   assert.equal(documentTarget.activeElement, inspector);
-  const breadcrumb = byDataset([inspector], "districtBreadcrumbs").children[1].children[0];
+  const breadcrumb = byDataset([navigation], "districtBreadcrumbs").children[1].children[0];
   breadcrumb.focus(); breadcrumb.dispatch("click");
-  assert.equal(documentTarget.activeElement, inspector);
-  const parent = byDataset([inspector], "districtNavigation").children[1];
+  assert.equal(documentTarget.activeElement, navigation);
+  const parent = byDataset([navigation], "districtNavigation").children[1];
   parent.focus(); parent.dispatch("click");
-  assert.equal(documentTarget.activeElement, inspector);
+  assert.equal(documentTarget.activeElement, navigation);
   browse.focus(); select("a");
   assert.equal(documentTarget.activeElement, browse, "external selection stole focus");
   inspector.focus(); publication.setSelection(null);
@@ -469,42 +476,42 @@ test("inspector-owned navigation restores focus without scrolling; browsing and 
 test("both hierarchy lists page by 32 with M/unsigned-UTF8 ties; file S/U sorting resets only its page and disposes detached rows", () => {
   const values = Array.from({ length: 70 }, (_, index) => ({ canonicalPath: `d${String(index).padStart(2, "0")}/file.ts`, S: index, U: 70 - index, M: index % 3 }));
   values.push(...["é", "é", "Z"].map(name => ({ canonicalPath: `${name}/file.ts`, S: 2, U: 2, M: 2 })));
-  const { publication, inspector, select, state, visuals } = hierarchyPublication(values);
+  const { publication, inspector, navigation, select, state, visuals } = hierarchyPublication(values);
   select("/");
   const expectedFiles = sort => values.map((_, index) => index).sort((a, b) => values[b][sort] - values[a][sort]
     || compareUnsignedUtf8(values[a].canonicalPath, values[b].canonicalPath)).map(index => values[index].canonicalPath);
   const allFiles = [], allDirectories = [];
-  const firstFile = directoryRows(inspector, "files").children[0].children[0];
+  const firstFile = directoryRows(navigation, "files").children[0].children[0];
   const detachedCallback = [...firstFile.listeners.get("click")][0];
   for (let page = 0; page < 3; page++) {
-    allFiles.push(...rowPaths(directoryRows(inspector, "files")));
-    allDirectories.push(...rowPaths(directoryRows(inspector, "directories")));
-    assert.equal(directoryRows(inspector, "files").children.length, page === 2 ? 9 : 32);
-    assert.equal(directoryRows(inspector, "directories").children.length, page === 2 ? 9 : 32);
-    if (page < 2) { paging(inspector, "files").children[2].dispatch("click"); paging(inspector, "directories").children[2].dispatch("click"); }
+    allFiles.push(...rowPaths(directoryRows(navigation, "files")));
+    allDirectories.push(...rowPaths(directoryRows(navigation, "directories")));
+    assert.equal(directoryRows(navigation, "files").children.length, page === 2 ? 9 : 32);
+    assert.equal(directoryRows(navigation, "directories").children.length, page === 2 ? 9 : 32);
+    if (page < 2) { paging(navigation, "files").children[2].dispatch("click"); paging(navigation, "directories").children[2].dispatch("click"); }
   }
   assert.deepEqual(allFiles, expectedFiles("M"));
   assert.deepEqual(allDirectories, expectedFiles("M").map(immediateDirectory));
-  assert.equal(paging(inspector, "files").children[2].disabled, true);
-  assert.equal(paging(inspector, "directories").children[2].disabled, true);
+  assert.equal(paging(navigation, "files").children[2].disabled, true);
+  assert.equal(paging(navigation, "directories").children[2].disabled, true);
   const before = visuals.length;
   firstFile.dispatch("click"); detachedCallback();
   assert.equal(visuals.length, before);
-  const sort = byDataset([inspector], "districtFileSort");
+  const sort = byDataset([navigation], "districtFileSort");
   assert.equal(sort.tagName, "SELECT");
   assert.equal(sort.value, "M");
   for (const metric of ["S", "U", "M"]) {
     sort.value = metric; sort.dispatch("change");
-    assert.deepEqual(rowPaths(directoryRows(inspector, "files")), expectedFiles(metric).slice(0, 32));
-    assert.equal(paging(inspector, "files").children[0].disabled, true);
-    assert.equal(paging(inspector, "directories").children[1].textContent, "65–73 of 73");
+    assert.deepEqual(rowPaths(directoryRows(navigation, "files")), expectedFiles(metric).slice(0, 32));
+    assert.equal(paging(navigation, "files").children[0].disabled, true);
+    assert.equal(paging(navigation, "directories").children[1].textContent, "65–73 of 73");
   }
   const oldSort = [...sort.listeners.get("change")][0];
   select("d00");
   const after = visuals.length;
   oldSort();
   assert.equal(visuals.length, after);
-  assert.equal(directoryRows(inspector, "files").children.length, 1);
+  assert.equal(directoryRows(navigation, "files").children.length, 1);
   publication.rollback(); state.dispose();
 });
 
@@ -518,10 +525,10 @@ test("both hierarchy lists page by 32 with M/unsigned-UTF8 ties; file S/U sortin
   assert.deepEqual(hierarchy.members(0), [0]);
   assert.deepEqual(hierarchy.members(1_999), [0]);
   const values = Array.from({ length: 4_000 }, (_, index) => ({ canonicalPath: `a/deep/${index}.ts`, S: 1, U: 1, M: index % 10 }));
-  const { publication, inspector, select, state } = hierarchyPublication(values);
+  const { publication, navigation, select, state } = hierarchyPublication(values);
   select("a");
-  assert.equal(directoryRows(inspector, "files").children.length, 32);
-  assert.equal(paging(inspector, "files").children[1].textContent, "1–32 of 4000");
+  assert.equal(directoryRows(navigation, "files").children.length, 32);
+  assert.equal(paging(navigation, "files").children[1].textContent, "1–32 of 4000");
   publication.rollback(); state.dispose();
 });
 
@@ -545,6 +552,27 @@ test("both hierarchy lists page by 32 with M/unsigned-UTF8 ties; file S/U sortin
   assert.equal(code.children.length, 0);
   assert.equal(byDataset([inspector], "districtPath").textContent, "a");
   publication.rollback(); state.dispose();
+});
+
+test("navigation tabs restore an unchanged root view, and explicit Close uses the guarded shared clear action", () => {
+  const { publication, state, documentTarget } = hierarchyPublication([{ canonicalPath: "a/file.ts", S: 1, U: 2, M: 3 }]);
+  const browse = byDataset(publication.nodes, "browseDirectories");
+  const files = descendants(publication.nodes[0]).find(node => node.id === "workspace-files-tab");
+  const panel = byDataset(publication.nodes, "directoryPanel");
+  browse.click();
+  assert.equal(state.snapshot().district, 0);
+  files.click(); assert.equal(panel.hidden, true);
+  browse.click(); assert.equal(panel.hidden, false, "same root selection must still switch the active tab");
+  const close = byDataset(publication.nodes, "closeDetails");
+  close.focus(); close.click();
+  assert.equal(state.snapshot().district, null);
+  assert.equal(byDataset(publication.nodes, "emptyDetails").hidden, false);
+  assert.equal(close.hidden, true);
+  assert.equal(documentTarget.activeElement, files);
+  const before = state.snapshot();
+  publication.rollback(); close.click(); browse.click();
+  assert.deepEqual(state.snapshot(), before);
+  state.dispose();
 });
 
 test("standalone composition never calls camera reveal or programmatic canvas focus for selection", async () => {

@@ -49,7 +49,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
   const previousUnits = button("Previous units", () => { offset = Math.max(0, offset - UNIT_PAGE_SIZE); void loadUnits(); });
   const nextUnits = button("Next units", () => { offset += UNIT_PAGE_SIZE; void loadUnits(); }); page.append(previousUnits, range, nextUnits);
   const dialog = element("dialog"); dialog.dataset.unitSource = ""; dialog.setAttribute("aria-labelledby", "unit-source-title");
-  const heading = element("h2"); heading.id = "unit-source-title"; const identity = element("bdi", path); identity.dir = "auto"; heading.append(identity);
+  const heading = element("h2"); heading.id = "unit-source-title"; heading.title = path; const identity = element("bdi", path); identity.dir = "auto"; heading.append(identity);
   const close = button("Close source", () => dialog.close()); close.dataset.closeSource = "";
   const titleBar = element("div"); titleBar.dataset.sourceTitle = ""; titleBar.append(heading, close);
   const details = element("p"); details.dataset.unitDetails = "";
@@ -71,8 +71,9 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
   const previousContributions = button("Previous contributions", () => { if (!active || sourcePending || !shown || !dialog.open || contributionPending || contributionOffset === 0) return; contributionOffset = Math.max(0, contributionOffset - CONTRIBUTION_PAGE_SIZE); void loadContributions(); });
   const nextContributions = button("Next contributions", () => { if (!active || sourcePending || !shown || !dialog.open || contributionPending || contributionOffset + CONTRIBUTION_PAGE_SIZE >= contributionTotal) return; contributionOffset += CONTRIBUTION_PAGE_SIZE; void loadContributions(); });
   contributionPaging.append(previousContributions, contributionRange, nextContributions);
-  const contributionSort = element("p", "Added complexity: highest first. Each entry adds +1; ties use source order."); contributionSort.dataset.contributionSort = "";
-  contributionSection.append(element("h3", "Owned contributions"), scopeLabel, contributionSort, contributionMessage, contributionPaging, contributions);
+  const contributionSort = element("p", "Added complexity: highest first. Each entry adds +1; ties use source order. Locations use one-based lines and scalar columns; the end is exclusive."); contributionSort.dataset.contributionSort = "";
+  const help = element("details"); help.append(element("summary", "Reading contributions"), contributionSort);
+  contributionSection.append(element("h3", "Owned contributions"), scopeLabel, help, contributionMessage, contributionPaging, contributions);
   const body = element("div"); body.dataset.sourceBody = ""; body.append(sourceSection, contributionSection); dialog.append(titleBar, details, body);
   scope.addEventListener("change", () => { if (!active || sourcePending || !shown || !dialog.open || !["shown", "unit"].includes(scope.value)) return; wholeUnit = scope.value === "unit"; contributionOffset = 0; void loadContributions(); });
   dialog.addEventListener("keydown", event => event.stopPropagation());
@@ -196,7 +197,7 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
         });
         const summary = element("span"); summary.dataset.contributionSummary = "";
         const kind = element("span", label); kind.dataset.contributionLabel = "";
-        const added = element("span", "+1 complexity"); added.dataset.contributionComplexity = "1";
+        const added = element("span", "+1"); added.dataset.contributionComplexity = "1";
         summary.append(kind, added);
         const position = element("span", location + (continued ? " · extends outside shown page" : "")); position.dataset.contributionLocation = "";
         open.append(summary, position); open.setAttribute("aria-label", `${label}. Adds 1 complexity. ${position.textContent}.`);

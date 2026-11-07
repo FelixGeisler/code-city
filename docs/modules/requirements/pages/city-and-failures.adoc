@@ -207,9 +207,10 @@ The sections from Layout through Atomic lifecycle describe the active
 browser main-context presentation behavior except where a subsection is explicitly
 marked as a retained legacy semantic-publication reference. The active
 standalone publishes the successful-file inventory, shared selection, canvas,
-Reset control, and raw file-metric inspector. It does not mount the legacy
-contextual district row or persistent legend, and inventory interaction does
-not invoke the legacy search-triggered camera reveal or canvas focus. The
+Reset control, compact authoritative complexity legend, and reserved raw
+file-metric inspector. It does not mount the legacy contextual district row,
+and inventory interaction does not invoke the legacy search-triggered camera
+reveal or canvas focus. The
 presenter retains its existing camera navigation and numeric projection
 internals. xref:recursive-districts.adoc[Recursive Districts] defines the full
 hierarchy. xref:unit-inspection.adoc[Unit Source Inspection] extends the file
@@ -343,14 +344,15 @@ blending, polygon offset, antialiasing promise or separate edge pass.
 [[browser-investigation-workspace]]
 == Investigation workspace
 
-Initially show the repository URL input and Analyze, with optional additional
-exclusions in a closed native disclosure. Analyze hides setup and shows a
-compact captured repository/revision bar, actual phase progress, and Cancel.
-Do not show Change repository while analysis is active. Once the outcome is
-available, Change repository opens or closes setup without losing the current
-city or selection; opening it focuses the repository field. Draft edits do not
-change the displayed investigation. Analyze submits the edited URL/exclusions
-through the existing pipeline. Invalid submission restores setup with its error.
+Initially show compact Source setup with direct Local folder/GitHub URL tabs,
+the active source input, Analyze, and the single editable Exclusions list in a
+closed native disclosure. Choosing a folder does not analyze it. Analyze hides
+setup and shows the captured project bar, actual phase progress, and Cancel.
+Change source is unavailable during analysis. After a result it opens setup in
+place of the left navigation, without changing city size or selection; opening
+it focuses the active source input. Closing restores navigation. Draft edits do
+not change the displayed investigation. Analyze submits the edited source and
+exclusions through the existing pipeline. Invalid submission restores setup with its error.
 There is no Discard or Reanalyze control. Closing the tab ends its browser-local
 investigation; no server analysis/session cleanup action is required.
 
@@ -365,26 +367,36 @@ they were parsed. Preserve measured phase counts in the label. Only successful
 view publication fills the bar. Failure/cancellation ends it without fabricated
 completion. This is work progress, not equal-duration work or an ETA.
 
-The city is the primary result view. File navigation and failed-file rows are
-native disclosures, closed initially. There is no expandable navigation-help
-panel. Use primary drag to orbit, secondary drag to pan, wheel zoom, click/tap
-selection, and Reset view; retain the keyboard controls documented below. They use normal
-keyboard activation and focus indicators. Expanding or closing these controls
-makes no provider request, clears no selection, and does not reset the camera.
+The completed desktop is a viewport-height workspace: independently scrollable
+left Files/Directories navigation, primary center city, and a reserved right
+metrics/unit inspector. Reserve the right column even with no selection. File,
+directory, clear-selection and source-setup toggles never resize the canvas or
+change its camera, bitmap, geometry or GPU buffers. Close details uses the same
+guarded clear-selection action as the canvas. The app bar and project/capture
+controls stay reachable; full capture identity is available in a disclosure.
+
+On narrow screens navigation is a reachable toggle panel and selected details
+are a scrollable bottom sheet with explicit Close. Both overlay reserved city
+space without resizing it. At 390px there is no horizontal page overflow, and
+native source/saved dialogs remain in the top layer. Respect OS light/dark
+preference, visible keyboard focus and reduced motion.
+Use primary drag to orbit, secondary drag to pan, wheel zoom, click/tap selection,
+and Reset view; retain the keyboard controls documented below. Navigation uses
+native controls and roving keyboard tabs. Switching views makes no provider
+request and does not reset the camera. Failed-file rows remain a native
+disclosure, closed initially.
 An all-files-failed result shows `No files could be analyzed.` and its expandable
 failed-file count, but no city or successful-file navigation.
 
 == Successful-file inventory and shared selection
 
-A committed standalone city has one normal-flow native disclosure labelled
-`Find file (N files)` (singular for one file). It is closed initially rather
-than competing with the city. When expanded, it contains every successful
-inspection fact as one semantic list item with a native `button type="button"`. Each button shows the exact
+A committed standalone city initially shows the Files navigation tab and exact
+file count. It contains every successful inspection fact as one semantic list
+item with a native `button type="button"`. Each button shows the exact
 canonical path and raw `S: <value>`, `U: <value>`, and `M: <value>`, and exposes
 `aria-pressed="true"` only for the shared selected canonical index.
 
-The section has a native `input type="search"` labelled `Filter by canonical
-path` and a native `select` labelled `Sort by` with `Source lines (S)`,
+The section has a native `input type="search"` labelled `Find file` and a native `select` labelled `Sort by` with `Source lines (S)`,
 `Executable units (U)`, and `Maximum complexity (M)`. A newly committed result
 starts with the exact empty query and S sort. The query is preserved exactly
 and matched against canonical paths with case-sensitive ECMAScript `includes`.
@@ -398,10 +410,11 @@ selected raw metric descending, then canonical path ascending with unsigned
 UTF-8 comparison. Filtering and sorting never reorder or rewrite geometry,
 inspection, instance buffers, picking identity, or canvas keyboard traversal.
 The complete list has no cap below the existing 4,000-module envelope and uses
-`max-block-size: min(13.75rem, 40vh)` with native vertical overflow. It remains
-in normal flow beside Reset view and above the city; opening it cannot overlay
-the city or inspector. Failed files are a separate disclosure below the city,
-labelled `N files not analyzed` (singular for one file).
+native vertical overflow in the independently scrolling left navigation.
+Directories switches to the existing hierarchy and explicitly selects root;
+file activation retains that directory location and its list rows. Failed
+files are a separate disclosure above the workspace, labelled
+`N files not analyzed` (singular for one file).
 
 Canonical paths cross provider acquisition and the browser worker message
 boundary as successful inspection facts or sanitized
@@ -817,22 +830,16 @@ button. Path values use inert `<bdi dir="auto">` text. Show only `Source lines`,
 `Executable units`, and `Maximum unit complexity`, using exact raw values,
 including values above visual caps. District selection uses the summary above.
 There is no `Exact metrics` heading, displayed dimensions, scale/cap formula,
-RGBA/hex code, or active complete palette legend. Visual transforms remain
+RGBA/hex code. Visual transforms remain
 specified in the geometry sections, not repeated in the investigation UI.
 
-The retained legacy semantic publication has one persistent, noninteractive
-legend labelled exactly “Complexity: low → high”. It presents six swatches in
+The city toolbar reuses the semantic publication's noninteractive legend,
+labelled exactly “Complexity: low → high”, from `METRIC_PALETTE_LEGEND`. It presents six swatches in
 increasing `M` order with visible labels `M = 0`, `M = 1`, `M = 2–3`, `M =
 4–7`, `M = 8–15`, and `M = 16+`; these colours communicate complexity, not
-health, correctness, or safety. In that legacy publication the legend commits
-atomically after the canvas and inspector, is absent before commit and after any
-rollback, invalidation, failure, context loss, replacement, or disposal, and
-never intercepts pointer input. It sits below the fixed-height city/canvas and
-reserves external space so it cannot overlap the inspector or Reset control.
-Its swatches use one row above `42rem`, three columns by two rows from `30rem`
-through `42rem`, and two columns by three rows below `30rem`; the label spans
-the grid. These details are historical reference and are not a claim that the
-active standalone mounts the legend.
+health, correctness, or safety. It commits with the successful presentation and
+is absent after rollback, failure or disposal. The toolbar is outside the
+WebGL host; legend wrapping cannot change on selection or panel toggles.
 
 Visual quality is an M2 release requirement: the city remains the visual focus;
 controls look intentional and interaction is predictable; surface focus
@@ -1043,15 +1050,14 @@ session, unsaved source/result dataset, or analysis capacity. Only explicit
 Save uploads complete snapshots to the separate file store.
 
 The browser exposes every successful fact through the browser-local
-searchable and three-way sortable inventory behind Find file, with one shared
-canonical-index selection across rows, buildings, and the raw file-metric inspector. The active
-composition mounts no contextual district row and no persistent complexity
-legend. Selection, filtering, and sorting do not invoke search reveal, move or
+searchable and three-way sortable Files navigation, with one shared
+canonical-index selection across rows, buildings, and the raw file-metric inspector.
+The active composition mounts no contextual district row; its city toolbar
+reuses the authoritative complexity legend. Selection, filtering, and sorting do not invoke search reveal, move or
 focus the camera, or alter the presenter's independent orbit, pan, zoom, resize,
 and Reset navigation. This implements only the file-level portions of
-CC-CORE-INV-01 and CC-CORE-INV-03. The retained legacy semantic row, legend,
-and search-reveal capabilities are historical implementation references, not
-current standalone behavior.
+CC-CORE-INV-01 and CC-CORE-INV-03. The retained legacy semantic row and
+search-reveal capabilities are historical references, not current standalone behavior.
 
 The current milestone implements read-only unit source and owned contribution
 inspection for fresh and saved investigations. It has no source editing,

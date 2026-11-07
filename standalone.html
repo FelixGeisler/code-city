@@ -9,7 +9,19 @@
 <body>
   <main>
     <header data-app-bar><h1>Code City</h1><button type="button" data-open-saved>Open saved</button></header>
+    <header data-investigation hidden>
+      <div data-investigation-identity>
+        <bdi data-repository dir="auto"></bdi>
+        <details data-origin-identity><summary>Capture identity</summary><span data-origin-label>Commit</span><output data-commit aria-live="polite"></output></details>
+      </div>
+      <div data-investigation-controls>
+        <button type="button" data-change-repository aria-controls="repository-setup" aria-expanded="false">Change source</button>
+        <button type="button" data-save aria-describedby="shared-save-info" title="Save uploads analyzed source and results. Everyone reaching this instance can read them." hidden>Save</button>
+      </div>
+    </header>
+    <div data-workspace>
     <form id="repository-setup" novalidate>
+      <h2>Source setup</h2>
       <div role="tablist" aria-label="Source" data-source-tabs>
         <button id="source-local" type="button" role="tab" aria-selected="true" aria-controls="local-setup" data-source-local>Local folder</button>
         <button id="source-github" type="button" role="tab" aria-selected="false" aria-controls="github-setup" tabindex="-1" data-source-github>GitHub URL</button>
@@ -32,16 +44,8 @@
       </details>
       <p id="shared-save-info" data-shared-save>Save uploads code and results. Everyone with access can read them.</p>
     </form>
-    <header data-investigation hidden>
-      <div data-investigation-identity>
-        <bdi data-repository dir="auto"></bdi>
-        <div data-origin-identity><span data-origin-label>Commit</span><output data-commit aria-live="polite"></output></div>
-      </div>
-      <div data-investigation-controls>
-        <button type="button" data-change-repository aria-controls="repository-setup" aria-expanded="false">Change source</button>
-        <button type="button" data-save aria-describedby="shared-save-info" title="Save uploads analyzed source and results. Everyone reaching this instance can read them." hidden>Save</button>
-      </div>
-    </header>
+    <section data-presentation hidden></section>
+    </div>
     <p data-save-status role="status"></p>
     <dialog data-saved-picker aria-labelledby="saved-picker-title">
       <header><h2 id="saved-picker-title">Saved investigations</h2><button type="button" data-close-saved>Close</button></header>
@@ -50,7 +54,6 @@
     </dialog>
     <p data-feedback role="alert" aria-live="polite"></p>
     <section data-status aria-live="polite"></section>
-    <section data-presentation hidden></section>
     <details data-failed hidden>
       <summary data-failed-summary></summary>
       <ul data-failed-rows></ul>

@@ -9,7 +9,7 @@ import {
   type PresenterVisualResult,
   type SelectionAction,
 } from "./city-presenter";
-import { replaceDistrictInspectorContent, replaceMetricInspectorContent } from "./semantic-publication";
+import { complexityLegend, replaceDistrictInspectorContent, replaceMetricInspectorContent } from "./semantic-publication";
 
 export type InventorySort = "S" | "U" | "M";
 export type InventoryProjection = Readonly<{
@@ -199,6 +199,7 @@ export function createInventoryState(options: Readonly<{
 }
 
 type InventoryPublicationSink = Readonly<{
+  selectionAction(generation: number, identity: InventoryPublicationIdentity, action: SelectionAction): void;
   hierarchyFileActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
   districtActivated(generation: number, identity: InventoryPublicationIdentity, index: number): void;
   queryChanged(
@@ -260,15 +261,17 @@ export function stageStandaloneInventoryPublication(
 ): StandaloneInventoryPublication {
   const identity: InventoryPublicationIdentity = Object.freeze({});
   const hierarchy = createDistrictInspectionIndex(inspection, districts);
-  const analyzed = documentTarget.createElement("details");
+  const analyzed = documentTarget.createElement("section");
   analyzed.dataset.analyzed = "";
-  analyzed.open = false;
-  const heading = documentTarget.createElement("summary");
-  heading.textContent = `Find file (${inspection.length} ${inspection.length === 1 ? "file" : "files"})`;
+  analyzed.id = "workspace-files";
+  analyzed.setAttribute("role", "tabpanel");
+  analyzed.setAttribute("aria-labelledby", "workspace-files-tab");
+  const heading = documentTarget.createElement("h2");
+  heading.textContent = `${inspection.length} ${inspection.length === 1 ? "file" : "files"}`;
   const controls = documentTarget.createElement("div");
   controls.dataset.analyzedControls = "";
   const queryLabel = documentTarget.createElement("label");
-  queryLabel.textContent = "Filter by canonical path";
+  queryLabel.textContent = "Find file";
   const queryInput = documentTarget.createElement("input");
   queryInput.type = "search";
   queryInput.autocomplete = "off";
@@ -311,16 +314,83 @@ export function stageStandaloneInventoryPublication(
   resetControl.dataset.cityReset = "";
   resetControl.type = "button";
   resetControl.textContent = "Reset view";
+  resetControl.title = "Drag to orbit · secondary drag to pan · wheel to zoom";
   const tools = documentTarget.createElement("div");
   tools.dataset.cityTools = "";
+  const navigation = documentTarget.createElement("aside");
+  navigation.dataset.workspaceNavigation = "";
+  const tabs = documentTarget.createElement("div");
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "Navigation");
+  const filesTab = documentTarget.createElement("button");
+  filesTab.type = "button";
+  filesTab.textContent = "Files";
+  filesTab.id = "workspace-files-tab";
+  filesTab.setAttribute("role", "tab");
+  filesTab.setAttribute("aria-controls", "workspace-files");
+  const directoryPanel = documentTarget.createElement("section");
+  directoryPanel.dataset.directoryPanel = "";
+  directoryPanel.tabIndex = -1;
+  directoryPanel.id = "workspace-directories";
+  directoryPanel.setAttribute("role", "tabpanel");
+  directoryPanel.setAttribute("aria-labelledby", "workspace-directories-tab");
+  directoryPanel.hidden = true;
   const browseDirectories = documentTarget.createElement("button");
   browseDirectories.type = "button";
   browseDirectories.dataset.browseDirectories = "";
-  browseDirectories.textContent = "Browse directories";
-  const browseListener = (): void => { if (!rolledBack) sink.districtActivated(generation, identity, hierarchy.root); };
+  browseDirectories.textContent = "Directories";
+  browseDirectories.id = "workspace-directories-tab";
+  browseDirectories.setAttribute("role", "tab");
+  browseDirectories.setAttribute("aria-controls", "workspace-directories");
+  const showNavigation = (directories: boolean): void => {
+    analyzed.hidden = directories;
+    directoryPanel.hidden = !directories;
+    for (const [tab, selected] of [[filesTab, !directories], [browseDirectories, directories]] as const) {
+      tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1;
+    }
+  };
+  showNavigation(false);
+  const browseListener = (): void => {
+    if (rolledBack) return;
+    showNavigation(true);
+    sink.districtActivated(generation, identity, hierarchy.root);
+  };
+  const filesListener = (): void => { if (!rolledBack) showNavigation(false); };
+  const tabKey = (event: KeyboardEvent): void => {
+    if (rolledBack || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const target = event.key === "Home" ? filesTab : event.key === "End" ? browseDirectories : analyzed.hidden ? filesTab : browseDirectories;
+    target.click(); target.focus();
+  };
   browseDirectories.addEventListener("click", browseListener);
-  tools.append(analyzed, resetControl, browseDirectories);
+  filesTab.addEventListener("click", filesListener);
+  filesTab.addEventListener("keydown", tabKey);
+  browseDirectories.addEventListener("keydown", tabKey);
+  tabs.append(filesTab, browseDirectories);
+  navigation.append(tabs, analyzed, directoryPanel);
+  const mobileToggle = documentTarget.createElement("button");
+  mobileToggle.type = "button"; mobileToggle.textContent = "Files / directories"; mobileToggle.dataset.navigationToggle = "";
+  mobileToggle.setAttribute("aria-expanded", "false");
+  const toggleNavigation = (): void => {
+    if (rolledBack) return;
+    const open = mobileToggle.getAttribute("aria-expanded") !== "true";
+    mobileToggle.setAttribute("aria-expanded", String(open)); navigation.dataset.open = String(open);
+  };
+  mobileToggle.addEventListener("click", toggleNavigation);
+  tools.append(mobileToggle, resetControl, complexityLegend(documentTarget));
+  const center = documentTarget.createElement("section"); center.dataset.cityWorkspace = ""; center.append(tools, cityHost);
   const inspector = createInspector(documentTarget);
+  const detailsPanel = documentTarget.createElement("aside"); detailsPanel.dataset.selectionDetails = "";
+  const closeDetails = documentTarget.createElement("button"); closeDetails.type = "button"; closeDetails.textContent = "Close details"; closeDetails.dataset.closeDetails = ""; closeDetails.hidden = true;
+  const clearListener = (): void => {
+    if (rolledBack) return;
+    const hadFocus = documentTarget.activeElement === closeDetails;
+    sink.selectionAction(generation, identity, "clear");
+    if (hadFocus) (mobileToggle.getClientRects().length ? mobileToggle : filesTab).focus({ preventScroll: true });
+  };
+  closeDetails.addEventListener("click", clearListener);
+  const emptyDetails = documentTarget.createElement("p"); emptyDetails.dataset.emptyDetails = ""; emptyDetails.textContent = "Select a file or directory to inspect.";
+  detailsPanel.append(closeDetails, emptyDetails, inspector);
 
   let query = "";
   let sort: InventorySort = "S";
@@ -328,6 +398,10 @@ export function stageStandaloneInventoryPublication(
   let rowListeners: RowListener[] = [];
   let rolledBack = false;
   let releaseInspector = (): void => {};
+  let releaseDirectory = (): void => {};
+  const detailsVisible = (visible: boolean): void => {
+    emptyDetails.hidden = visible; closeDetails.hidden = !visible; detailsPanel.dataset.selected = String(visible);
+  };
 
   const clearRowListeners = (): void => {
     for (const entry of rowListeners) entry.button.removeEventListener("click", entry.listener);
@@ -349,6 +423,7 @@ export function stageStandaloneInventoryPublication(
     if (selection === null) {
       inspector.replaceChildren();
       inspector.hidden = true;
+      detailsVisible(false);
       if (hadFocus) browseDirectories.focus({ preventScroll: true });
       return;
     }
@@ -361,6 +436,7 @@ export function stageStandaloneInventoryPublication(
     const releaseUnits = inspect ? attachUnitInspection(documentTarget, inspector, fact.canonicalPath, inspect) : () => {};
     releaseInspector = () => { releaseMetrics(); releaseUnits(); };
     inspector.hidden = false;
+    detailsVisible(true);
     if (hadFocus) inspector.focus({ preventScroll: true });
   };
 
@@ -385,6 +461,7 @@ export function stageStandaloneInventoryPublication(
       path.textContent = fact.canonicalPath;
       const metrics = documentTarget.createElement("span");
       metrics.dataset.analyzedMetrics = "";
+      metrics.title = `Source lines: ${fact.S} · Executable units: ${fact.U} · Maximum unit complexity: ${fact.M}`;
       for (const text of [`S: ${fact.S}`, `U: ${fact.U}`, `M: ${fact.M}`]) {
         const value = documentTarget.createElement("span");
         value.textContent = text;
@@ -415,7 +492,7 @@ export function stageStandaloneInventoryPublication(
   setProjection(initial, null);
 
   return Object.freeze({
-    nodes: Object.freeze([tools, cityHost]),
+    nodes: Object.freeze([navigation, center, detailsPanel]),
     cityHost,
     resetControl,
     identity,
@@ -425,21 +502,33 @@ export function stageStandaloneInventoryPublication(
       const descriptor = districts[index];
       if (!descriptor) throw new Error("Invalid selected district");
       const hadFocus = hasInspectorFocus();
+      const hadNavigationFocus = !!documentTarget.activeElement && directoryPanel.contains(documentTarget.activeElement);
       setSelection(null, false);
       const district = descriptor.root ? "/" : descriptor.identity;
       const members = hierarchy.members(index);
       replaceDistrictInspectorContent(documentTarget, inspector, district, members.map(file => inspection[file]!));
-      releaseInspector = attachDistrictInspection(documentTarget, inspector, inspection, districts, hierarchy, index, members,
-        next => sink.districtActivated(generation, identity, next),
-        file => sink.hierarchyFileActivated(generation, identity, file));
+      releaseDirectory();
+      directoryPanel.replaceChildren();
+      releaseDirectory = attachDistrictInspection(documentTarget, directoryPanel, inspection, districts, hierarchy, index, members,
+        next => { if (!rolledBack) sink.districtActivated(generation, identity, next); },
+        file => { if (!rolledBack) sink.hierarchyFileActivated(generation, identity, file); });
+      showNavigation(true);
       inspector.hidden = false;
-      if (hadFocus) inspector.focus({ preventScroll: true });
+      detailsVisible(true);
+      if (hadNavigationFocus) directoryPanel.focus({ preventScroll: true });
+      else if (hadFocus) inspector.focus({ preventScroll: true });
     },
-    commitCanvas(canvas) { cityHost.replaceChildren(canvas as unknown as Node, inspector); },
+    commitCanvas(canvas) { cityHost.replaceChildren(canvas as unknown as Node); },
     rollback() {
       if (rolledBack) return;
       rolledBack = true;
       try { browseDirectories.removeEventListener("click", browseListener); } catch {}
+      filesTab.removeEventListener("click", filesListener);
+      filesTab.removeEventListener("keydown", tabKey);
+      browseDirectories.removeEventListener("keydown", tabKey);
+      mobileToggle.removeEventListener("click", toggleNavigation);
+      closeDetails.removeEventListener("click", clearListener);
+      releaseDirectory();
       try { queryInput.removeEventListener("input", queryListener); } catch {}
       try { sortSelect.removeEventListener("change", sortListener); } catch {}
       try { clearRowListeners(); } catch {}
@@ -522,6 +611,7 @@ export function createStandalonePresentationCoordinator(options: Readonly<{
     let state: InventoryState | undefined;
     try {
       const sink: InventoryPublicationSink = Object.freeze({
+        selectionAction: (...args) => state?.selectionAction(...args),
         hierarchyFileActivated: (...args) => state?.hierarchyFileActivated(...args),
         districtActivated: (...args) => state?.districtActivated(...args),
         queryChanged: (...args) => state?.queryChanged(...args),

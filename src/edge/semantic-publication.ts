@@ -132,7 +132,7 @@ export function replaceDistrictInspectorContent(
   inspector.replaceChildren(title, kind, metrics);
 }
 
-function complexityLegend(documentTarget: SemanticDocument): HTMLElement {
+export function complexityLegend(documentTarget: SemanticDocument): HTMLElement {
   const legend = documentTarget.createElement("section");
   legend.dataset.paletteLegend = "";
   legend.setAttribute("aria-label", "Complexity: low → high");
