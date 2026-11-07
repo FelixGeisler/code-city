@@ -367,21 +367,42 @@ async function selfTest() {
   } finally { await remove(scratch); }
 }
 
-// Preserve the failed helper's ownership snapshot before propagating its original
-// nonzero exit. A completed InvokePattern/send is still not picker acceptance.
+// A failed diagnostic write is secondary to the native failure. Keep at most one
+// bounded message per failure path in memory and report it without claiming a save.
+async function saveWindowsFailure(result, save, phase) {
+  try { await save(); }
+  catch (error) {
+    const failure = { message: String(error?.message ?? error).slice(0, 2048) };
+    (result.windowsEvidenceSaveErrors ??= {})[phase] = failure;
+    console.error('Windows failure evidence save failed (snapshot not persisted): ' + JSON.stringify({ phase, ...failure }));
+  }
+}
+
+// Attempt to save the failed helper's ownership snapshot before propagating its
+// original nonzero exit. A completed InvokePattern/send is not picker acceptance.
 export async function recordWindowsHelper(invoke, mode, result, save) {
   let output;
   try { output = await invoke(); }
   catch (error) {
     if (error.stdout) try { result.actions.push(JSON.parse(error.stdout.trim())); } catch {} // only owned-helper JSON
     result.windowsHelperFailure = { mode, stderr: error.stderr?.slice(-16384), message: error.message };
-    await save();
+    await saveWindowsFailure(result, save, 'helper');
     throw error;
   }
   const data = JSON.parse(output.stdout.trim());
   result.actions.push(data);
   await save();
   return data;
+}
+
+// Failure-only Windows picker inspection: no additional input or resolution retry.
+export async function recordWindowsPickerFailure(error, readState, inspect, result, save) {
+  try {
+    result.windowsPickerFailure = await readState();
+    await inspect();
+  } catch (diagnosticError) { result.windowsInspectionError = diagnosticError.message; }
+  await saveWindowsFailure(result, save, 'pickerResolution');
+  throw error;
 }
 
 async function main() {
@@ -464,11 +485,9 @@ async function main() {
       await until(async()=>(await evaluate('pickerState'))!=='pending','Native picker resolution');
     } catch(error) {
       if(process.platform==='win32') {
-        try {
-          result.windowsPickerFailure=await evaluate('({state:pickerState,error:window.pickerError,focused:document.hasFocus()})');
-          await dialog('inspect-browser',target);
-        } catch(diagnosticError){result.windowsInspectionError=diagnosticError.message;}
-        await save();
+        await recordWindowsPickerFailure(error,
+          ()=>evaluate('({state:pickerState,error:window.pickerError,focused:document.hasFocus()})'),
+          ()=>dialog('inspect-browser',target),result,save);
       }
       if(process.platform==='linux') {
         result.linuxPickerPhase='picker-resolution-failed';

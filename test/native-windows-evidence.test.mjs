@@ -4,7 +4,7 @@ import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { recordWindowsHelper } from '../tools/check-local-folder-native.mjs';
+import { recordWindowsHelper, recordWindowsPickerFailure } from '../tools/check-local-folder-native.mjs';
 
 const execFile = promisify(execFileCallback);
 const snapshot = { mode: 'select', phase: 'action-select', error: 'Expected exactly one owned dialog, got 0',
@@ -20,6 +20,47 @@ test('failed Windows helper snapshot is saved before its original nonzero exit p
   assert.equal(saved.windowsHelperFailure.mode, 'select');
   assert.equal(saved.windowsHelperFailure.stderr.length, 16384);
   assert.equal(result.status, undefined, 'evidence cannot turn failure into qualification');
+});
+
+test('rejecting helper evidence save preserves the original error and separately reports bounded unpersisted diagnostics', async t => {
+  const error = Object.assign(Error('helper failed'), { code: 1, stdout: JSON.stringify(snapshot) });
+  const saveError = Error('EACCES: ' + 'x'.repeat(20000));
+  const result = { actions: [], status: 'failed' };
+  const reports = [];
+  t.mock.method(console, 'error', message => reports.push(message));
+  let invokes = 0, saves = 0;
+  await assert.rejects(recordWindowsHelper(async () => { invokes++; throw error; }, 'select', result,
+    async () => { saves++; throw saveError; }), e => e === error);
+  assert.equal(invokes, 1);
+  assert.equal(saves, 1, 'no diagnostic save retry');
+  assert.deepEqual(result.actions, [snapshot]);
+  assert.equal(result.windowsHelperFailure.message, error.message);
+  assert.deepEqual(result.windowsEvidenceSaveErrors, { helper: { message: saveError.message.slice(0, 2048) } });
+  assert.equal(reports.length, 1);
+  assert.match(reports[0], /snapshot not persisted/);
+  assert(reports[0].length < 4096);
+  assert.equal(result.status, 'failed');
+});
+
+test('rejecting picker-timeout evidence save preserves the original error without repeating inspection or action', async t => {
+  const error = Error('Native picker resolution unavailable within 10s');
+  const saveError = Error('ENOSPC: ' + 'x'.repeat(20000));
+  const result = { actions: [], status: 'failed' };
+  const state = { state: 'pending', error: null, focused: true };
+  const calls = [], reports = [];
+  t.mock.method(console, 'error', message => reports.push(message));
+  await assert.rejects(recordWindowsPickerFailure(error,
+    async () => { calls.push('state'); return state; },
+    async () => { calls.push('inspect-browser'); }, result,
+    async () => { calls.push('save'); throw saveError; }), e => e === error);
+  assert.deepEqual(calls, ['state', 'inspect-browser', 'save']);
+  assert.deepEqual(result.windowsPickerFailure, state);
+  assert.deepEqual(result.actions, []);
+  assert.deepEqual(result.windowsEvidenceSaveErrors, { pickerResolution: { message: saveError.message.slice(0, 2048) } });
+  assert.equal(reports.length, 1);
+  assert.match(reports[0], /snapshot not persisted/);
+  assert(reports[0].length < 4096);
+  assert.equal(result.status, 'failed');
 });
 
 test('missing/malformed helper stdout cannot conceal its original failure or invent an action', async () => {
@@ -43,6 +84,66 @@ test('successful helper output is preserved once, without asserting picker resol
   assert.deepEqual(result.actions, [data]);
   assert.equal(saves, 1);
   assert.equal(result.status, undefined);
+});
+
+test('picker timeout remains primary when its helper inspection and both diagnostic saves fail', async t => {
+  const error = Error('Native picker resolution unavailable within 10s');
+  const inspectError = Object.assign(Error('inspection failed'), { code: 1, stdout: JSON.stringify(snapshot) });
+  const result = { actions: [], status: 'failed' };
+  const reports = [];
+  t.mock.method(console, 'error', message => reports.push(message));
+  let invokes = 0, saves = 0;
+  const save = async () => { saves++; throw Error('EACCES'); };
+  await assert.rejects(recordWindowsPickerFailure(error, async () => ({ state: 'pending' }),
+    () => recordWindowsHelper(async () => { invokes++; throw inspectError; }, 'inspect-browser', result, save),
+    result, save), e => e === error);
+  assert.equal(invokes, 1);
+  assert.equal(saves, 2, 'one save per distinct failure path, not a retry');
+  assert.equal(result.windowsInspectionError, inspectError.message);
+  assert.deepEqual(result.windowsEvidenceSaveErrors, {
+    helper: { message: 'EACCES' }, pickerResolution: { message: 'EACCES' },
+  });
+  assert.equal(reports.length, 2);
+  assert.equal(result.status, 'failed');
+});
+
+test('picker inspection failure is saved without replacing the timeout when persistence works', async () => {
+  const error = Error('Native picker resolution unavailable within 10s');
+  const result = { actions: [] };
+  let saved;
+  await assert.rejects(recordWindowsPickerFailure(error, async () => ({ state: 'pending' }),
+    async () => { throw Error('inspection unavailable'); }, result,
+    async () => { saved = structuredClone(result); }), e => e === error);
+  assert.equal(saved.windowsInspectionError, 'inspection unavailable');
+  assert.deepEqual(saved.windowsPickerFailure, { state: 'pending' });
+  assert.equal(saved.windowsEvidenceSaveErrors, undefined);
+});
+
+test('successful helper still rejects a failed normal evidence save', async () => {
+  const saveError = Error('EACCES');
+  const result = { actions: [] };
+  await assert.rejects(recordWindowsHelper(async () => ({ stdout: JSON.stringify(snapshot) }), 'inspect', result,
+    async () => { throw saveError; }), e => e === saveError);
+  assert.equal(result.windowsEvidenceSaveErrors, undefined, 'only failure diagnostics are best effort');
+});
+
+test('both rejecting-save failure paths remain nonzero in no-GUI Node children', async () => {
+  const moduleUrl = new URL('../tools/check-local-folder-native.mjs', import.meta.url).href;
+  for (const flow of ['helper', 'picker']) {
+    const script = `import { recordWindowsHelper, recordWindowsPickerFailure } from ${JSON.stringify(moduleUrl)};
+      const primary = Error('PRIMARY_NATIVE_FAILURE');
+      const result = { actions: [], status: 'failed' };
+      const save = async () => { throw Error('SECONDARY_SAVE_FAILURE'); };
+      if (${JSON.stringify(flow)} === 'helper') await recordWindowsHelper(async () => { throw primary; }, 'select', result, save);
+      else await recordWindowsPickerFailure(primary, async () => ({ state: 'pending' }), async () => {}, result, save);`;
+    await assert.rejects(execFile(process.execPath, ['--input-type=module', '-e', script], { windowsHide: true, timeout: 10000 }), e => {
+      assert.equal(e.code, 1, flow);
+      assert.match(e.stderr, /snapshot not persisted/);
+      assert.match(e.stderr, /Error: PRIMARY_NATIVE_FAILURE/);
+      assert.doesNotMatch(e.stderr, /Error: SECONDARY_SAVE_FAILURE/);
+      return true;
+    });
+  }
 });
 
 // Exercise the actual PowerShell catch/output path, using an owned Node child

@@ -44,12 +44,17 @@ A no-GUI Node regression demonstrates the lost-event race in the old waiter;
 this does not establish the cause of a prior hosted timeout whose startup state
 was unavailable.
 
-Windows helper failures retain their process/start-time and chooser/control
-snapshot in `result.json` before propagating the nonzero helper exit. Snapshots
-record their time, phase, desktop name, chooser PID/visibility and permission
-control enabled/offscreen state. A picker-resolution timeout also captures the
-remaining owned browser prompt and picker state, without sending another action
-or extending the deadline. These are diagnostics, not proof that a completed
+Windows helper failures attempt to save their process/start-time and chooser/control
+snapshot in `result.json` before propagating the original nonzero helper error.
+Snapshots record their time, phase, desktop name, chooser PID/visibility and
+permission control enabled/offscreen state. A picker-resolution timeout also
+captures the remaining owned browser prompt and picker state, without sending
+another action or extending the deadline. If either failure-diagnostic save fails,
+the original error remains primary; the secondary save error is reported on stderr
+as not persisted and retained in memory (one message of at most 2,048 characters
+per failure path) for any later normal flush. No save retry is added; normal saves
+and final cleanup/error handling remain mandatory and unchanged.
+These are diagnostics, not proof that a completed
 button invocation granted read access. Prior unresolved-picker and inspect/select
 mismatch failures have no established cause; successful synthetic runs do not by
 themselves establish their repair.
