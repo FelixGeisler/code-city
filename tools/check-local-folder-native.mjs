@@ -41,6 +41,58 @@ function processHandle(executable, args, options = {}) {
   let error; child.on('error', e => { error = e; });
   return { child, closed, get error() { return error; } };
 }
+// Observe only our launched child, synchronously before metadata/helper awaits.
+// The original promise remains rejecting even if setup has not reached its await.
+export function observeChromeStartup(chrome, result) {
+  const { child } = chrome;
+  const state = result.chromeStartup = { status: 'waiting', deadlineMs: 20000 };
+  let tail = Buffer.alloc(0), timer, resolve, reject;
+  const endpoint = new Promise((yes, no) => { resolve = yes; reject = no; });
+  endpoint.catch(() => {}); // mark early rejection handled, never replace the owner's promise
+  function cleanup() {
+    clearTimeout(timer);
+    child.removeListener('error', onError);
+    child.removeListener('exit', onExit);
+    child.stderr.removeListener('data', onData);
+  }
+  function finish(status, value) {
+    if (state.status !== 'waiting') return;
+    state.status = status;
+    cleanup();
+    if (status === 'endpoint') resolve(value);
+    else reject(value);
+  }
+  function onError(error) {
+    state.error = error.message;
+    finish('error', error);
+  }
+  function onExit(code, signal) {
+    state.exitCode = code; state.signalCode = signal;
+    finish('exit', Error(`Chrome exited before CDP (code=${code}, signal=${signal})`));
+  }
+  function onData(chunk) {
+    tail = Buffer.concat([tail, Buffer.from(chunk)]).subarray(-16384);
+    let text = tail.toString('utf8');
+    // A truncated UTF-8 sequence can expand to a replacement character.
+    while (Buffer.byteLength(text) > 16384) text = text.slice(text.codePointAt(0) > 0xffff ? 2 : 1);
+    result.chromeStderr = text;
+    // Wait for the delimiter: a chunk may end in the middle of the URL.
+    const match = /DevTools listening on (ws:\/\/[^\s]+)(?=\s)/.exec(text);
+    if (match) finish('endpoint', match[1]);
+  }
+  child.once('error', onError);
+  child.once('exit', onExit);
+  child.stderr.on('data', onData);
+  timer = setTimeout(() => finish('timeout', Error('Headed Chrome startup timed out')), 20000);
+  if (chrome.error) onError(chrome.error);
+  else if (child.exitCode !== null || child.signalCode !== null) onExit(child.exitCode, child.signalCode);
+  return { endpoint, dispose() { finish('disposed', Error('Chrome startup observation disposed')); } };
+}
+export function launchNativeChrome(executable, args, options, result) {
+  const chrome = processHandle(executable, args, options);
+  chrome.startup = observeChromeStartup(chrome, result);
+  return chrome;
+}
 // A timeout must also release the OS child/stdio handles, not just reject a promise.
 // Forced shutdown is a failed qualification: preserve its profile for inspection.
 async function closeNativeChrome(chrome, cdp, terminateOwned, timeout = 15000) {
@@ -469,14 +521,14 @@ async function main() {
       result.linuxDisplayProof={status:'launch-env-recorded',displayQualified:false};await save();
     }
     // Explicit headed launch here only; chrome-cdp's default headless arguments and closed barrier remain unchanged.
-    chrome=processHandle(discovery.executable,arguments_,{detached:process.platform==='linux',env:process.platform==='linux'?linuxEnvironment:process.env});
+    chrome=launchNativeChrome(discovery.executable,arguments_,{detached:process.platform==='linux',env:process.platform==='linux'?linuxEnvironment:process.env},result);
     result.chrome.pid=chrome.child.pid;result.chrome.arguments=arguments_;
     if(process.platform==='linux') {
       linuxLauncher=await linuxProcess(chrome.child.pid);result.chrome.launchedProcess=linuxLauncher;
       await save();
     }
     if(process.platform==='win32')await dialog('inspect');
-    const endpoint=await bounded(new Promise((resolve,reject)=>{let text='';chrome.child.once('error',reject);chrome.child.once('exit',()=>reject(Error('Chrome exited before CDP')));chrome.child.stderr.on('data',chunk=>{text=(text+String(chunk)).slice(-16384);result.chromeStderr=text;const match=/DevTools listening on (ws:\/\/[^\s]+)/.exec(text);if(match)resolve(match[1]);});}),20000,'Headed Chrome startup');
+    const endpoint=await chrome.startup.endpoint;
     assert(/^ws:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+\/devtools\/browser\//.test(endpoint));
     const connection=connectCdp(endpoint);cdp={...connection,send:(...args)=>bounded(connection.send(...args),15000,'CDP '+args[0])};
     result.protocol=await cdp.send('Browser.getVersion');
@@ -535,6 +587,7 @@ async function main() {
     result.status='qualified';
   } catch(e) {result.error={message:e.message,stack:e.stack};}
   finally {
+    chrome?.startup.dispose();
     for(const p of [...denied])try{await restore(p);}catch(e){result.cleanup.push({path:p,status:'retained',error:e.message});}
     try {
       if(chrome){
@@ -590,8 +643,8 @@ async function main() {
         if(s.isFile()&&!s.isSymbolicLink()&&s.size<=budget){const bytes=await readFile(p);budget-=bytes.length;diagnosticImages.push({name,base64:bytes.toString('base64')});}
       }
     }
-    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,diagnosticImages,shutdownError:result.shutdownError,linuxProcesses:process.platform==='linux'&&result.status==='failed'?{launcher:result.chrome?.launchedProcess,actual:result.chrome?.actualProcess,observedDisplayEntries:result.chrome?.observedDisplayEntries,displayProof:result.linuxDisplayProof,helperFailure:result.linuxHelperFailure,pickerPhase:result.linuxPickerPhase,actions:result.actions}:undefined,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
+    result.finished=new Date().toISOString();await save();console.log(JSON.stringify({status:result.status,evidence,error:result.error,chromeStartup:result.status==='failed'?{...result.chromeStartup,pid:chrome?.child.pid,exitCode:chrome?.child.exitCode,signalCode:chrome?.child.signalCode,spawnError:chrome?.error?.message,stderr:result.chromeStderr}:undefined,diagnosticImages,shutdownError:result.shutdownError,linuxProcesses:process.platform==='linux'&&result.status==='failed'?{launcher:result.chrome?.launchedProcess,actual:result.chrome?.actualProcess,observedDisplayEntries:result.chrome?.observedDisplayEntries,displayProof:result.linuxDisplayProof,helperFailure:result.linuxHelperFailure,pickerPhase:result.linuxPickerPhase,actions:result.actions}:undefined,workspace:scratch,workspaceStatus:result.workspaceStatus,fixtureStatus:result.fixtureStatus,emptyStatus:result.emptyStatus},null,2));
     if(result.status!=='qualified')process.exitCode=1;
   }
 }
-await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
