@@ -1,5 +1,5 @@
 import { createExclusionsEditor } from "./exclusions-editor";
-import { validWorkingTreeName } from "../application/investigation-origin";
+import { investigationIdentity, validWorkingTreeName, type InvestigationOrigin } from "../application/investigation-origin";
 import {
   createStandaloneBrowserController,
   type BrowserFailedFile,
@@ -35,7 +35,6 @@ const githubSetup = requiredElement<HTMLElement>("[data-github-setup]");
 const chooseFolder = requiredElement<HTMLButtonElement>("[data-choose-folder]");
 const folderName = requiredElement<HTMLElement>("[data-folder-name]");
 const folderStatus = requiredElement<HTMLElement>("[data-folder-status]");
-const originLabel = requiredElement<HTMLElement>("[data-origin-label]");
 let selectedFolder: { root: unknown; name: string } | undefined;
 let folderPickerEpoch = 0;
 const exclusions = requiredElement<HTMLTextAreaElement>("textarea[name=additional-exclusions]");
@@ -47,7 +46,6 @@ let repositorySettingsUrl = repository.value;
 repository.addEventListener("input", () => { repositorySettingsUrl = repository.value; resetSourceSettings(); });
 const feedback = requiredElement<HTMLElement>("[data-feedback]");
 const status = requiredElement<HTMLElement>("[data-status]");
-const commit = requiredElement<HTMLOutputElement>("[data-commit]");
 const failed = requiredElement<HTMLDetailsElement>("[data-failed]");
 const failedSummary = requiredElement<HTMLElement>("[data-failed-summary]");
 const failedRows = requiredElement<HTMLUListElement>("[data-failed-rows]");
@@ -64,6 +62,19 @@ const savedMessage = requiredElement<HTMLElement>("[data-saved-message]");
 let savedRecord: SavedRecord | undefined;
 let uiEpoch = 0, pickerEpoch = 0;
 let capturedRepositoryUrl: string | undefined;
+let attemptKind: InvestigationOrigin["kind"] | undefined;
+let currentOrigin: InvestigationOrigin | undefined;
+
+function showRevision(revision?: string): void {
+  if (revision === undefined) currentOrigin = undefined;
+  else if (!currentOrigin && attemptKind === "github" && capturedRepositoryUrl !== undefined) {
+    // Only a controller-validated revision selects an identity, never a draft URL.
+    currentOrigin = { kind: "github", repositoryUrl: capturedRepositoryUrl, revision };
+  }
+  if (currentOrigin && investigationIdentity(currentOrigin) === revision) {
+    repositoryName.title = `${currentOrigin.kind === "github" ? "Commit" : "Working-tree capture"}: ${revision}`;
+  } else repositoryName.removeAttribute("title");
+}
 let hasAttempt = false;
 let isWorking = false;
 let workingProgressLabel: HTMLLabelElement | undefined;
@@ -183,6 +194,7 @@ const view: StandaloneBrowserView = Object.freeze({
     saveButton.disabled = false;
     saveButton.textContent = "Save";
     saveStatus.replaceChildren();
+    saveStatus.removeAttribute("title");
     hasAttempt = false;
     isWorking = false;
     form.hidden = false;
@@ -194,7 +206,7 @@ const view: StandaloneBrowserView = Object.freeze({
     workingProgressLabel = undefined;
     workingProgress = undefined;
     status.replaceChildren();
-    commit.textContent = "";
+    showRevision();
     renderFailures([]);
     presentation.clear();
   },
@@ -224,17 +236,18 @@ const view: StandaloneBrowserView = Object.freeze({
   origin(value) {
     capturedRepositoryUrl = value.kind === "working-tree" ? value.name : value.repositoryUrl;
     repositoryName.textContent = capturedRepositoryUrl;
-    originLabel.textContent = value.kind === "working-tree" ? "Working-tree capture" : "Commit";
+    currentOrigin = value;
+    showRevision(investigationIdentity(value));
   },
   revision(value) {
-    commit.textContent = value;
+    showRevision(value);
   },
   failed(category, code, revision) {
     showAttempt(false);
     showEditableExclusions();
     presentation.clear();
     renderFailures([]);
-    commit.textContent = revision ?? "";
+    showRevision(revision);
     replaceStatus(code ? `${category} (${code})` : category);
   },
   cancelled() {
@@ -242,13 +255,13 @@ const view: StandaloneBrowserView = Object.freeze({
     showEditableExclusions();
     presentation.clear();
     renderFailures([]);
-    commit.textContent = "";
+    showRevision();
     replaceStatus("Cancelled");
   },
   succeeded(generation, model, failures, revision) {
     showAttempt(false);
     feedback.textContent = "";
-    commit.textContent = revision;
+    showRevision(revision);
     if (!presentation.publish(generation, model)) return;
     saveButton.hidden = false;
     try {
@@ -266,7 +279,7 @@ const view: StandaloneBrowserView = Object.freeze({
     showEditableExclusions();
     replaceStatus("No files could be analyzed.");
     feedback.textContent = "";
-    commit.textContent = revision;
+    showRevision(revision);
     presentation.clear();
     renderFailures(failures);
     saveButton.hidden = false;
@@ -276,12 +289,8 @@ const view: StandaloneBrowserView = Object.freeze({
 function showSaved(record: SavedRecord): void {
   savedRecord = record;
   saveButton.textContent = "Copy link";
-  const link = document.createElement("a");
-  link.href = savedUrl(record.id);
-  link.textContent = "Saved investigation";
-  const time = document.createElement("span");
-  time.textContent = `Saved ${record.savedAt} · `;
-  saveStatus.replaceChildren(time, link);
+  saveStatus.textContent = "Saved";
+  saveStatus.title = `Saved ${record.savedAt}`;
   history.replaceState(null, "", `/saved/${record.id}`);
 }
 const controller = createStandaloneBrowserController(createBrowserWorkerTransport(undefined, (origin, record, savedPolicy) => {
@@ -306,7 +315,8 @@ function submitAnalysis(repositoryUrl: string): void {
     resetSourceSettings();
   }
   history.replaceState(null, "", "/");
-  capturedRepositoryUrl = repositoryUrl; originLabel.textContent = "Commit";
+  capturedRepositoryUrl = repositoryUrl;
+  attemptKind = "github";
   const settings = exclusionsEditor.settings();
   controller.submit(repositoryUrl, settings.manualText, settings.included);
 }
@@ -356,7 +366,8 @@ form.addEventListener("submit", (event) => {
   if (!selectedFolder) { folderStatus.textContent = "Choose a folder before Analyze."; return; }
   folderPickerEpoch++;
   history.replaceState(null, "", "/");
-  capturedRepositoryUrl = selectedFolder.name; originLabel.textContent = "Working-tree capture";
+  capturedRepositoryUrl = selectedFolder.name;
+  attemptKind = "working-tree";
   const settings = exclusionsEditor.settings();
   controller.submitWorkingTree(selectedFolder.root, selectedFolder.name, settings.manualText, settings.included);
 });
@@ -383,7 +394,7 @@ saveButton.addEventListener("click", () => {
 function openSaved(id: string): void {
   if (!secureAnalysis || !validSavedId(id)) { replaceStatus("Saved investigation unavailable"); return; }
   capturedRepositoryUrl = "Opening saved investigation";
-  originLabel.textContent = "Saved identity";
+  attemptKind = undefined;
   history.replaceState(null, "", `/saved/${id}`);
   controller.openSaved(id);
 }
