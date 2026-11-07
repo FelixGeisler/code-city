@@ -648,6 +648,7 @@ test("toolbar icons have single accessible names, decorative SVG, dismissible ho
     button.keyboardFocus = false; button.dispatch('focus'); assert.equal(hint.hidden, true);
     button.keyboardFocus = true; button.dispatch('focus');
     const escape = new Event('keydown', {cancelable:true}); Object.defineProperty(escape, 'key', {value:'Escape'});
+    button.focus(); Object.defineProperty(escape, 'target', {value:button});
     f.documentTarget.dispatchEvent(escape);
     assert.equal(hint.hidden, true); assert.equal(escape.defaultPrevented, true);
   }
@@ -664,6 +665,48 @@ test("toolbar icons have single accessible names, decorative SVG, dismissible ho
   }
   const escape = new Event('keydown', {cancelable:true}); Object.defineProperty(escape, 'key', {value:'Escape'});
   f.documentTarget.dispatchEvent(escape); assert.equal(escape.defaultPrevented, false);
+});
+
+test("hovered hint preserves a selected lookup's targeted Escape through capture and bubbling exactly once", () => {
+  const f = hierarchyPublication(facts);
+  const node = key => byDataset(f.publication.nodes, key);
+  // Fake elements have no native DOM propagation. Keep the actual target and
+  // explicitly run document capture before its ancestor bubbling handlers.
+  const escapeFrom = target => {
+    const event = new Event('keydown', {cancelable:true, bubbles:true});
+    Object.defineProperties(event, {key:{value:'Escape'}, target:{value:target}});
+    let stopped = false;
+    event.stopPropagation = () => { stopped = true; };
+    f.documentTarget.dispatchEvent(event);
+    for (let current = target; current && !stopped; current = current.parent) {
+      for (const listener of current.listeners.get('keydown') ?? []) listener(event);
+    }
+    return event;
+  };
+  f.state.cityActivated(13, f.publication.identity, 0);
+  node('navigationToggle').click();
+  assert.equal(f.documentTarget.activeElement, node('closeNavigation'));
+  node('cityReset').dispatch('mouseenter');
+  const closes = mock.method(node('navigationToggle'), 'focus');
+  const visuals = f.visuals.length;
+  const event = escapeFrom(node('closeNavigation'));
+  assert.equal(event.defaultPrevented, true, 'lookup owns Escape');
+  assert.equal(node('workspaceNavigation').hidden, true);
+  assert.equal(node('cityReset').children[1].hidden, true);
+  assert.equal(closes.mock.calls.length, 1);
+  assert.equal(f.state.snapshot().selection, 0);
+  assert.equal(f.visuals.length, visuals);
+  // A hovered hint must also leave unrelated owners' Escape untouched.
+  for (const target of [new FakeElement('dialog'), node('city')]) {
+    node('cityReset').dispatch('mouseenter');
+    assert.equal(escapeFrom(target).defaultPrevented, false);
+    assert.equal(node('cityReset').children[1].hidden, true);
+  }
+  node('cityReset').focus(); node('cityReset').dispatch('focus');
+  assert.equal(escapeFrom(node('cityReset')).defaultPrevented, true);
+  assert.equal(f.visuals.length, visuals);
+  f.publication.rollback(); f.state.dispose();
+  assert.equal(escapeFrom(node('cityReset')).defaultPrevented, false, 'global capture removed');
 });
 
 test("one primary action bypasses query, reuses pending first page, and reactivates first unit from a later page", async () => {

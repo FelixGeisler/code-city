@@ -391,8 +391,12 @@ buffers. Save and Reset remain secondary explicit controls. Reset view and
 Find a file are native icon-only buttons with those exact accessible names,
 decorative local SVG geometry, and 44px hit targets. Their short labels appear
 on hover and keyboard focus in both shell themes, without moving the workspace;
-Escape, activation and focus/pointer departure dismiss them. Hints do not take
-focus or repeat the accessible name to assistive technology. The app bar and
+Escape, activation and focus/pointer departure dismiss them. A hovered hint
+must not consume Escape belonging to another focused surface: lookup still
+closes on its first Escape. Only the hint's own keyboard-focused button consumes
+Escape to dismiss its hint. Source setup covers overlapping city tools and hints;
+hints remain above lookup when setup is closed. Hints do not take focus or repeat
+the accessible name to assistive technology. The app bar and
 project/capture controls stay reachable; full capture identity and the Color key
 are disclosures. At 390px there is no horizontal page overflow, and
 native source/saved dialogs remain in the top layer. Respect OS light/dark

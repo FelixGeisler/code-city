@@ -38,7 +38,7 @@ form h2 { margin-bottom:2px; } form button[type=submit], form button[type=submit
 [data-folder-name] { font-size:12px; } [data-shared-save],[data-folder-status],[data-exclusions-help] { font-size:12px; line-height:1.5; color:var(--muted); }
 [data-exclusions] label { margin-bottom:6px; } [data-exclusions-help] { margin-top:6px; }
 [data-presentation] { height:100%; position:relative; }
-[data-workspace]:has([data-presentation]:not([hidden])) > form:not([hidden]) { position:absolute; inset:0 auto 0 0; width:264px; height:100%; max-height:none; margin:0; border:0; border-right:1px solid var(--border); border-radius:0; padding:16px; z-index:3; align-content:start; }
+[data-workspace]:has([data-presentation]:not([hidden])) > form:not([hidden]) { position:absolute; inset:0 auto 0 0; width:264px; height:100%; max-height:none; margin:0; border:0; border-right:1px solid var(--border); border-radius:0; padding:16px; z-index:6; align-content:start; }
 [data-workspace]:has(>form:not([hidden])) [data-workspace-navigation] { visibility:hidden; }
 [data-workspace-navigation] { position:absolute; inset:76px auto 8px 8px; width:min(360px,calc(100% - 16px)); z-index:4; min-width:0; min-height:0; overflow:auto; background:var(--navigation); border:1px solid var(--border); border-radius:8px; padding:12px; scrollbar-gutter:stable; box-shadow:0 8px 24px #0004; }
 [data-close-navigation] { margin-bottom:12px; }

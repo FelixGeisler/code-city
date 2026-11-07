@@ -81,7 +81,11 @@ does not dispatch those user-edit events. The presentation keeps selected-detail
 ownership separate from lookup visibility: lookup temporarily hides the details
 surface without disposing its selected content or native top-layer dialog. The
 covered canvas is temporarily inert while lookup owns the focus surface; toolbar
-controls remain available.
+controls remain available. Toolbar hints dismiss on document capture but consume
+Escape only when its target is the visible hint's button; other owners retain
+their native or bubbling Escape handling. Rollback removes that capture listener.
+The setup form stacks above tools/hints, which in turn stack above lookup; these
+layers do not participate in canvas sizing. Native dialogs retain the top layer.
 Whole-unit row callbacks are bound to their list page and
 unit lifetime, not to the source page reached by selecting them. In-page selection
 reuses rendered evidence; an out-of-page whole-unit source read leaves the list

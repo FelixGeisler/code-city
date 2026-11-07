@@ -425,7 +425,11 @@ export function stageStandaloneInventoryPublication(
   const tooltipKey = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
     const resetVisible = resetTooltip.dismiss(), findVisible = findTooltip.dismiss();
-    if (resetVisible || findVisible) { event.preventDefault(); event.stopPropagation(); }
+    // A pointer hint must not steal Escape from lookup, dialogs or the canvas.
+    // Consume only a visible hint's own keyboard target; all hints still hide.
+    if ((resetVisible && event.target === resetControl) || (findVisible && event.target === mobileToggle)) {
+      event.preventDefault(); event.stopPropagation();
+    }
   };
   documentTarget.addEventListener("keydown", tooltipKey, true);
   mobileToggle.setAttribute("aria-expanded", "false");
