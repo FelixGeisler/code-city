@@ -13,6 +13,14 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   const shot=async (name,target=p)=>{await target.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');const {data}=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},target.sessionId);await writeFile(path.join(evidenceDirectory,name+'.png'),Buffer.from(data,'base64'));};
   const geometry=()=>p.evaluate(`(()=>{const c=document.querySelector('[data-city] canvas'),r=c.getBoundingClientRect();return {rect:[r.x,r.y,r.width,r.height],buffer:[c.width,c.height],matrix:window.__render.matrices.at(-1),uploads:window.__render.uploads};})()`);
   const fits=async()=>{assert.equal(await p.evaluate(`document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight`),true,'workspace overflows viewport');};
+  const sourceMeasurement=(target=p)=>target.evaluate(`(()=>{
+    const bounds=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height},clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop,overflowX:s.overflowX,overflowY:s.overflowY};};
+    const read=selector=>bounds(document.querySelector(selector));
+    return {viewport:{width:innerWidth,height:innerHeight},helpOpen:document.querySelector('[data-owned-contributions] details').open,
+      dialog:read('[data-unit-source]'),body:read('[data-source-body]'),code:read('[data-source-code]'),contributionRegion:read('[data-owned-contributions]'),list:read('[data-contribution-rows]'),
+      controls:[...document.querySelectorAll('[data-source-title], [data-unit-details], [data-source-paging], [data-owned-contributions]>:not([data-contribution-rows]), [data-owned-contributions] button, [data-contribution-scope]')].map(e=>({tag:e.tagName,text:e.textContent,...bounds(e)}))};
+  })()`);
+  const recordSource=async(name,target=p)=>{const measurement=await sourceMeasurement(target);await writeFile(path.join(evidenceDirectory,name+'-proof.json'),JSON.stringify(measurement,null,2)+'\n');return measurement;};
   const pointer=async selector=>{const r=await p.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);for(const type of ['mouseMoved','mousePressed','mouseReleased'])await cdp.send('Input.dispatchMouseEvent',{type,...r,...(type==='mouseMoved'?{}:{button:'left',clickCount:1})},p.sessionId);};
   const key=async(key,code,n)=>{await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,...(key==='Enter'?{text:'\r'}:{})},p.sessionId);await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n},p.sessionId);};
   const run=async(mode,predicate,exclusions='')=>{process.stdout.write('Workspace: '+mode+'\n');harness.setMode(mode);await p.submit(undefined,exclusions);return p.wait(predicate);};
@@ -89,6 +97,7 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
     assert.deepEqual(await geometry(),shortCamera,'landscape inspection moved camera/buffers');
     assert.equal(harness.requests.length,networkBefore,'landscape inspection made provider requests');
     const measurement=await p.evaluate(`(()=>{const d=document.querySelector('[data-unit-source]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]'),s=document.querySelector('[data-owned-contributions]');return {helpOpen:${open},dialogHeight:d.clientHeight,dialogScrollHeight:d.scrollHeight,codeHeight:c.clientHeight,listHeight:r.clientHeight,contributionHeight:s.clientHeight,contributionScrollHeight:s.scrollHeight};})()`);
+    measurement.layout=await recordSource('landscape-source-help-'+(open?'open':'closed'));
     assert.ok(measurement.codeHeight>=140&&measurement.listHeight>=100&&measurement.dialogHeight===measurement.dialogScrollHeight,'short landscape panes must have useful height: '+JSON.stringify(measurement));
     landscape.push({...measurement,visited,scroll,camera:await geometry()});
     await shot('landscape-source-help-'+(open?'open':'closed')+'-list');
@@ -104,14 +113,16 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   }
   await writeFile(path.join(evidenceDirectory,'landscape-source-proof.json'),JSON.stringify(landscape,null,2)+'\n');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:390,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
-  assert.equal(await p.evaluate(`(()=>{const b=document.querySelector('[data-source-body]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]');return b.scrollHeight>b.clientHeight&&c.clientHeight>=140&&r.clientHeight>=100;})()`),true,'narrow short screens need bounded stacked scrolling');
+  const narrow=await recordSource('narrow-short-source');
+  assert.equal(await p.evaluate(`(()=>{const b=document.querySelector('[data-source-body]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]');return b.scrollHeight>b.clientHeight&&c.clientHeight>=140&&r.clientHeight>=100;})()`),true,'narrow short screens need bounded stacked scrolling: '+JSON.stringify(narrow));
   await p.evaluate(`document.querySelector('[data-contribution-rows] li:last-child button').focus();true`);assert.equal(await focusedReachable(),true);
   await key('Enter','Enter',13);await settled();
   assert.equal(await p.evaluate(`document.querySelector('[data-source-body]').scrollTop===0&&document.activeElement===document.querySelector('[data-source-code]')`),true,'narrow stacked selection must return to source');
   assert.equal(await focusedReachable(),true,'narrow short code must remain reachable after selection');await fits();await shot('narrow-short-source');
   await p.evaluate(`document.querySelector('[data-owned-contributions] details').open=false;true`);
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();await shot('mobile-code-dense');
-  assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').clientHeight>=150&&document.querySelector('[data-contribution-rows]').clientHeight>=70`),true,'mobile code and contribution panes must both be useful');
+  const portrait=await recordSource('portrait-source');
+  assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').clientHeight>=150&&document.querySelector('[data-contribution-rows]').clientHeight>=70`),true,'mobile code and contribution panes must both be useful: '+JSON.stringify(portrait));
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await p.closeSource();
   await selectFile('long.js');await p.wait(s=>s.units===2);await p.click('[data-unit-rows] button');await p.wait(s=>s.sourceReady&&s.contributionMessage.includes('0 of 27'));
   await p.evaluate(`const scope=document.querySelector('[data-contribution-scope]');scope.value='unit';scope.dispatchEvent(new Event('change'));true`);await p.wait(s=>s.contributions===27);

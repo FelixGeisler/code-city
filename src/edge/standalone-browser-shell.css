@@ -104,7 +104,9 @@ dialog { background:var(--surface); color:var(--text); border:1px solid var(--bo
   [data-selection-details][data-selected=true] { display:block; } [data-close-details] { float:right; margin:0 0 8px 8px; }
   [data-unit-source] { width:calc(100vw - 12px); height:calc(100dvh - 12px); padding:12px; }
   [data-source-body] { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(180px,1fr) minmax(140px,.7fr); gap:12px; }
-  [data-owned-contributions] { border-left:0; border-top:1px solid var(--border); padding:10px 0 0; gap:6px; } [data-owned-contributions] h3 { font-size:12px; }
+  /* Controls may wrap or expand; scroll the region rather than shrink the list away. */
+  [data-owned-contributions] { border-left:0; border-top:1px solid var(--border); padding:10px 6px 0 0; gap:6px; overflow:auto; overscroll-behavior:contain; scroll-padding-block:4px; } [data-owned-contributions] h3 { font-size:12px; }
+  [data-contribution-rows] { flex:1 0 120px; scroll-padding-block:4px; }
   [data-owned-contributions]>label { display:flex; align-items:center; gap:8px; } [data-source-title] h2 { font-size:12px; }
 }
 /* Short screens cannot fit the portrait panes' minimum heights. Keep Close fixed,
@@ -116,8 +118,6 @@ dialog { background:var(--surface); color:var(--text); border:1px solid var(--bo
   [data-source-paging] { gap:4px; }
   [data-source-paging] button { min-height:32px; }
   [data-source-code] { min-height:140px; }
-  [data-owned-contributions] { overflow:auto; overscroll-behavior:contain; padding-right:6px; }
-  [data-contribution-rows] { flex:1 0 120px; }
 }
 @media(600px <= width < 800px) and (height < 600px) {
   [data-source-body] { grid-template-columns:minmax(0,1fr) 260px; grid-template-rows:minmax(0,1fr); overflow:hidden; }
