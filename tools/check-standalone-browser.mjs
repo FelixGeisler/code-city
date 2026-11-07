@@ -228,6 +228,9 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     assert.equal((await p.snapshot()).filesVisible, false, "Directories tab did not replace file navigation");
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-query]').value`), "");
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-sort]').value`), "M");
+    assert.equal(await p.evaluate(`!!document.querySelector('[data-city] canvas').closest('[inert]')`), true, "lookup must exclude its covered canvas from keyboard focus");
+    await p.click('[data-close-navigation]');
+    assert.equal(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden&&!document.querySelector('[data-city] canvas').closest('[inert]')`), true, "closing lookup must restore canvas interaction");
     await p.evaluate(`document.querySelector('[data-city] canvas').focus();true`);
     await key("End", "End", 35);
     assert.equal(await p.evaluate(`document.querySelector('[data-canonical-path]').textContent`), "empty.js");
