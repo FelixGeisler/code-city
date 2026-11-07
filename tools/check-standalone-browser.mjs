@@ -117,12 +117,12 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
       const p = { targetId, sessionId, evaluate, wait, submit, click, closeSource, snapshot: () => evaluate(snapshotExpression) };
       pages.push(p);return p;
     }
+    const restart = async () => {
+      sendGracefulSignal(processUnderTest, "SIGTERM"); await checked(expectCleanExit(processUnderTest));
+      processUnderTest = launchStandalone({ preload, serverArguments: ["--port", new URL(origin).port, "--data-dir", dataDirectory], artifactRoot });
+      assert.equal(await checked(readyOrigin(processUnderTest)), origin);
+    };
     if (workspaceOnly) {
-      const restart = async () => {
-        sendGracefulSignal(processUnderTest, "SIGTERM"); await expectCleanExit(processUnderTest);
-        processUnderTest = launchStandalone({ preload, serverArguments: ["--port", new URL(origin).port, "--data-dir", dataDirectory], artifactRoot });
-        assert.equal(await readyOrigin(processUnderTest), origin);
-      };
       await exerciseWorkspace({page,cdp,harness,origin,request,checked,evidenceDirectory,restart});
       assert.deepEqual(exceptions, []);
       sendGracefulSignal(processUnderTest, "SIGTERM"); await expectCleanExit(processUnderTest);
@@ -597,6 +597,9 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     await checked(cdp.send("Target.disposeBrowserContext", { browserContextId }));
     await reopenLocalBrowser({page,cdp,harness,checked,origin,saved:localSaved});
     await reopenAutomaticExclusions({page,cdp,harness,checked,origin,request,saved:automaticSaved});
+    process.stdout.write("Browser evidence: complete workspace and short-height source regression\n");
+    await exerciseWorkspace({page,cdp,harness,origin,request,checked,restart,
+      evidenceDirectory: evidenceDirectory ?? path.join(temporary, "workspace-evidence"), expectEmpty: false});
     for (const item of harness.requests) {
       const url = new URL(item.url);
       assert.ok([origin,"https://api.github.com","https://raw.githubusercontent.com"].includes(url.origin));

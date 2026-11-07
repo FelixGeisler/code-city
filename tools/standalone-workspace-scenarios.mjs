@@ -5,7 +5,7 @@ import { exerciseLocalBrowser, reopenLocalBrowser } from './standalone-local-bro
 import { exerciseAutomaticExclusions, reopenAutomaticExclusions } from './standalone-automatic-exclusion-scenarios.mjs';
 
 /** Bounded presentation acceptance using the packaged app and the existing synthetic provider. */
-export async function exerciseWorkspace({page,cdp,harness,origin,request,checked,evidenceDirectory,restart}) {
+export async function exerciseWorkspace({page,cdp,harness,origin,request,checked,evidenceDirectory,restart,expectEmpty=true}) {
   assert.ok(evidenceDirectory, 'Workspace evidence needs an explicit output directory');
   await mkdir(evidenceDirectory,{recursive:true});
   const p=await page(); const proofs=[];
@@ -18,7 +18,8 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   const run=async(mode,predicate,exclusions='')=>{process.stdout.write('Workspace: '+mode+'\n');harness.setMode(mode);await p.submit(undefined,exclusions);return p.wait(predicate);};
   const selectFile=async name=>{await p.click('#workspace-files-tab');await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(b=>b.querySelector('bdi').textContent===${JSON.stringify(name)}).click();true`);};
   await fits();await shot('desktop-empty');
-  await p.click('[data-open-saved]');await p.evaluate(`new Promise(resolve=>{const check=()=>{if(document.querySelector('[data-saved-message]').textContent==='No saved investigations yet.'){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(document.querySelector('[data-saved-message]'),{childList:true});check();})`);await p.click('[data-close-saved]');
+  await p.click('[data-open-saved]');await p.evaluate(`new Promise(resolve=>{const check=()=>{if(document.querySelector('[data-saved-message]').textContent==='No saved investigations yet.'||document.querySelectorAll('[data-saved-projects] button').length){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(document.querySelector('[data-saved-picker]'),{childList:true,subtree:true});check();})`);
+  assert.equal(await p.evaluate(`document.querySelector('[data-saved-message]').textContent==='No saved investigations yet.'`),expectEmpty,'initial saved inventory state');await p.click('[data-close-saved]');
   await p.submit('invalid');await p.wait(s=>s.feedback==='Invalid input');assert.equal((await p.snapshot()).setup,true);
   await run('districts',s=>s.canvases===1&&s.analyzed===5);await settled();await fits();await shot('desktop-completed');
   const initial=await geometry();
