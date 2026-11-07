@@ -7,7 +7,11 @@ export const localPickerSubstitution = `window.showDirectoryPicker=async()=>{if(
 const markerA = 'PRIVATE_SYNTHETIC_UNCOMMITTED_A';
 const markerB = 'PRIVATE_SYNTHETIC_UNCOMMITTED_B';
 const sourcePath = 'src/app.ts';
-const chooseFile = (p, path) => p.evaluate(`(()=>{document.querySelector('#workspace-files-tab').click();[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();return true;})()`);
+const chooseFile = async (p, path) => {
+  if(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden`))await p.click('[data-navigation-toggle]');
+  await p.click('#workspace-files-tab');
+  await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();true`);
+};
 async function sourceContains(p, marker) {
   await chooseFile(p, sourcePath); await p.wait(s=>s.units>0); await p.click('[data-unit-rows] button');
   await p.wait(s=>s.sourceReady&&s.contributions>0);

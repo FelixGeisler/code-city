@@ -6,6 +6,25 @@ xref:city-and-failures.adoc#CC-CORE-INV-04[Investigation Evidence Only].
 
 == Current interaction
 
+The primary path is Choose source → Analyze → `Inspect highest complexity` →
+read one unit's source and owned contributions. This explicit action selects the
+successful file with positive U and M and greatest recorded M; file ties use
+unsigned UTF-8 canonical path ascending. It activates the first retained unit
+in the existing canonical order (complexity descending, start ascending, end
+descending, canonical kind), independent of file query, sort, selection or unit
+page. It reads at most the winning file's first bounded metadata page before
+using the existing source/contribution requests; an in-flight first page is
+reused. No repository-wide unit scan, parser call or new index is involved.
+
+No selection, unit request or source dialog occurs on publication or saved
+reopen. If no successful file has executable units, disable the primary action
+and show `No executable units to inspect.` A pending/failed metadata read shows
+brief local feedback without removing the city or disabling Save; retry requires
+another explicit click. The one-shot intent is owned by publication, file and
+current user action. Other selection, clear, navigation/setup, replacement or
+leaving cancels it, so late results cannot open a surprising dialog. Closing
+primary source returns focus to the visible primary button.
+
 Selecting a building or file-list row shows raw file metrics and executable
 units. It does not open source or move the camera. Unit rows identify kind,
 normalized source range and exact recorded complexity. Kind labels use readable
@@ -20,7 +39,10 @@ scope controls remaining reachable and no outer-dialog scroll hunt. Narrow
 screens normally stack these panes. Short landscape screens (including 700×390)
 keep code beside a scrollable contribution region; narrower short screens scroll
 the stacked body beneath the fixed Close/title row. Contributions retain a useful
-list viewport even with Reading contributions expanded. Keyboard users can focus
+list viewport even with Reading contributions expanded: at least 120px, growing
+with enlarged list typography so a focused row remains readable. Short-screen
+source content scrolls inside its pane rather than overlapping contributions.
+Keyboard users can focus
 the named contribution region to scroll it, or Tab through scope, help, paging,
 and every row; focus reveals each control. Sorting/tie and location help is
 optional disclosure content, not default explanatory paragraphs. An
@@ -86,9 +108,13 @@ the latest source request; older replies cannot replace it. Retained whole-unit
 buttons remain usable during these reads. Source failure stays local and leaves
 the list available for another explicit selection.
 
-Explicit activation brings the source dialog and any stacked-body scroll to their
-top, reveals the first highlighted span by scrolling the code pane as needed,
-and focuses the code.
+Explicit activation brings the source dialog and stacked body to their top,
+reveals the code pane through its independently scrolling source section, then
+reveals the first highlighted span inside the code and focuses it. Wrapped source
+guidance or retained native focus-scrolling offsets must not leave the code clipped
+by its parent. The stacked body stays at zero when the code pane fits there;
+otherwise it scrolls only far enough to expose the pane, rather than resetting to
+an offset that hides code. Close remains visible above the body.
 This also works when activating a location far down a long contribution list,
 without changing that pane's scroll position or its native row identities.
 Previous source returns through navigation history. This moves only the source

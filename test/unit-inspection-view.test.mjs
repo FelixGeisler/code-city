@@ -45,6 +45,34 @@ test('source selection reveals the bounded body and rounds fractional scroll off
  all(host,node=>Object.hasOwn(node.dataset,'contribution'))[0].click();
  assert.equal(code.scrollLeft,99);assert.ok(all(code,node=>node.tagName==='MARK')[0].getBoundingClientRect().left>=19);assert.equal(data(host,'sourceBody').scrollTop,0);assert.equal(data(host,'ownedContributions').scrollTop,90);assert.equal(calls.length,before);release();
 });
+for(const [offset,bodyHeight] of [[1,259],[200,259],[1,160]])test(`explicit selection reveals code through source-section clipping (offset ${offset}, body ${bodyHeight}) without moving contributions`,async()=>{
+ const host=new Element('section'),source='if(x) x;',calls=[];
+ const read=reader(source,[{kind:'top-level',startByte:0,endByte:source.length,complexity:2}],[[0,'if',0,source.length]]);
+ const doc={createElement(tag){const node=new Element(tag);if(tag==='mark')node.getBoundingClientRect=()=>{const c=data(host,'sourceCode').getBoundingClientRect();return {top:c.top+12,bottom:c.top+27,left:31,right:80};};return node;}};
+ const view=attachUnitInspection(doc,host,'file.js',async query=>{calls.push(query);return read(query);});await flush();all(host,node=>Object.hasOwn(node.dataset,'unit'))[0].click();await flush();
+ const body=data(host,'sourceBody'),section=body.children[0],code=data(host,'sourceCode'),pane=data(host,'ownedContributions'),rows=data(host,'contributionRows'),original=[...rows.children];let focused=false;
+ body.clientHeight=bodyHeight;section.clientHeight=240;body.getBoundingClientRect=()=>({top:112,bottom:112+bodyHeight,left:19,right:371});
+ section.getBoundingClientRect=()=>({top:112-body.scrollTop,bottom:352-body.scrollTop,left:19,right:371});
+ code.getBoundingClientRect=()=>({top:296.75-section.scrollTop-body.scrollTop,bottom:436.75-section.scrollTop-body.scrollTop,left:19,right:371});
+ // Match native integer scroll rounding, including fractional layout positions.
+ for(const e of [body,section]){let scroll=0;Object.defineProperty(e,'scrollTop',{get:()=>scroll,set:value=>{scroll=Math.max(0,Math.round(value));}});}
+ code.focus=options=>{assert.equal(options.preventScroll,true);focused=true;};section.scrollTop=offset;body.scrollTop=180;pane.scrollTop=71;rows.scrollTop=1804;const before=calls.length;
+ all(rows,node=>Object.hasOwn(node.dataset,'contribution'))[0].click();
+ const c=code.getBoundingClientRect(),s=section.getBoundingClientRect(),b=body.getBoundingClientRect();
+ assert.ok(c.top>=s.top&&c.bottom<=s.bottom,'full code pane must fit its independent source section');assert.ok(c.top>=b.top&&c.bottom<=b.bottom,'full code pane must fit the clipped stacked body');assert.equal(focused,true);
+ assert.equal(body.scrollTop,bodyHeight===259?0:80,'only scroll the body when the full code pane cannot fit at its top');assert.equal(pane.scrollTop,71);assert.equal(rows.scrollTop,1804);assert.ok(original.every((row,i)=>rows.children[i]===row));assert.equal(calls.length,before);const mark=all(code,node=>node.tagName==='MARK')[0],m=mark.getBoundingClientRect();assert.equal(mark.textContent,source);assert.ok(m.top>=Math.max(c.top,s.top,b.top)&&m.bottom<=Math.min(c.bottom,s.bottom,b.bottom),'exact selected span must be visible through every source scroll ancestor');view();
+});
+test('explicit first-unit intent uses retained canonical ties rather than unit id and returns focus to its visible origin',async()=>{
+ const host=new Element('section'),calls=[],status=[];let focused=0;
+ const units=[{kind:'arrow',startByte:2,endByte:7,complexity:1},{kind:'function',startByte:0,endByte:7,complexity:1},{kind:'function',startByte:0,endByte:8,complexity:1},{kind:'method',startByte:0,endByte:8,complexity:1}];
+ const read=reader('abcdefgh',units),pending=Promise.withResolvers();
+ const view=attachUnitInspection(documentTarget,host,'file.js',query=>{calls.push(query);return query.type==='units'?pending.promise:Promise.resolve(read(query));});
+ view.inspectFirst({focus(){focused++;}},text=>status.push(text));
+ assert.equal(calls.length,1);pending.resolve(read({type:'units',path:'file.js',offset:0}));await flush();
+ assert.equal(data(host,'unitSource').open,true);assert.equal(calls.find(q=>q.type==='source').unit,2);assert.equal(data(host,'sourceCode').textContent,'1abcdefgh');
+ button(host,'Close source').click();assert.equal(focused,1);assert.equal(status.at(-1),'');view();
+});
+
 test('bounded unit pages preserve all entries and source is still explicit',async()=>{
  const source='x'.repeat(80),units=Array.from({length:35},(_,index)=>({kind:'arrow',startByte:index,endByte:80,complexity:1}));const host=new Element('section');
  let reads=0;const release=attachUnitInspection(documentTarget,host,'file.js',async query=>{reads++;return reader(source,units)(query);});await flush();

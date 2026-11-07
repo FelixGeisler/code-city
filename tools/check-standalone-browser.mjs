@@ -14,11 +14,11 @@ import { expectCleanExit, launchStandalone, readyOrigin, request, sendGracefulSi
 import { createBrowserProviderHarness, FIXTURE_REVISION, providerRequestLeaksPrivateHeaders } from "./standalone-browser-provider-harness.mjs";
 import { exerciseLocalBrowser, reopenLocalBrowser, localPickerSubstitution } from "./standalone-local-browser-scenarios.mjs";
 import { exerciseAutomaticExclusions, reopenAutomaticExclusions } from "./standalone-automatic-exclusion-scenarios.mjs";
-import { exerciseWorkspace } from "./standalone-workspace-scenarios.mjs";
+import { exerciseWorkspace, assertContextualDetailsReachable } from "./standalone-workspace-scenarios.mjs";
 
 const WATCHDOG_MS = 600_000;
 const REPOSITORY = "https://github.com/fixture/standalone";
-const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,units:document.querySelectorAll('[data-unit-rows] li').length,unitMessage:document.querySelector('[data-units] > [role=status]')?.textContent??'',sourceOpen:document.querySelector('[data-unit-source]')?.open??false,sourceReady:document.querySelectorAll('[data-source-code] [data-source-line]').length>0,sourceRange:document.querySelector('[data-source-range]')?.textContent??'',sourceMessage:document.querySelector('[data-source-body] [role=status]')?.textContent??'',contributionMessage:document.querySelector('[data-owned-contributions] [role=status]')?.textContent??'',contributions:document.querySelectorAll('[data-contribution-rows] li').length,contributionStart:document.querySelector('[data-contribution-rows]')?.start??0,saved:document.querySelector('[data-save]')?.textContent==='Copy link',saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,filesVisible:document.querySelector('[data-analyzed]')? !document.querySelector('[data-analyzed]').hidden : null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
+const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,units:document.querySelectorAll('[data-unit-rows] li').length,unitMessage:document.querySelector('[data-units] > [role=status]')?.textContent??'',sourceOpen:document.querySelector('[data-unit-source]')?.open??false,sourceReady:document.querySelectorAll('[data-source-code] [data-source-line]').length>0,sourceRange:document.querySelector('[data-source-range]')?.textContent??'',sourceMessage:document.querySelector('[data-source-body] [role=status]')?.textContent??'',contributionMessage:document.querySelector('[data-owned-contributions] [role=status]')?.textContent??'',contributions:document.querySelectorAll('[data-contribution-rows] li').length,contributionStart:document.querySelector('[data-contribution-rows]')?.start??0,saved:document.querySelector('[data-save]')?.textContent==='Copy link',saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,filesVisible:document.querySelector('[data-analyzed]')? document.querySelector('[data-analyzed]').checkVisibility() : null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
 const renderObservation = `(() => {
  window.__render={matrices:[],uploads:0,integers:{},frames:[],capturePixels:false,progress:[]};
  const progressIds=new WeakMap();let nextProgress=0;
@@ -176,8 +176,8 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     assert.equal(ordinary.result.summary, true);
     assert.equal(ordinary.result.repository, REPOSITORY);
     assert.equal(ordinary.result.controls, true);
-    assert.equal(ordinary.result.filesVisible, true);
-    assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-rows] button').checkVisibility()`), true);
+    assert.equal(ordinary.result.filesVisible, false);
+    assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-rows] button').checkVisibility()`), false);
     assert.equal(await p.evaluate(`document.querySelector('[data-city-navigation]')`), null);
     assert.equal(await p.evaluate(`document.querySelector('[data-reanalyze], [data-actions]')`), null);
     const layout = await p.evaluate(`({top:document.querySelector('[data-city]').getBoundingClientRect().top,height:document.querySelector('[data-city]').getBoundingClientRect().height,viewport:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth})`);
@@ -188,6 +188,7 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
       await checked(cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: virtualKeyCode, ...(key === "Enter" ? { text: "\r" } : {}) }, p.sessionId));
       await checked(cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: virtualKeyCode }, p.sessionId));
     }
+    await p.click('[data-navigation-toggle]');
     await p.evaluate(`document.querySelector('#workspace-files-tab').focus();true`);
     await key("Enter", "Enter", 13);
     assert.equal((await p.snapshot()).filesVisible, true, "Files tab did not retain file navigation");
@@ -217,6 +218,7 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     await key('Escape','Escape',27); await p.wait(s=>!s.sourceOpen);
     assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-unit-rows] button')`),true);
     assert.equal(harness.requests.length,inspectionRequests,'unit inspection made a network request');
+    await p.click('[data-navigation-toggle]');
     await p.evaluate(`(()=>{const q=document.querySelector('[data-analyzed-query]');q.value='b.ts';q.dispatchEvent(new Event('input'));return true;})()`);
     assert.equal(await p.evaluate(`document.querySelectorAll('[data-analyzed-rows] li').length`), 1);
     await p.evaluate(`(()=>{const q=document.querySelector('[data-analyzed-query]');q.value='';q.dispatchEvent(new Event('input'));const s=document.querySelector('[data-analyzed-sort]');s.value='M';s.dispatchEvent(new Event('change'));return true;})()`);
@@ -226,6 +228,9 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     assert.equal((await p.snapshot()).filesVisible, false, "Directories tab did not replace file navigation");
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-query]').value`), "");
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-sort]').value`), "M");
+    assert.equal(await p.evaluate(`!!document.querySelector('[data-city] canvas').closest('[inert]')`), true, "lookup must exclude its covered canvas from keyboard focus");
+    await p.click('[data-close-navigation]');
+    assert.equal(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden&&!document.querySelector('[data-city] canvas').closest('[inert]')`), true, "closing lookup must restore canvas interaction");
     await p.evaluate(`document.querySelector('[data-city] canvas').focus();true`);
     await key("End", "End", 35);
     assert.equal(await p.evaluate(`document.querySelector('[data-canonical-path]').textContent`), "empty.js");
@@ -248,7 +253,7 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     assert.equal(changed.analyzed, 4, "Analyze did not apply the edited exclusions");
     assert.equal(changed.repository, REPOSITORY);
     assert.equal(changed.setup, false);
-    assert.equal(changed.filesVisible, true);
+    assert.equal(changed.filesVisible, false);
     assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-sort]').value`), "S");
     process.stdout.write("Browser evidence: narrow workspace\n");
     await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, p.sessionId));
@@ -301,14 +306,18 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     assert.equal(afterDistrict.selected, -wantedDistrict - 2);
     assert.notEqual(afterDistrict.hash, beforeDistrict.hash, "district did not change actual rendered pixels");
     const hierarchyRequests = harness.requests.length;
-    await p.evaluate(`(()=>{const input=document.querySelector('[data-analyzed-query]');input.value='not-a-file';input.dispatchEvent(new Event('input'));document.querySelector('[data-district-rows="directories"] button').focus();return true;})()`);
+    await p.click('[data-navigation-toggle]'); await p.click('#workspace-files-tab');
+    await p.evaluate(`document.querySelector('[data-analyzed-query]').value='not-a-file';document.querySelector('[data-analyzed-query]').dispatchEvent(new Event('input'));true`);
+    await p.click('[data-browse-directories]');
+    await p.evaluate(`document.querySelector('[data-district-rows="directories"] button').focus();true`);
     await key('Enter','Enter',13); await p.wait(s=>s.district==='src/edge/deep');
     assert.equal(await p.evaluate(`document.querySelector('[data-file-count]').textContent`),'1');
     await p.evaluate(`document.querySelector('[data-district-rows="files"] button').focus();true`); await key('Enter','Enter',13);
     await p.wait(s=>s.selectedFile==='src/edge/deep/b.ts');
     assert.equal((await p.snapshot()).sourceOpen,false,'hierarchy file activation opened source automatically');
     await p.evaluate(`window.__render.captureContrast=true;true`);
-    await p.click('[data-browse-directories]'); await p.wait(s=>s.district==='/');
+    await p.click('[data-navigation-toggle]'); await p.click('[data-browse-directories]');
+    await p.click('[data-district-navigation] button:first-child'); await p.wait(s=>s.district==='/');
     const rootContrast = await p.evaluate(`window.__render.frames.at(-1).contrast`);
     assert.ok(rootContrast.base > 0 && rootContrast.lower > 0 && rootContrast.upper > 0 && rootContrast.edge > 0 && rootContrast.selected > 0, `Root selection must preserve fill contrast and brighten only its boundary: ${JSON.stringify(rootContrast)}`);
     await p.evaluate(`window.__render.captureContrast=false;true`);
@@ -317,7 +326,9 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
       await p.evaluate(`[...document.querySelectorAll('[data-district-rows="directories"] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();true`);
       assert.equal((await p.snapshot()).district,path);
     }
+    await p.click('#workspace-files-tab');
     await p.evaluate(`(()=>{const input=document.querySelector('[data-analyzed-query]');input.value='';input.dispatchEvent(new Event('input'));return true;})()`);
+    await p.click('[data-close-navigation]');
     assert.equal(harness.requests.length,hierarchyRequests,'directory drill-down made a request');
     assert.deepEqual(await p.evaluate(`({matrix:JSON.stringify(window.__render.matrices.at(-1)),uploads:window.__render.uploads})`),{matrix:beforeDistrict.matrix,uploads:beforeDistrict.uploads},'directory drill-down changed camera or geometry');
     await p.evaluate(`document.querySelector('[data-city] canvas').focus();true`); await key("Escape", "Escape", 27);
@@ -333,7 +344,15 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     assert.equal((await p.snapshot()).selectedFile, null);
     await p.evaluate(`window.__render.capturePixels=false;true`);
     await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, p.sessionId));
-    assert.equal(await p.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{const panel=document.querySelector('[data-selection-details]'),last=panel.querySelector('dl > div:last-child');last.scrollIntoView({block:'nearest'});const p=panel.getBoundingClientRect(),r=last.getBoundingClientRect();resolve(document.documentElement.scrollWidth<=innerWidth&&r.bottom<=p.bottom&&r.top>=p.top&&p.height<innerHeight*.5);})))`), true, "mobile district metrics were clipped or overflowed");
+    await p.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+    const mobileGeometry = () => p.evaluate(`(()=>{const c=document.querySelector('[data-city] canvas'),r=c.getBoundingClientRect();return {rect:[r.x,r.y,r.width,r.height],buffer:[c.width,c.height],matrix:window.__render.matrices.at(-1),uploads:window.__render.uploads};})()`);
+    const beforeMobilePanels = await mobileGeometry();
+    await assertContextualDetailsReachable(p);
+    await p.click('[data-navigation-toggle]');
+    assert.equal(await p.evaluate(`document.querySelector('[data-selection-details]').hidden`),true,'lookup must hide covered selected details');
+    await p.click('[data-close-navigation]');
+    await assertContextualDetailsReachable(p);
+    assert.deepEqual(await mobileGeometry(),beforeMobilePanels,'contextual panels changed canvas, matrix or buffers');
     await checked(cdp.send("Emulation.setDeviceMetricsOverride", { width: 1365, height: 900, deviceScaleFactor: 1, mobile: false }, p.sessionId));
 
     process.stdout.write("Browser evidence: explicit Save and project/ref picker\n");
@@ -360,6 +379,7 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     assert.ok(harness.requests.slice(beforePicker).every(item => new URL(item.url).origin === origin && !new URL(item.url).pathname.startsWith('/parser/')));
     assert.equal(await p.evaluate("location.href"), savedDistrictUrl);
     const beforeSavedInspection = harness.requests.length;
+    await p.click('[data-navigation-toggle]');
     await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent==='src/edge/a.js').click();true`);
     await p.wait(s=>s.units===2); await p.click('[data-unit-rows] button'); await p.wait(s=>s.sourceReady&&s.contributions===1);
     assert.ok(await p.evaluate(`document.querySelector('[data-source-code]').textContent.includes('function choose')`));
@@ -452,7 +472,7 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
 
     const unitEvidence = await run('unit-evidence',s=>s.canvases===1&&s.analyzed===5);
     const beforeEvidenceRequests=harness.requests.length;
-    async function chooseFile(path) { await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();true`); }
+    async function chooseFile(path) { if(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden`))await p.click('[data-navigation-toggle]'); await p.click('#workspace-files-tab'); await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(button=>button.querySelector('bdi').textContent===${JSON.stringify(path)}).click();true`); }
     process.stdout.write('Browser evidence: selected-only overlapping contributions\n');
     await chooseFile('overlap.js'); await p.wait(s=>s.units===2); await p.click('[data-unit-rows] button'); await p.wait(s=>s.sourceReady&&s.contributions===2);
     assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-source-code] mark')].map(mark=>mark.textContent).join('')`),'x && x && x','opening preselects only the first overlapping contribution without navigating');
@@ -618,7 +638,7 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     assert.equal((await idle.snapshot()).canvases, 1, "static-host shutdown discarded a browser-owned completed view");
     process.stdout.write(JSON.stringify({
       chrome: { category: discovery.category, version },
-      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "visible-neutral-nested-platform-fills-and-edges", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "syntax-colors-distinct-from-ownership-underlines", "readable-unit-kind-labels", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "shown-source-contribution-scope-and-location-jump", "selected-only-contribution-highlight-and-overlap-replacement", "first-contribution-preselection-readable-labels-and-one-point-order", "stable-row-order-scope-pagination-and-native-identity-on-selection", "local-working-tree-native-capability-capture", "local-uncommitted-content-identity-and-pruned-exclusions", "local-no-provider-or-upload-before-explicit-save", "local-source-once-save-and-original-code-reopen", "local-picker-denial-cancel-and-parser-replacement", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
+      scenarios: ["idle-three-tabs-no-server-sessions", "missing-WebCrypto-clear-failure", "invalid-before-worker", "four-grammar-success", "city-primary-collapsed-setup", "guided-highest-complexity-primary", "hidden-find-file-overlay", "keyboard-file-disclosure", "edited-input-analysis", "selectable-districts-and-exact-summaries", "visible-neutral-nested-platform-fills-and-edges", "single-monotonic-progress", "mobile-no-overflow", "collapsed-failure-count", "inventory-selection-no-camera-movement", "independent-retained-tabs", "mixed", "all-files-failed", "blob-integrity", "CORS-rejection", "4001-preflight", "per-file-limit", "raw-limit", "total-limit", "eight-slot-slow-first", "measured-progress-barriers", "UI-responsive-during-analysis", "provider-cancel", "parser-cancel", "replacement", "4000-files-40MiB", "unit-source-and-owned-contributions", "syntax-colors-distinct-from-ownership-underlines", "readable-unit-kind-labels", "nested-units-unicode-inert-source", "bounded-unit-source-contribution-pages", "shown-source-contribution-scope-and-location-jump", "selected-only-contribution-highlight-and-overlap-replacement", "first-contribution-preselection-readable-labels-and-one-point-order", "stable-row-order-scope-pagination-and-native-identity-on-selection", "local-working-tree-native-capability-capture", "local-uncommitted-content-identity-and-pruned-exclusions", "local-no-provider-or-upload-before-explicit-save", "local-source-once-save-and-original-code-reopen", "local-picker-denial-cancel-and-parser-replacement", "saved-source-without-provider-or-parser", "explicit-save", "multiple-project-branch-release-picker", "failed-save-preserves-scene", "maximum-snapshot-restart-fresh-context-no-provider-no-parser", "pagehide", "removed-analysis-routes", "exact-network-allowlist"],
       automaticExclusions: { capabilityBoundary: "real OPFS; substituted picker, not OS-native chooser qualification", scenarios: ["local-default-and-ordinary-yarn-plugin", "identical-default-and-include-reruns-preserve-capture-identity-and-provenance", "text-list-remove-and-readd-next-analyze", "unified-text-list-and-source-tabs-stage-without-RPC-network-source-city-GPU-camera-work", "v4-save-applied-not-pending-policy-and-source-once", "explicit-include-real-cache-code-unit-and-nested-dependency-pruning", "post-save-edit-immutable-snapshot", "all-excluded-editable-recovery", "github-default-include-manual-precedence-actual-raw-network", "restart-fresh-context-both-policies-and-source-no-provider-parser-folder", "restored-settings-survive-required-explicit-folder-selection"] },
       requests: harness.requests.length, workerEvents: harness.events.filter(e=>e.kind==='event').length,
       publicFiles: manifest.files.filter(f=>f.role==='public').map(f=>f.path),

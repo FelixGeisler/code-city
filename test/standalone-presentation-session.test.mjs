@@ -11,6 +11,7 @@ registerHooks({
 
 const {
   createInventoryState,
+  highestComplexityFile,
   projectAnalyzedFiles,
   stageStandaloneInventoryPublication,
 } = await import("../src/edge/standalone-presentation-session.ts");
@@ -225,7 +226,10 @@ test("browser-edge publication uses native bounded semantics, safe bdi text, pre
   assert.equal(publication.nodes[1].dataset.cityWorkspace, "");
   assert.equal(publication.nodes[2].dataset.selectionDetails, "");
   assert.equal(publication.nodes.length, 3);
-  assert.equal(byDataset(publication.nodes, "emptyDetails").hidden, false);
+  assert.equal(publication.nodes[0].hidden, true);
+  assert.equal(publication.nodes[2].hidden, true);
+  byDataset(publication.nodes, "navigationToggle").click();
+  assert.equal(publication.nodes[0].hidden, false);
   assert.equal(query.tagName, "INPUT");
   assert.equal(query.type, "search");
   assert.equal(sort.tagName, "SELECT");
@@ -351,7 +355,7 @@ function hierarchyDescriptors(values) {
   return [{ root: true, identity: "_root" }, ...[...paths].sort(compareUnsignedUtf8).map(identity => ({ root: false, identity }))];
 }
 
-function hierarchyPublication(values, inspect) {
+function hierarchyPublication(values, inspect, applyVisual = () => ({kind:'applied'})) {
   const created = [], visuals = [];
   const documentTarget = { activeElement: null, createElement(tag) { const node = new FakeElement(tag); node.documentTarget = this; created.push(node); return node; } };
   const districts = hierarchyDescriptors(values);
@@ -361,8 +365,9 @@ function hierarchyPublication(values, inspect) {
   const publication = stageStandaloneInventoryPublication(documentTarget, values, 13, sink, districts, inspect);
   state = createInventoryState({ inspection: values, districtCount: districts.length, generation: 13, identity: publication.identity,
     publishProjection(projection) { publication.setProjection(projection, state.snapshot().selection); },
-    applyVisual(...args) { visuals.push(args); return { kind: "applied" }; },
+    applyVisual(...args) { visuals.push(args); return applyVisual(...args); },
     publishSelection(file, district) { district === null ? publication.setSelection(file) : publication.setDistrict(district); },
+    cancelInspectionIntent() { publication.cancelInspectionIntent(); },
     failed() { assert.fail("Hierarchy interaction failed closed"); } });
   const inspector = created.find(node => Object.hasOwn(node.dataset, "inspector"));
   const select = path => state.districtActivated(13, publication.identity,
@@ -390,8 +395,9 @@ function paging(inspector, kind) { return descendants(inspector).find(node => no
   assert.equal(browse.tagName, "BUTTON");
   assert.equal(browse.type, "button");
   assert.equal(browse.textContent, "Directories");
+  byDataset(publication.nodes, "navigationToggle").click();
   browse.dispatch("click");
-  assert.equal(byDataset([inspector], "districtPath").textContent, "/");
+  assert.equal(state.snapshot().district, null, "opening lookup must not select");
   assert.deepEqual(rowPaths(directoryRows(navigation, "directories")), ["ab", "a", "_root"]);
   assert.equal(directoryRows(navigation, "files").children.length, 5);
   const rootNavigation = byDataset([navigation], "districtNavigation");
@@ -434,6 +440,8 @@ function paging(inspector, kind) { return descendants(inspector).find(node => no
   byDataset([navigation], "districtBreadcrumbs").children[1].children[0].dispatch("click");
   assert.equal(byDataset([inspector], "districtPath").textContent, "a");
   browse.dispatch("click");
+  assert.equal(byDataset([inspector], "districtPath").textContent, "a", "lookup retains its location");
+  byDataset([navigation], "districtNavigation").children[0].click();
   assert.equal(byDataset([inspector], "districtPath").textContent, "/");
   const afterBrowse = visuals.length;
   publication.rollback();
@@ -447,6 +455,7 @@ test("inspector-owned navigation restores focus without scrolling; browsing and 
   const values = [{ canonicalPath: "a/deep/file.ts", S: 1, U: 1, M: 1 }];
   const { publication, inspector, navigation, select, state, documentTarget } = hierarchyPublication(values);
   const browse = byDataset(publication.nodes, "browseDirectories");
+  byDataset(publication.nodes, "navigationToggle").click();
   browse.focus(); browse.dispatch("click");
   assert.equal(documentTarget.activeElement, browse);
   const directory = directoryRows(navigation, "directories").children[0].children[0];
@@ -455,7 +464,7 @@ test("inspector-owned navigation restores focus without scrolling; browsing and 
   assert.deepEqual(navigation.focusOptions, { preventScroll: true });
   const file = directoryRows(navigation, "files").children[0].children[0];
   file.focus(); file.dispatch("click");
-  assert.equal(documentTarget.activeElement, file, "retained directory row keeps keyboard focus");
+  assert.equal(documentTarget.activeElement, inspector, "closing lookup must not retain focus in a hidden row");
   const containingDirectory = byDataset([inspector], "selectDistrict");
   containingDirectory.focus(); containingDirectory.dispatch("click");
   assert.equal(documentTarget.activeElement, inspector);
@@ -468,8 +477,9 @@ test("inspector-owned navigation restores focus without scrolling; browsing and 
   browse.focus(); select("a");
   assert.equal(documentTarget.activeElement, browse, "external selection stole focus");
   inspector.focus(); publication.setSelection(null);
-  assert.equal(documentTarget.activeElement, browse);
-  assert.deepEqual(browse.focusOptions, { preventScroll: true });
+  const find = byDataset(publication.nodes, 'navigationToggle');
+  assert.equal(documentTarget.activeElement, find);
+  assert.deepEqual(find.focusOptions, { preventScroll: true });
   publication.rollback(); state.dispose();
 });
 
@@ -538,8 +548,8 @@ test("both hierarchy lists page by 32 with M/unsigned-UTF8 ties; file S/U sortin
   const { publication, state, inspector, select } = hierarchyPublication(values, query => new Promise(resolve => pending.push({ query, resolve })));
   state.hierarchyFileActivated(13, publication.identity, 0);
   assert.equal(pending[0].query.path, "a/deep/file.ts");
-  const unit = { id: 1, kind: "function", complexity: 1, start: { line: 1, column: 1 }, end: { line: 2, column: 1 } };
-  pending.shift().resolve({ type: "units", total: 1, rows: [unit] });
+  const unit = { id: 0, kind: "function", complexity: 1, start: { line: 1, column: 1 }, end: { line: 2, column: 1 } };
+  pending.shift().resolve({ type: "units", path: values[0].canonicalPath, offset: 0, total: 1, rows: [unit] });
   await Promise.resolve();
   byDataset([inspector], "unit").dispatch("click");
   const dialog = byDataset([inspector], "unitSource");
@@ -554,25 +564,130 @@ test("both hierarchy lists page by 32 with M/unsigned-UTF8 ties; file S/U sortin
   publication.rollback(); state.dispose();
 });
 
-test("navigation tabs restore an unchanged root view, and explicit Close uses the guarded shared clear action", () => {
+test("navigation tabs do not select; explicit Close uses the guarded shared clear action", () => {
   const { publication, state, documentTarget } = hierarchyPublication([{ canonicalPath: "a/file.ts", S: 1, U: 2, M: 3 }]);
   const browse = byDataset(publication.nodes, "browseDirectories");
   const files = descendants(publication.nodes[0]).find(node => node.id === "workspace-files-tab");
   const panel = byDataset(publication.nodes, "directoryPanel");
+  byDataset(publication.nodes, "navigationToggle").click();
   browse.click();
-  assert.equal(state.snapshot().district, 0);
+  assert.equal(state.snapshot().district, null);
   files.click(); assert.equal(panel.hidden, true);
   browse.click(); assert.equal(panel.hidden, false, "same root selection must still switch the active tab");
+  state.hierarchyFileActivated(13, publication.identity, 0);
   const close = byDataset(publication.nodes, "closeDetails");
   close.focus(); close.click();
   assert.equal(state.snapshot().district, null);
-  assert.equal(byDataset(publication.nodes, "emptyDetails").hidden, false);
+  assert.equal(byDataset(publication.nodes, "selectionDetails").hidden, true);
   assert.equal(close.hidden, true);
-  assert.equal(documentTarget.activeElement, files);
+  assert.equal(documentTarget.activeElement, byDataset(publication.nodes, "navigationToggle"));
   const before = state.snapshot();
   publication.rollback(); close.click(); browse.click();
   assert.deepEqual(state.snapshot(), before);
   state.dispose();
+});
+
+test('lookup owns the covered focus surface without disposing selected details; every reveal restores it', () => {
+  const f=hierarchyPublication(facts);
+  const node=key=>byDataset(f.publication.nodes,key);
+  f.state.hierarchyFileActivated(13,f.publication.identity,0);
+  const inspector=f.inspector, content=[...inspector.children];
+  node('navigationToggle').click();
+  assert.equal(node('selectionDetails').hidden,true);
+  assert.equal(node('city').inert,true);
+  assert.equal(f.state.snapshot().selection,0);
+  node('closeNavigation').click();
+  assert.equal(node('selectionDetails').hidden,false);
+  assert.equal(node('city').inert,false);
+  assert.deepEqual(inspector.children,content);
+  node('navigationToggle').click();
+  node('analyzedRows').children.find(row=>row.children[0].children[0].textContent===facts[0].canonicalPath).children[0].click();
+  assert.equal(node('selectionDetails').hidden,false);
+  assert.equal(node('workspaceNavigation').hidden,true);
+  node('navigationToggle').click();
+  node('browseDirectories').click();
+  f.select('/');
+  assert.equal(node('selectionDetails').hidden,true,'district update must not reveal details underneath lookup');
+  node('closeNavigation').click();
+  assert.equal(node('selectionDetails').hidden,false);
+  assert.equal(node('districtPath').textContent,'/');
+  f.publication.rollback();f.state.dispose();
+});
+
+test("highest complexity uses recorded M, positive U and unsigned UTF8 paths, not S or navigation", () => {
+  assert.equal(highestComplexityFile(facts), 3);
+  assert.equal(highestComplexityFile([{ canonicalPath: 'x', S: 999, U: 0, M: 100 }, { canonicalPath: 'a', S: 1, U: 0, M: 0 }]), null);
+  const tied = ['😀.js', '\ue000.js', 'é.js', 'é.js'].map(canonicalPath => ({ canonicalPath, S: 0, U: 1, M: Number.MAX_SAFE_INTEGER }));
+  assert.equal(highestComplexityFile(tied), 3);
+});
+
+const flushInspection = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+const retainedUnit = id => ({ id, kind: 'function', complexity: 80 - id, start: {line: id + 1, column: 1}, end: {line: id + 2, column: 1} });
+function metadata(query) { return { ...query, total: 40, rows: Array.from({length: Math.min(32,40-query.offset)}, (_,i)=>retainedUnit(query.offset+i)) }; }
+
+test("one primary action bypasses query, reuses pending first page, and reactivates first unit from a later page", async () => {
+  const pending = [], calls = [];
+  const f = hierarchyPublication(facts, query => { calls.push(query); return new Promise(resolve=>pending.push({query,resolve})); });
+  const primary = byDataset(f.publication.nodes, 'inspectHighest');
+  assert.equal(f.state.snapshot().selection, null); assert.equal(calls.length, 0);
+  byDataset(f.publication.nodes,'navigationToggle').click();
+  const query = byDataset(f.publication.nodes,'analyzedQuery'); query.value='Zeta'; query.dispatch('input');
+  primary.click(); primary.click();
+  assert.equal(f.state.snapshot().selection, 3); assert.deepEqual(calls, [{type:'units',path:facts[3].canonicalPath,offset:0}]);
+  pending.shift().resolve(metadata(calls[0])); await flushInspection();
+  assert.equal(byDataset(f.publication.nodes,'unitSource').open,true);
+  assert.deepEqual(calls[1],{type:'source',path:facts[3].canonicalPath,unit:0,cursor:null});
+  byDataset(f.publication.nodes,'unitSource').close();
+  assert.equal(f.documentTarget.activeElement,primary);
+  const paging = byDataset(f.publication.nodes,'unitPaging'); paging.children[2].click();
+  pending.at(-1).resolve(metadata(calls.at(-1))); await flushInspection();
+  primary.click(); assert.deepEqual(calls.at(-1),{type:'units',path:facts[3].canonicalPath,offset:0});
+  pending.at(-1).resolve(metadata(calls.at(-1))); await flushInspection();
+  assert.equal(calls.at(-1).type,'source'); assert.equal(calls.at(-1).unit,0);
+  f.publication.rollback(); f.state.dispose();
+});
+
+test("pending primary intent is cancelled by same-generation selection, clear, lookup, setup cancellation or disposal; errors retry only explicitly", async () => {
+  for (const action of ['selection','clear','lookup','cancel','dispose']) {
+    const pending=[];
+    const f=hierarchyPublication(facts,query=>new Promise(resolve=>pending.push({query,resolve})));
+    const primary=byDataset(f.publication.nodes,'inspectHighest');
+    const detached=[...primary.listeners.get('click')][0]; primary.click();
+    if(action==='selection') f.state.cityActivated(13,f.publication.identity,0);
+    if(action==='clear') f.state.selectionAction(13,f.publication.identity,'clear');
+    if(action==='lookup') byDataset(f.publication.nodes,'navigationToggle').click();
+    if(action==='cancel') f.publication.cancelInspectionIntent();
+    if(action==='dispose') { f.publication.rollback(); f.state.dispose(); detached(); }
+    for(const request of [...pending]) request.resolve(metadata(request.query));
+    await flushInspection();
+    assert.equal(pending.length,action==='selection'?2:1,action+' opened unexpected source');
+    assert.notEqual(byDataset(f.publication.nodes,'unitSource')?.open,true,action);
+    f.publication.rollback(); f.state.dispose();
+  }
+  const pending=[]; const f=hierarchyPublication(facts,query=>new Promise(resolve=>pending.push({query,resolve})));
+  const primary=byDataset(f.publication.nodes,'inspectHighest'); primary.click();
+  pending[0].resolve({type:'units',path:'wrong',offset:0,total:1,rows:[]}); await flushInspection();
+  assert.match(byDataset(f.publication.nodes,'primaryInspectionStatus').textContent,/unavailable/u); assert.equal(pending.length,1);
+  assert.equal(byDataset(f.publication.nodes,'city').hidden,false);
+  primary.click(); assert.equal(pending.length,2); pending[1].resolve(metadata(pending[1].query)); await flushInspection();
+  assert.equal(pending[2].query.type,'source'); f.publication.rollback(); f.state.dispose();
+});
+
+test("renderer refusal never authorizes primary source, even when its winner is already selected", async () => {
+  let applied=true; const calls=[];
+  const f=hierarchyPublication(facts,async query=>{calls.push(query);return metadata(query);},()=>({kind:applied?'applied':'stale'}));
+  f.state.hierarchyFileActivated(13,f.publication.identity,3);await flushInspection();assert.equal(calls.length,1);
+  applied=false;byDataset(f.publication.nodes,'inspectHighest').click();await flushInspection();
+  assert.equal(calls.length,1);assert.notEqual(byDataset(f.publication.nodes,'unitSource').open,true);
+  f.publication.rollback();f.state.dispose();
+});
+
+test("no-unit publications keep lookup available but disable primary with an honest reason", () => {
+  const f=hierarchyPublication([{canonicalPath:'empty.js',S:0,U:0,M:0}],()=>{assert.fail('unexpected inspection');});
+  assert.equal(byDataset(f.publication.nodes,'inspectHighest').disabled,true);
+  assert.equal(byDataset(f.publication.nodes,'primaryInspectionStatus').textContent,'No executable units to inspect.');
+  byDataset(f.publication.nodes,'navigationToggle').click(); assert.equal(f.publication.nodes[0].hidden,false);
+  f.publication.rollback(); f.state.dispose();
 });
 
 test("standalone composition never calls camera reveal or programmatic canvas focus for selection", async () => {

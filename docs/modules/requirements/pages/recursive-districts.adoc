@@ -15,8 +15,8 @@ unrelated directories, file aggregation, collapse, quality grades or new metrics
 An all-files-failed result still has no city or district inspector.
 
 The inspector shows exact descendant successful-file count, summed SLOC, summed
-unit count and maximum unit complexity. Use exact integer sums. The left
-Directories tab contains immediate child directories, while its contained-file list covers
+unit count and maximum unit complexity. Use exact integer sums. The secondary
+Find a file overlay's Directories tab contains immediate child directories, while its contained-file list covers
 the complete selected subtree. Each list uses 32-row pages. Default order is
 maximum unit complexity descending, with unsigned-UTF-8 canonical path ties;
 file sorting also supports the existing SLOC/unit-count choices. Lists identify
@@ -25,8 +25,10 @@ inspector; root/parent controls and directory breadcrumbs permit navigation back
 without rebuilding the scene or moving the camera. Opening a file keeps the
 current directory location, rows, paging and sort available. Replacing directory
 navigation invalidates its detached callbacks; changing selected file/directory
-or clearing selection disposes the old unit/source view. Directories explicitly
-selects root even when activated again from Files.
+or clearing selection disposes the old unit/source view. Switching to Directories
+retains the current location (initially root) without selecting it. Only an
+explicit directory row, breadcrumb, root/parent control or city activation
+selects a district.
 
 == Deterministic recursive layout
 

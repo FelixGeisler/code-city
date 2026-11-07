@@ -1,4 +1,4 @@
-import { CONTRIBUTION_PAGE_SIZE, UNIT_PAGE_SIZE, type ContributionRow, type InspectionQuery, type InspectionResult, type SourceLocation, type UnitRow } from "../application/unit-inspection";
+import { parseInspectionResult, CONTRIBUTION_PAGE_SIZE, UNIT_PAGE_SIZE, type ContributionRow, type InspectionQuery, type InspectionResult, type SourceLocation, type UnitRow } from "../application/unit-inspection";
 export type InspectInvestigation = (query: InspectionQuery) => Promise<InspectionResult>;
 type InspectionDocument = Pick<Document, "createElement">;
 type SourcePage = Extract<InspectionResult, { type: "source" }>;
@@ -33,21 +33,29 @@ export function contributionLocation(start: SourceLocation, end: SourceLocation)
 }
 
 /** One file owns its callbacks. Contribution scope is bound to the rendered source page. */
-export function attachUnitInspection(documentTarget: InspectionDocument, inspector: HTMLElement, path: string, inspect: InspectInvestigation): () => void {
+export type UnitInspectionView = (() => void) & Readonly<{
+  inspectFirst(origin: HTMLElement, status: (message: string) => void): void;
+  cancelIntent(): void;
+}>;
+export function attachUnitInspection(documentTarget: InspectionDocument, inspector: HTMLElement, path: string, inspect: InspectInvestigation): UnitInspectionView {
   const element = <K extends keyof HTMLElementTagNameMap>(tag: K, text = ""): HTMLElementTagNameMap[K] => { const node = documentTarget.createElement(tag); node.textContent = text; return node; };
   const button = (label: string, action: () => void) => { const node = element("button", label); node.type = "button"; node.addEventListener("click", action); return node; };
   const slot = element("section"); slot.dataset.units = ""; slot.setAttribute("aria-live", "off"); slot.append(element("h3", "Executable units"));
   const message = element("p"); message.setAttribute("role", "status");
   const rows = element("ol"); rows.dataset.unitRows = "";
   const page = element("div"); page.dataset.unitPaging = ""; const range = element("span");
-  let active = true, listEpoch = 0, sourceEpoch = 0, contributionEpoch = 0, offset = 0;
+  let active = true, listEpoch = 0, sourceEpoch = 0, contributionEpoch = 0, offset = 0, intentEpoch = 0;
+  let unitsPending: Promise<void> | undefined, first: UnitRow | undefined, listFailed = false;
+  let returnFocus: HTMLElement | undefined;
+  let intentStatus: ((message: string) => void) | undefined;
+  const cancelIntent = (): void => { intentEpoch++; intentStatus?.(""); intentStatus = undefined; };
   let selected: UnitRow | undefined, shown: SourcePage | undefined, cursor: number | null = null, next: number | null = null;
   let sourcePending = false, contributionPending = false, contributionOffset = 0, contributionTotal = 0, wholeUnit = false, focusSource = false;
   let selectedContribution: ContributionRow | undefined, firstMarked: HTMLElement | undefined;
   const contributionButtons = new Map<number, HTMLButtonElement>();
   const history: number[] = [];
-  const previousUnits = button("Previous units", () => { offset = Math.max(0, offset - UNIT_PAGE_SIZE); void loadUnits(); });
-  const nextUnits = button("Next units", () => { offset += UNIT_PAGE_SIZE; void loadUnits(); }); page.append(previousUnits, range, nextUnits);
+  const previousUnits = button("Previous units", () => { offset = Math.max(0, offset - UNIT_PAGE_SIZE); void acquireUnits(); });
+  const nextUnits = button("Next units", () => { offset += UNIT_PAGE_SIZE; void acquireUnits(); }); page.append(previousUnits, range, nextUnits);
   const dialog = element("dialog"); dialog.dataset.unitSource = ""; dialog.setAttribute("aria-labelledby", "unit-source-title");
   const heading = element("h2"); heading.id = "unit-source-title"; heading.title = path; const identity = element("bdi", path); identity.dir = "auto"; heading.append(identity);
   const close = button("Close source", () => dialog.close()); close.dataset.closeSource = "";
@@ -81,17 +89,23 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
   dialog.addEventListener("close", () => {
     if (dialog.open) return;
     selected = undefined; shown = undefined; selectedContribution = undefined; sourcePending = false; contributionPending = false; sourceEpoch++; contributionEpoch++;
+    cancelIntent();
     code.replaceChildren(); contributions.replaceChildren(); contributionButtons.clear(); scope.disabled = true;
+    returnFocus?.focus({ preventScroll: true }); returnFocus = undefined;
   });
   slot.append(message, rows, page, dialog); inspector.append(slot);
 
   async function loadUnits(): Promise<void> {
     if (!active) return;
-    const epoch = ++listEpoch; message.textContent = "Loading units"; previousUnits.disabled = true; nextUnits.disabled = true;
+    cancelIntent();
+    const epoch = ++listEpoch; listFailed = false; first = undefined; message.textContent = "Loading units"; previousUnits.disabled = true; nextUnits.disabled = true;
     try {
-      const result = await inspect({ type: "units", path, offset });
+      const query = { type: "units", path, offset } as const;
+      const received = await inspect(query);
       if (!active || epoch !== listEpoch) return;
+      const result = parseInspectionResult(received, query);
       if (result.type !== "units") throw new Error("Invalid unit list");
+      if (offset === 0) first = result.rows[0];
       const total = result.total; rows.replaceChildren(); rows.start = offset + 1;
       for (const unit of result.rows) {
         const row = element("li"), open = button("", () => openSource(unit)); open.dataset.unit = String(unit.id);
@@ -101,10 +115,11 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
       message.textContent = total === 0 ? "No executable units." : "";
       range.textContent = total === 0 ? "" : `${offset + 1}–${Math.min(total, offset + UNIT_PAGE_SIZE)} of ${total}`;
       page.hidden = total <= UNIT_PAGE_SIZE; previousUnits.disabled = offset === 0; nextUnits.disabled = offset + UNIT_PAGE_SIZE >= total;
-    } catch { if (active && epoch === listEpoch) { rows.replaceChildren(); page.hidden = true; message.textContent = "Unit inspection unavailable."; } }
+    } catch { if (active && epoch === listEpoch) { listFailed = true; rows.replaceChildren(); page.hidden = true; message.textContent = "Unit inspection unavailable."; } }
   }
   function openSource(unit: UnitRow): void {
     if (!active) return;
+    cancelIntent();
     selected = unit; cursor = null; next = null; history.length = 0; wholeUnit = false; scope.value = "shown"; focusSource = false;
     details.textContent = `${unitKindLabel(path, unit.kind)} · Complexity ${unit.complexity} (whole unit) · ${point(unit.start)}–${point(unit.end)} (end exclusive)`;
     code.replaceChildren(); contributions.replaceChildren(); sourcePaging.hidden = true; dialog.showModal(); void loadSource(undefined, true);
@@ -140,6 +155,15 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
   }
   function focusSelectedSource(): void {
     dialog.scrollTop = 0; body.scrollTop = 0;
+    // Short-screen source guidance can wrap beyond this independent pane. Reveal
+    // code inside it before revealing the selected glyph; never scroll the sibling
+    // contribution region/list. Keep the body at its top whenever code fits there.
+    for (const container of [sourceSection, body]) {
+      const target = code.getBoundingClientRect(), viewport = container.getBoundingClientRect();
+      const top = viewport.top + container.clientTop, bottom = top + container.clientHeight;
+      if (target.top < top) container.scrollTop += Math.floor(target.top - top);
+      else if (target.bottom > bottom) container.scrollTop += Math.ceil(target.bottom - bottom);
+    }
     if (firstMarked) {
       const target = firstMarked.getBoundingClientRect(), viewport = code.getBoundingClientRect();
       // Scroll offsets are integer-rounded by browsers; round toward the leading
@@ -214,6 +238,28 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
       previousContributions.disabled = contributionOffset === 0; nextContributions.disabled = contributionOffset + CONTRIBUTION_PAGE_SIZE >= result.total;
     } catch { if (current()) { contributionPending = false; contributions.replaceChildren(); contributionMessage.textContent = "Contribution inspection unavailable."; } }
   }
-  void loadUnits();
-  return () => { active = false; listEpoch++; sourceEpoch++; contributionEpoch++; if (dialog.open) dialog.close(); slot.replaceChildren(); };
+  const acquireUnits = (): Promise<void> => {
+    const pending = loadUnits(); unitsPending = pending;
+    void pending.finally(() => { if (unitsPending === pending) unitsPending = undefined; });
+    return pending;
+  };
+  void acquireUnits();
+  return Object.assign(() => { active = false; cancelIntent(); listEpoch++; sourceEpoch++; contributionEpoch++; returnFocus = undefined; if (dialog.open) dialog.close(); slot.replaceChildren(); }, {
+    cancelIntent,
+    inspectFirst(origin: HTMLElement, status: (message: string) => void): void {
+      if (!active) return;
+      // Reuse an in-flight first page; a later page or a previous error requires
+      // one explicit first-page read, never a scan of the repository.
+      if (offset !== 0 || (!unitsPending && listFailed)) { offset = 0; void acquireUnits(); }
+      const epoch = ++intentEpoch;
+      intentStatus = status;
+      status("Loading highest complexity…");
+      void (unitsPending ?? Promise.resolve()).then(() => {
+        if (!active || epoch !== intentEpoch) return;
+        intentStatus = undefined;
+        if (!first || listFailed) { status("Inspection unavailable. Click Inspect highest complexity to retry."); return; }
+        status(""); returnFocus = origin; openSource(first);
+      });
+    },
+  });
 }

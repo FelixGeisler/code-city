@@ -4,6 +4,21 @@ import path from 'node:path';
 import { exerciseLocalBrowser, reopenLocalBrowser } from './standalone-local-browser-scenarios.mjs';
 import { exerciseAutomaticExclusions, reopenAutomaticExclusions } from './standalone-automatic-exclusion-scenarios.mjs';
 
+/** Contextual details are bounded overlays, not the former half-height sheet. */
+export async function assertContextualDetailsReachable(p) {
+  const proof = await p.evaluate(`(()=>{
+    const panel=document.querySelector('[data-selection-details]'),last=panel.querySelector('dl > div:last-child'),close=panel.querySelector('[data-close-details]');
+    const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};
+    const reachable=e=>{const r=e.getBoundingClientRect(),v=panel.getBoundingClientRect();return e.checkVisibility()&&r.width>0&&r.height>0&&r.left>=v.left&&r.right<=v.right&&r.top>=v.top&&r.bottom<=v.bottom&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));};
+    last.scrollIntoView({block:'nearest'});
+    const lastReachable=reachable(last),scrollTop=panel.scrollTop;
+    close.scrollIntoView({block:'nearest'});
+    return {panel:rect(panel),toolbar:rect(document.querySelector('[data-city-tools]')),viewport:{width:innerWidth,height:innerHeight},visible:panel.checkVisibility(),horizontalOverflow:document.documentElement.scrollWidth>innerWidth||panel.scrollWidth>panel.clientWidth,lastReachable,closeReachable:reachable(close),scrollTop};
+  })()`);
+  assert.ok(proof.visible&&!proof.horizontalOverflow&&proof.panel.left>=0&&proof.panel.right<=proof.viewport.width&&proof.panel.top>=proof.toolbar.bottom&&proof.panel.bottom<=proof.viewport.height&&proof.lastReachable&&proof.closeReachable,'contextual details must be bounded, below tools, scrollable and uncovered: '+JSON.stringify(proof));
+  return proof;
+}
+
 /** Bounded presentation acceptance using the packaged app and the existing synthetic provider. */
 export async function exerciseWorkspace({page,cdp,harness,origin,request,checked,evidenceDirectory,restart,expectEmpty=true}) {
   assert.ok(evidenceDirectory, 'Workspace evidence needs an explicit output directory');
@@ -17,27 +32,57 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
     const bounds=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height},clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop,overflowX:s.overflowX,overflowY:s.overflowY};};
     const read=selector=>bounds(document.querySelector(selector));
     return {viewport:{width:innerWidth,height:innerHeight},helpOpen:document.querySelector('[data-owned-contributions] details').open,
-      dialog:read('[data-unit-source]'),body:read('[data-source-body]'),code:read('[data-source-code]'),contributionRegion:read('[data-owned-contributions]'),list:read('[data-contribution-rows]'),
+      dialog:read('[data-unit-source]'),body:read('[data-source-body]'),sourceSection:read('[data-source-body]>section:first-child'),code:read('[data-source-code]'),contributionRegion:read('[data-owned-contributions]'),list:read('[data-contribution-rows]'),
+      focus:(()=>{const e=document.activeElement,r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),identify=e=>e?{tag:e.tagName,id:e.id,data:{...e.dataset}}:null,ancestors=[];for(let a=e;a;a=a.parentElement)ancestors.push({element:identify(a),...bounds(a),scrollLeft:a.scrollLeft,clientWidth:a.clientWidth,scrollWidth:a.scrollWidth});return {element:identify(e),centerHit:identify(hit),containsCenterHit:e.contains(hit),ancestors};})(),
       controls:[...document.querySelectorAll('[data-source-title], [data-unit-details], [data-source-paging], [data-owned-contributions]>:not([data-contribution-rows]), [data-owned-contributions] button, [data-contribution-scope]')].map(e=>({tag:e.tagName,text:e.textContent,...bounds(e)}))};
   })()`);
   const recordSource=async(name,target=p)=>{const measurement=await sourceMeasurement(target);await writeFile(path.join(evidenceDirectory,name+'-proof.json'),JSON.stringify(measurement,null,2)+'\n');return measurement;};
   const pointer=async selector=>{const r=await p.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);for(const type of ['mouseMoved','mousePressed','mouseReleased'])await cdp.send('Input.dispatchMouseEvent',{type,...r,...(type==='mouseMoved'?{}:{button:'left',clickCount:1})},p.sessionId);};
-  const key=async(key,code,n)=>{await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,...(key==='Enter'?{text:'\r'}:{})},p.sessionId);await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n},p.sessionId);};
+  const key=async(key,code,n,modifiers=0)=>{await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,modifiers,...(key==='Enter'?{text:'\r'}:{})},p.sessionId);await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n,modifiers},p.sessionId);};
   const run=async(mode,predicate,exclusions='')=>{process.stdout.write('Workspace: '+mode+'\n');harness.setMode(mode);await p.submit(undefined,exclusions);return p.wait(predicate);};
-  const selectFile=async name=>{await p.click('#workspace-files-tab');await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(b=>b.querySelector('bdi').textContent===${JSON.stringify(name)}).click();true`);};
+  const openFind=async()=>{if(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden`))await pointer('[data-navigation-toggle]');};
+  const selectFile=async name=>{await openFind();await p.click('#workspace-files-tab');await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(b=>b.querySelector('bdi').textContent===${JSON.stringify(name)}).click();true`);};
+  await p.evaluate(`(()=>{window.__inspectionCalls=[];const send=Worker.prototype.postMessage;Worker.prototype.postMessage=function(message,...rest){if(message.type==='INSPECT'){window.__inspectionCalls.push(message.query);if(window.__rejectUnits&&message.query.type==='units'){queueMicrotask(()=>this.dispatchEvent(new MessageEvent('message',{data:{type:'INSPECTION_RESULT',sessionId:message.sessionId,generation:message.generation,requestId:message.requestId,ok:false}})));return;}}return send.call(this,message,...rest);};return true;})()`);
   await fits();await shot('desktop-empty');
   await p.click('[data-open-saved]');await p.evaluate(`new Promise(resolve=>{const check=()=>{if(document.querySelector('[data-saved-message]').textContent==='No saved investigations yet.'||document.querySelectorAll('[data-saved-projects] button').length){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(document.querySelector('[data-saved-picker]'),{childList:true,subtree:true});check();})`);
   assert.equal(await p.evaluate(`document.querySelector('[data-saved-message]').textContent==='No saved investigations yet.'`),expectEmpty,'initial saved inventory state');await p.click('[data-close-saved]');
   await p.submit('invalid');await p.wait(s=>s.feedback==='Invalid input');assert.equal((await p.snapshot()).setup,true);
   await run('districts',s=>s.canvases===1&&s.analyzed===5);await settled();await fits();await shot('desktop-completed');
   const initial=await geometry();
-  assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-rows] button').checkVisibility()&&document.querySelector('[data-empty-details]').checkVisibility()`),true);
-  assert.equal(await p.evaluate(`(()=>{const c=document.querySelector('[data-city]').getBoundingClientRect(),d=document.querySelector('[data-selection-details]').getBoundingClientRect(),n=document.querySelector('[data-workspace-navigation]').getBoundingClientRect();return n.right<=c.left&&c.right<=d.left&&c.height>innerHeight*.65;})()`),true);
-  await pointer('[data-analyzed-rows] button');await p.wait(s=>s.selectedFile!==null&&s.units>0);assert.equal((await p.snapshot()).sourceOpen,false);await settled();assert.deepEqual(await geometry(),initial);await shot('desktop-file');
-  await pointer('[data-unit-rows] button');await p.wait(s=>s.sourceReady);await shot('desktop-code');
+  // Real hover, resolved browser colors, and WCAG luminance in each product theme.
+  const hoverProof=[];
+  for (const theme of ['light','dark']) {
+    await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:theme}]},p.sessionId);
+    const point=await p.evaluate(`(()=>{const r=document.querySelector('[data-inspect-highest]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',...point},p.sessionId);await settled();
+    const colors=await p.evaluate(`(()=>{const e=document.querySelector('[data-inspect-highest]'),s=getComputedStyle(e);return {hover:e.matches(':hover'),color:s.color,background:s.backgroundColor};})()`);
+    const luminance=color=>{const rgb=color.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;};
+    const a=luminance(colors.color),b=luminance(colors.background),contrast=(Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+    assert.ok(colors.hover&&contrast>=4.5,theme+' hovered primary contrast: '+JSON.stringify({...colors,contrast}));
+    hoverProof.push({theme,...colors,contrast});await shot('primary-hover-'+theme);
+  }
+  await writeFile(path.join(evidenceDirectory,'primary-hover-proof.json'),JSON.stringify(hoverProof,null,2)+'\n');
+  assert.equal(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden&&document.querySelector('[data-selection-details]').hidden&&!document.querySelector('[data-analyzed-rows] button').checkVisibility()&&document.querySelector('[data-inspect-highest]').checkVisibility()&&window.__inspectionCalls.length===0`),true);
+  assert.equal(await p.evaluate(`(()=>{const before=document.activeElement;document.querySelector('[data-analyzed-query]').focus();return document.activeElement===before;})()`),true,'default hidden inventory must be inert to focus');
+  assert.equal(await p.evaluate(`(()=>{const c=document.querySelector('[data-city]').getBoundingClientRect();return c.width>innerWidth*.95&&c.height>innerHeight*.65;})()`),true);
+  for(const [width,height] of [[390,844],[700,390],[390,390]]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();
+    assert.equal(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden&&document.querySelector('[data-selection-details]').hidden&&document.querySelector('[data-inspect-highest]').checkVisibility()`),true);
+    const before=await geometry();await pointer('[data-navigation-toggle]');await shot('lookup-'+width+'x'+height);await pointer('[data-close-navigation]');await pointer('[data-legend-disclosure] summary');await pointer('[data-legend-disclosure] summary');await settled();assert.deepEqual(await geometry(),before);proofs.push({viewport:{width,height},before,afterPanels:await geometry()});await shot('default-'+width+'x'+height);
+  }
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await settled();assert.deepEqual(await geometry(),initial);assert.equal(await p.evaluate('window.__inspectionCalls.length'),0,'panel toggles made inspection RPCs');
+  const panelNetwork=harness.requests.length;
+  await pointer('[data-navigation-toggle]');await shot('desktop-lookup');await p.evaluate(`document.querySelector('[data-analyzed-query]').value='not-the-winner';document.querySelector('[data-analyzed-query]').dispatchEvent(new Event('input'));true`);
+  await key('Escape','Escape',27);await settled();assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-navigation-toggle]')&&document.querySelector('[data-workspace-navigation]').hidden&&window.__inspectionCalls.length===0`),true);
+  await pointer('[data-legend-disclosure] summary');await pointer('[data-legend-disclosure] summary');await settled();assert.deepEqual(await geometry(),initial);assert.equal(harness.requests.length,panelNetwork);
+  await pointer('[data-inspect-highest]');await p.wait(s=>s.sourceReady&&s.contributions===1);await shot('desktop-code');
+  assert.equal(await p.evaluate(`document.querySelector('[data-canonical-path]').textContent==='src/edge/a.js'&&document.querySelector('[data-source-code]').textContent.includes('function choose(v) { return v ? 1 : 0; }')&&document.querySelector('[data-contribution-rows] button').getAttribute('aria-current')==='true'&&document.querySelector('[data-source-code] mark').textContent==='v ? 1 : 0'`),true);
+  assert.deepEqual(await p.evaluate(`window.__inspectionCalls.map(q=>({type:q.type,path:q.path,...(q.type==='units'?{offset:q.offset}: {unit:q.unit})}))`),[{type:'units',path:'src/edge/a.js',offset:0},{type:'source',path:'src/edge/a.js',unit:1},{type:'contributions',path:'src/edge/a.js',unit:1}]);
   assert.equal(await p.evaluate(`(()=>{const d=document.querySelector('[data-unit-source]'),c=document.querySelector('[data-source-code]').getBoundingClientRect(),r=document.querySelector('[data-owned-contributions]').getBoundingClientRect();return d.scrollHeight===d.clientHeight&&c.right<=r.left;})()`),true);
-  await key('Escape','Escape',27);await p.wait(s=>!s.sourceOpen);assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-unit-rows] button')`),true);
-  await p.evaluate(`document.querySelector('#workspace-files-tab').focus();true`);await key('ArrowRight','ArrowRight',39);await p.wait(s=>s.district==='/');
+  await key('Escape','Escape',27);await p.wait(s=>!s.sourceOpen);assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-inspect-highest]')`),true);
+  await settled();assert.deepEqual(await geometry(),initial);await shot('desktop-file');
+  await openFind();await p.evaluate(`document.querySelector('[data-analyzed-query]').value='';document.querySelector('[data-analyzed-query]').dispatchEvent(new Event('input'));document.querySelector('#workspace-files-tab').focus();true`);await key('ArrowRight','ArrowRight',39);
+  assert.equal((await p.snapshot()).district,null);
   assert.equal(await p.evaluate(`document.activeElement.id==='workspace-directories-tab'`),true);
   await pointer('[data-district-rows="directories"] button');await p.wait(s=>s.district!=='/');await shot('desktop-directory');await settled();assert.deepEqual(await geometry(),initial);
   await p.evaluate(`window.__directoryRow=document.querySelector('[data-district-rows="files"] button');window.__directoryRow.click();true`);await p.wait(s=>s.selectedFile!==null);
@@ -49,11 +94,46 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   proofs.push({desktop:initial,afterSelectionAndPanels:await geometry()});
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();const mobile=await geometry();await shot('mobile-city');
   await pointer('[data-navigation-toggle]');assert.equal(await p.evaluate(`document.querySelector('[data-analyzed-query]').checkVisibility()||document.querySelector('[data-district-navigation]').checkVisibility()`),true);
-  await p.click('#workspace-files-tab');await pointer('[data-analyzed-rows] button');await p.wait(s=>s.units>0);await p.click('[data-navigation-toggle]');await settled();assert.deepEqual(await geometry(),mobile);await fits();await shot('mobile-file');
-  assert.equal(await p.evaluate(`(()=>{const d=document.querySelector('[data-selection-details]').getBoundingClientRect();return d.height>100&&d.height<innerHeight*.5&&document.querySelector('[data-close-details]').checkVisibility();})()`),true);
+  await p.click('#workspace-files-tab');await pointer('[data-analyzed-rows] button');await p.wait(s=>s.units>0);await settled();assert.deepEqual(await geometry(),mobile);await fits();await shot('mobile-file');
+  proofs.push({mobileFileDetails:await assertContextualDetailsReachable(p)});
+  for(const [width,height] of [[700,390],[390,390]]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
+    const before=await geometry(),details=await assertContextualDetailsReachable(p);
+    assert.ok(details.scrollTop>0,'short details must actually scroll to reach the last metric');
+    await openFind();await pointer('[data-close-navigation]');await settled();assert.deepEqual(await geometry(),before);
+    proofs.push({shortFileDetails:details});
+  }
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();assert.deepEqual(await geometry(),mobile);
+  const selectedFile=(await p.snapshot()).selectedFile;
+  await openFind();await settled();await shot('mobile-selected-lookup');
+  assert.equal(await p.evaluate(`document.querySelector('[data-selection-details]').hidden&&!document.querySelector('[data-close-details]').checkVisibility()`),true);
+  assert.equal((await p.snapshot()).selectedFile,selectedFile,'lookup cleared selection');
+  const lookupFocus=[];
+  for (const modifiers of [0,8]) {
+    await p.evaluate(`document.querySelector('[data-close-navigation]').focus();true`);
+    let looped=false;
+    for(let step=0;step<40;step++) {
+      await key('Tab','Tab',9,modifiers);await settled();
+      const focus=await p.evaluate(`(()=>{const e=document.activeElement,r=e.getBoundingClientRect();return {tag:e.tagName,details:!!e.closest('[data-selection-details]'),visible:e.checkVisibility(),hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),close:e.matches('[data-close-navigation]')};})()`);
+      assert.ok(!focus.details&&focus.visible&&focus.hit,'lookup focus hidden/covered: '+JSON.stringify({modifiers,step,...focus}));lookupFocus.push({modifiers,step,...focus});
+      if(focus.close){looped=true;break;}
+    }
+    assert.ok(looped,'native lookup traversal did not complete a loop');
+  }
+  await pointer('[data-close-navigation]');await settled();
+  assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-navigation-toggle]')&&!document.querySelector('[data-selection-details]').hidden`),true);
+  assert.equal((await p.snapshot()).selectedFile,selectedFile);
+  await openFind();await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] button')].find(b=>b.querySelector('bdi').textContent===${JSON.stringify(selectedFile)}).focus();true`);await key('Enter','Enter',13);
+  assert.equal(await p.evaluate(`document.querySelector('[data-workspace-navigation]').hidden&&document.activeElement===document.querySelector('[data-inspector]')&&!document.querySelector('[data-selection-details]').hidden`),true,'same-file reveal must restore visible details focus');
+  await writeFile(path.join(evidenceDirectory,'mobile-selected-lookup-focus.json'),JSON.stringify(lookupFocus,null,2)+'\n');
   await pointer('[data-unit-rows] button');await p.wait(s=>s.sourceReady);await fits();await shot('mobile-code');await key('Escape','Escape',27);await p.wait(s=>!s.sourceOpen);
   await pointer('[data-close-details]');await settled();assert.deepEqual(await geometry(),mobile);
-  await p.click('[data-navigation-toggle]');await p.click('[data-browse-directories]');await p.wait(s=>s.district==='/');await p.click('[data-navigation-toggle]');await settled();assert.deepEqual(await geometry(),mobile);await shot('mobile-directory');await p.click('[data-close-details]');
+  await openFind();await p.click('[data-browse-directories]');await p.click('[data-district-navigation] button:first-child');await p.wait(s=>s.district==='/');await p.click('[data-close-navigation]');await settled();assert.deepEqual(await geometry(),mobile);proofs.push({mobileDistrictDetails:await assertContextualDetailsReachable(p)});await shot('mobile-directory');
+  // The primary path is also a single keyboard activation on mobile.
+  await p.evaluate(`document.querySelector('[data-inspect-highest]').focus();true`);await key('Enter','Enter',13);await p.wait(s=>s.sourceReady&&s.contributions===1);await shot('mobile-primary-code');
+  assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').textContent.includes('function choose(v)')`),true);
+  await key('Escape','Escape',27);await p.wait(s=>!s.sourceOpen);assert.equal(await p.evaluate(`document.activeElement===document.querySelector('[data-inspect-highest]')`),true);
+  await p.click('[data-close-details]');
   await p.click('[data-change-repository]');await settled();assert.deepEqual(await geometry(),mobile);await p.click('[data-change-repository]');
   proofs.push({mobile,afterSelectionAndPanels:await geometry()});
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);
@@ -65,7 +145,13 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await shot('desktop-code-dense');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:700,height:390,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
   const landscape=[];
-  const focusedReachable=()=>p.evaluate(`(()=>{const e=document.activeElement,r=e.getBoundingClientRect(),dialog=document.querySelector('[data-unit-source]'),d=dialog.getBoundingClientRect();if(!(r.width>0&&r.height>0&&r.left>=d.left&&r.right<=d.right&&r.top>=d.top&&r.bottom<=d.bottom&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))))return false;for(let p=e.parentElement;p&&p!==dialog;p=p.parentElement){const s=getComputedStyle(p),v=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)&&(r.top<v.top||r.bottom>v.bottom))return false;if(/auto|scroll|hidden|clip/.test(s.overflowX)&&(r.left<v.left||r.right>v.right))return false;}return true;})()`);
+  // Native scrollTop is integer-quantized while font/layout rects are fractional;
+  // allow one CSS pixel at scroll edges, still requiring an uncovered center hit.
+  // A stacked scroll pane may exceed its outer viewport: require a useful visible
+  // intersection for that pane, but the full bounds for individual controls/rows.
+  const focusedReachable=()=>p.evaluate(`(()=>{const e=document.activeElement,r=e.getBoundingClientRect(),dialog=document.querySelector('[data-unit-source]'),d=dialog.getBoundingClientRect();if(e.matches('[data-owned-contributions]')){let left=Math.max(r.left,d.left),right=Math.min(r.right,d.right),top=Math.max(r.top,d.top),bottom=Math.min(r.bottom,d.bottom);for(let p=e.parentElement;p&&p!==dialog;p=p.parentElement){const s=getComputedStyle(p),v=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)){top=Math.max(top,v.top);bottom=Math.min(bottom,v.bottom);}if(/auto|scroll|hidden|clip/.test(s.overflowX)){left=Math.max(left,v.left);right=Math.min(right,v.right);}}return right-left>=100&&bottom-top>=100&&e.contains(document.elementFromPoint((left+right)/2,(top+bottom)/2));}if(!(r.width>0&&r.height>0&&r.left>=d.left&&r.right<=d.right&&r.top>=d.top&&r.bottom<=d.bottom&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))))return false;for(let p=e.parentElement;p&&p!==dialog;p=p.parentElement){const s=getComputedStyle(p),v=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)&&(r.top<v.top-1||r.bottom>v.bottom+1))return false;if(/auto|scroll|hidden|clip/.test(s.overflowX)&&(r.left<v.left-1||r.right>v.right+1))return false;}return true;})()`);
+  const assertFocusedReachable=async name=>{const reachable=await focusedReachable();if(!reachable){const proof=await recordSource(name+'-focus-failure');await shot(name+'-focus-failure');process.stdout.write(name+' focus diagnostics: '+JSON.stringify(proof)+'\n');}assert.equal(reachable,true,name);};
+  const selectedSourceProof=()=>p.evaluate(`(()=>{const c=document.querySelector('[data-source-code]'),mark=c.querySelector('mark'),r=mark.getBoundingClientRect();let left=r.left,right=r.right,top=r.top,bottom=r.bottom;const ancestors=[];for(let e=mark.parentElement;e;e=e.parentElement){const s=getComputedStyle(e),v=e.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)){top=Math.max(top,v.top+e.clientTop);bottom=Math.min(bottom,v.top+e.clientTop+e.clientHeight);}if(/auto|scroll|hidden|clip/.test(s.overflowX)){left=Math.max(left,v.left+e.clientLeft);right=Math.min(right,v.left+e.clientLeft+e.clientWidth);}ancestors.push({tag:e.tagName,data:{...e.dataset},bounds:[v.left,v.top,v.right,v.bottom],scroll:[e.scrollLeft,e.scrollTop]});if(e.matches('[data-unit-source]'))break;}const hit=document.elementFromPoint((left+right)/2,(top+bottom)/2);return {text:mark.textContent,rect:[r.left,r.top,r.right,r.bottom],clipped:[left,top,right,bottom],fullyVisible:left<=r.left&&right>=r.right&&top<=r.top&&bottom>=r.bottom,hit:mark.contains(hit),ancestors};})()`);
   const shortCamera=await geometry();
   for(const open of [false,true]) {
     // Toggle help with a real pointer. Then exercise native Tab scrolling, not DOM click().
@@ -98,7 +184,7 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
     assert.equal(harness.requests.length,networkBefore,'landscape inspection made provider requests');
     const measurement=await p.evaluate(`(()=>{const d=document.querySelector('[data-unit-source]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]'),s=document.querySelector('[data-owned-contributions]');return {helpOpen:${open},dialogHeight:d.clientHeight,dialogScrollHeight:d.scrollHeight,codeHeight:c.clientHeight,listHeight:r.clientHeight,contributionHeight:s.clientHeight,contributionScrollHeight:s.scrollHeight};})()`);
     measurement.layout=await recordSource('landscape-source-help-'+(open?'open':'closed'));
-    assert.ok(measurement.codeHeight>=140&&measurement.listHeight>=100&&measurement.dialogHeight===measurement.dialogScrollHeight,'short landscape panes must have useful height: '+JSON.stringify(measurement));
+    assert.ok(measurement.codeHeight>=140&&measurement.listHeight>=120&&measurement.dialogHeight===measurement.dialogScrollHeight,'short landscape panes must have useful height: '+JSON.stringify(measurement));
     landscape.push({...measurement,visited,scroll,camera:await geometry()});
     await shot('landscape-source-help-'+(open?'open':'closed')+'-list');
     // Also capture the disclosure content at the top of the scrollable region.
@@ -113,16 +199,75 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   }
   await writeFile(path.join(evidenceDirectory,'landscape-source-proof.json'),JSON.stringify(landscape,null,2)+'\n');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:390,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
-  const narrow=await recordSource('narrow-short-source');
-  assert.equal(await p.evaluate(`(()=>{const b=document.querySelector('[data-source-body]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]');return b.scrollHeight>b.clientHeight&&c.clientHeight>=140&&r.clientHeight>=100;})()`),true,'narrow short screens need bounded stacked scrolling: '+JSON.stringify(narrow));
+  const narrowCamera=await geometry(),narrow=await recordSource('narrow-short-source');
+  assert.equal(await p.evaluate(`(()=>{const b=document.querySelector('[data-source-body]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]');return b.scrollHeight>b.clientHeight&&c.clientHeight>=140&&r.clientHeight>=120;})()`),true,'narrow short screens need bounded stacked scrolling: '+JSON.stringify(narrow));
   await p.evaluate(`document.querySelector('[data-contribution-rows] li:last-child button').focus();true`);assert.equal(await focusedReachable(),true);
   await key('Enter','Enter',13);await settled();
+  await recordSource('narrow-short-after-selection');
   assert.equal(await p.evaluate(`document.querySelector('[data-source-body]').scrollTop===0&&document.activeElement===document.querySelector('[data-source-code]')`),true,'narrow stacked selection must return to source');
-  assert.equal(await focusedReachable(),true,'narrow short code must remain reachable after selection');await fits();await shot('narrow-short-source');
+  await assertFocusedReachable('narrow-short-code-after-selection');
+  const narrowSelected=await selectedSourceProof();assert.ok(narrowSelected.text==='x&&x'&&narrowSelected.fullyVisible&&narrowSelected.hit,'narrow short exact selected span must be exposed: '+JSON.stringify(narrowSelected));
+  await fits();await shot('narrow-short-source');
+  // Deterministic source-parent clipping using the same trusted CSSOM technique
+  // as the all-controls stress below. Enlarged source guidance makes this section
+  // overflow even with Windows fonts; retain a nonzero offset across selection.
+  await p.evaluate(`(()=>{const sheet=[...document.styleSheets].find(s=>s.href&&new URL(s.href).origin===location.origin&&new URL(s.href).pathname.endsWith('/browser.css')),index=sheet.cssRules.length;sheet.insertRule('[data-source-body]>section:first-child>p{font-size:22px !important;line-height:1.6 !important}',index);window.__sourceParentStress={sheet,index};document.querySelector('[data-contribution-rows] li:last-child button').focus();return true;})()`);
+  const retainedOffset=await p.evaluate(`(()=>{const section=document.querySelector('[data-source-body]>section:first-child'),rows=document.querySelector('[data-contribution-rows]');section.scrollTop=1;window.__narrowRows=[...rows.querySelectorAll('button')];const c=document.querySelector('[data-source-code]').getBoundingClientRect(),v=section.getBoundingClientRect();return {section:section.scrollTop,clipped:c.top<v.top||c.bottom>v.bottom,font:getComputedStyle(section.querySelector('p')).fontSize,pane:document.querySelector('[data-owned-contributions]').scrollTop,list:rows.scrollTop,calls:window.__inspectionCalls.length,range:document.querySelector('[data-source-range]').textContent};})()`);
+  assert.ok(retainedOffset.section>0&&retainedOffset.clipped&&retainedOffset.font==='22px','controlled source section must actually scroll and clip code: '+JSON.stringify(retainedOffset));
+  await recordSource('narrow-short-retained-source-offset-before');await shot('narrow-short-retained-source-offset-before');
+  await key('Enter','Enter',13);await settled();
+  await assertFocusedReachable('narrow-short-retained-source-offset-after');
+  const retainedSelected=await selectedSourceProof();assert.ok(retainedSelected.text==='x&&x'&&retainedSelected.fullyVisible&&retainedSelected.hit,'retained source offset must reveal exact span: '+JSON.stringify(retainedSelected));
+  assert.equal(await p.evaluate(`(()=>{const rows=document.querySelector('[data-contribution-rows]');return window.__narrowRows.every((b,i)=>b===rows.querySelectorAll('button')[i])&&rows.scrollTop===${retainedOffset.list}&&document.querySelector('[data-owned-contributions]').scrollTop===${retainedOffset.pane}&&window.__inspectionCalls.length===${retainedOffset.calls}&&document.querySelector('[data-source-range]').textContent===${JSON.stringify(retainedOffset.range)};})()`),true,'source-parent reveal must preserve contributions, source range and RPC count');
+  assert.deepEqual(await geometry(),narrowCamera,'narrow source-parent reveal moved camera/buffers');
+  await recordSource('narrow-short-retained-source-offset-after');await shot('narrow-short-retained-source-offset-after');
+  await writeFile(path.join(evidenceDirectory,'narrow-short-selection-proof.json'),JSON.stringify({narrowSelected,retainedOffset,retainedSelected},null,2)+'\n');
+  await p.evaluate(`window.__sourceParentStress.sheet.deleteRule(window.__sourceParentStress.index);delete window.__sourceParentStress;true`);
   await p.evaluate(`document.querySelector('[data-owned-contributions] details').open=false;true`);
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();await shot('mobile-code-dense');
   const portrait=await recordSource('portrait-source');
-  assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').clientHeight>=150&&document.querySelector('[data-contribution-rows]').clientHeight>=70`),true,'mobile code and contribution panes must both be useful: '+JSON.stringify(portrait));
+  assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').clientHeight>=150&&document.querySelector('[data-contribution-rows]').clientHeight>=120`),true,'mobile code and contribution panes must both be useful: '+JSON.stringify(portrait));
+  // Existing same-origin external sheet CSSOM is trusted under style-src 'self'.
+  // No inline style node, CSP bypass, new product route, or product policy change.
+  await p.evaluate(`(()=>{const sheet=[...document.styleSheets].find(s=>s.href&&new URL(s.href).origin===location.origin&&new URL(s.href).pathname.endsWith('/browser.css'));if(!sheet)throw Error('trusted product sheet missing');const index=sheet.cssRules.length;sheet.insertRule('[data-unit-source] button,[data-source-body] p,[data-source-body] label,[data-source-body] summary,[data-contribution-rows],[data-contribution-rows] button{font-size:22px !important;line-height:1.6 !important}',index);window.__typeStress={sheet,index};return true;})()`);
+  const stressProof=[];
+  for(const [width,height,name] of [[390,844,'portrait'],[700,390,'landscape'],[390,390,'narrow-short']]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true},p.sessionId);
+    for(const open of [false,true]) {
+      await p.evaluate(`document.querySelector('[data-owned-contributions] details').open=${open};document.querySelector('[data-owned-contributions]').scrollTop=0;true`);await settled();
+      const fonts=await p.evaluate(`['[data-close-source]','[data-source-body] p','[data-source-body] summary','[data-contribution-rows]','[data-contribution-rows] button'].map(s=>({selector:s,fontSize:getComputedStyle(document.querySelector(s)).fontSize}))`);
+      for(const font of fonts)assert.equal(font.fontSize,'22px','typography stress did not apply: '+font.selector);
+      const nameWithState=name+'-typography-help-'+(open?'open':'closed');
+      const measurement=await recordSource(nameWithState);assert.ok(measurement.list.clientHeight>=120,'stress contribution list lost its 120px reading area');
+      await shot(nameWithState);
+      await p.evaluate(`document.querySelector('[data-contribution-rows] li:last-child button').focus();true`);assert.equal(await focusedReachable(),true,nameWithState+' clipped contribution focus');await shot(nameWithState+'-contributions');
+      await p.evaluate(`document.querySelector('[data-close-source]').focus();true`);assert.equal(await focusedReachable(),true,nameWithState+' clipped Close');
+      // Stress uses actual native traversal too, including nested-pane scrolling.
+      const visited=[];
+      for(let step=0;step<42;step++) {
+        await key('Tab','Tab',9);await settled();
+        const target=await p.evaluate(`(()=>{const e=document.activeElement;return e.matches('[data-close-source]')?'close':e.matches('[data-source-code]')?'code':e.matches('[data-owned-contributions]')?'pane':e.matches('[data-contribution-scope]')?'scope':e.matches('summary')?'help':e.closest('[data-contribution-paging]')?'paging':e.hasAttribute('data-contribution')?'row':null;})()`);
+        if(target){
+          await assertFocusedReachable(nameWithState+'-native-'+target);visited.push(target);
+        }
+        if(target==='close')break;
+      }
+      for(const target of ['code','pane','scope','help','paging','row','close'])assert.ok(visited.includes(target),nameWithState+' missing '+target);
+      assert.equal(visited.filter(v=>v==='row').length,32,nameWithState+' must reach all rows');
+      // Native activation after traversal must reveal the exact selected code,
+      // not merely focus an offscreen PRE inside the independently scrolled pane.
+      await p.evaluate(`document.querySelector('[data-contribution-rows] li:last-child button').focus();window.__stressRows=[...document.querySelectorAll('[data-contribution-rows] button')];true`);
+      const beforeSelection=await p.evaluate(`({pane:document.querySelector('[data-owned-contributions]').scrollTop,list:document.querySelector('[data-contribution-rows]').scrollTop,calls:window.__inspectionCalls.length})`);
+      await key('Enter','Enter',13);await settled();await assertFocusedReachable(nameWithState+'-selected-code');
+      const selected=await selectedSourceProof();assert.ok(selected.text==='x&&x'&&selected.fullyVisible&&selected.hit,nameWithState+' selected exact span clipped: '+JSON.stringify(selected));
+      assert.deepEqual(await p.evaluate(`({pane:document.querySelector('[data-owned-contributions]').scrollTop,list:document.querySelector('[data-contribution-rows]').scrollTop,calls:window.__inspectionCalls.length})`),beforeSelection,nameWithState+' selection changed contribution offsets or RPC count');
+      assert.equal(await p.evaluate(`window.__stressRows.every((b,i)=>b===document.querySelectorAll('[data-contribution-rows] button')[i])&&document.activeElement===document.querySelector('[data-source-code]')`),true);
+      await recordSource(nameWithState+'-selected-code');await shot(nameWithState+'-selected-code');
+      stressProof.push({width,height,open,fonts,listHeight:measurement.list.clientHeight,visited,selected,beforeSelection});
+    }
+  }
+  await writeFile(path.join(evidenceDirectory,'typography-stress-proof.json'),JSON.stringify(stressProof,null,2)+'\n');
+  await p.evaluate(`window.__typeStress.sheet.deleteRule(window.__typeStress.index);delete window.__typeStress;true`);
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await p.closeSource();
   await selectFile('long.js');await p.wait(s=>s.units===2);await p.click('[data-unit-rows] button');await p.wait(s=>s.sourceReady&&s.contributionMessage.includes('0 of 27'));
   await p.evaluate(`const scope=document.querySelector('[data-contribution-scope]');scope.value='unit';scope.dispatchEvent(new Event('change'));true`);await p.wait(s=>s.contributions===27);
@@ -130,17 +275,47 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   assert.equal(await p.evaluate(`window.__whole.every((b,i)=>b===document.querySelectorAll('[data-contribution-rows] button')[i])&&document.activeElement===document.querySelector('[data-source-code]')`),true);
   await p.click('[data-source-paging] button:first-child');await p.wait(s=>s.sourceRange.startsWith('Shown source: 660:'));
   assert.equal(await p.evaluate(`document.querySelectorAll('[data-contribution-rows] [aria-current=true]').length`),0);assert.equal(harness.requests.length,networkBefore);await p.closeSource();
+  await run('unit-evidence',s=>s.canvases===1&&s.analyzed===1,'a.js\ndense.js\nlong.js\noverlap.js');
+  await selectFile('b.js');await p.wait(s=>s.units===32);await pointer('[data-unit-paging] button:last-child');await p.wait(s=>s.units===9);
+  const laterStart=await p.evaluate('window.__inspectionCalls.length'),laterGeometry=await geometry();
+  await pointer('[data-inspect-highest]');await p.wait(s=>s.sourceReady&&s.contributions===0);
+  assert.deepEqual(await p.evaluate(`window.__inspectionCalls.slice(${laterStart}).map(q=>({type:q.type,path:q.path,...(q.type==='units'?{offset:q.offset}:{unit:q.unit})}))`),[{type:'units',path:'b.js',offset:0},{type:'source',path:'b.js',unit:0},{type:'contributions',path:'b.js',unit:0}]);
+  assert.equal(await p.evaluate(`document.querySelector('[data-source-code]').textContent.includes('const f0')&&document.querySelector('[data-source-code]').textContent.includes('const f39')&&document.querySelector('[data-unit-details]').textContent.startsWith('Top-level code')`),true,'later unit page changed the direct target');
+  await p.closeSource();await settled();assert.deepEqual(await geometry(),laterGeometry);
   const start=harness.events.length;harness.setMode('parser-held');await p.submit();await checked(harness.waitFor(e=>harness.events.indexOf(e)>=start&&e.kind==='parser-held'));await shot('desktop-progress');await p.click('[data-status] button');await p.wait(s=>s.status==='Cancelled'&&s.setup&&s.canvases===0);
   await run('all-failed',s=>s.failed===2&&s.canvases===0);assert.equal((await p.snapshot()).failuresOpen,false);await shot('desktop-failure');await p.click('[data-failed] summary');assert.equal(await p.evaluate(`document.querySelector('[data-failed-rows]').checkVisibility()`),true);
   await run('success',s=>s.status.includes('No supported')||s.status.includes('No files'), 'a.js\nb.ts\nc.tsx\nd.cs\nempty.js');assert.equal((await p.snapshot()).canvases,0);assert.equal((await p.snapshot()).setup,true);
+  await run('success',s=>s.canvases===1&&s.analyzed===1,'a.js\nb.ts\nc.tsx\nd.cs');
+  assert.equal(await p.evaluate(`document.querySelector('[data-inspect-highest]').disabled&&document.querySelector('[data-primary-inspection-status]').textContent==='No executable units to inspect.'`),true);await shot('desktop-no-units');
   await run('success',s=>s.canvases===1&&s.analyzed===5);
-  await p.click('[data-save]');await p.wait(s=>s.saved);
+  await p.evaluate(`window.__rejectUnits=true;document.querySelector('[data-inspect-highest]').focus();true`);await key('Enter','Enter',13);
+  await p.evaluate(`new Promise(resolve=>{const e=document.querySelector('[data-primary-inspection-status]');const check=()=>{if(e.textContent.includes('unavailable')){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(e,{childList:true});check();})`);
+  assert.equal(await p.evaluate(`!document.querySelector('[data-save]').disabled&&document.querySelector('[data-city] canvas').checkVisibility()&&!document.querySelector('[data-unit-source]').open`),true);await shot('desktop-inspection-error');
+  await p.evaluate(`window.__rejectUnits=false;true`);
+  const failedCalls=await p.evaluate('window.__inspectionCalls.length');await settled();assert.equal(await p.evaluate('window.__inspectionCalls.length'),failedCalls,'inspection retried automatically');
+  await p.click('[data-save]');
+  await p.evaluate(`new Promise(resolve=>{const e=document.querySelector('[data-save]');const check=()=>{if(e.textContent==='Copy link'){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(e,{childList:true});check();})`);
+  await pointer('[data-inspect-highest]');await p.wait(s=>s.sourceReady&&s.contributions===1);await p.closeSource();
+  const savedUrl=await p.evaluate('location.href'), retainedStart=harness.requests.length;
+  harness.setMode('no-provider');const retained=await page({url:savedUrl});await retained.wait(s=>s.saved&&s.canvases===1);
+  assert.equal(await retained.evaluate(`document.querySelector('[data-selection-details]').hidden&&!document.querySelector('[data-unit-source]')`),true);
+  await retained.evaluate(`document.querySelector('[data-inspect-highest]').focus();true`);
+  for(const type of ['keyDown','keyUp'])await cdp.send('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13,...(type==='keyDown'?{text:'\r'}:{})},retained.sessionId);
+  await retained.wait(s=>s.sourceReady&&s.contributions===1);assert.equal(await retained.evaluate(`document.querySelector('[data-source-code]').textContent.includes('function choose(v)')`),true);
+  assert.deepEqual(harness.requests.slice(retainedStart).filter(r=>new URL(r.url).pathname.startsWith('/parser/')||!r.url.startsWith(origin)),[],'saved primary reacquired source or parser');
+  await shot('desktop-saved-primary-code',retained);await retained.closeSource();
+  await cdp.send('Target.closeTarget',{targetId:retained.targetId});
+  process.stdout.write('Workspace: local preservation checks\n');
   const local=await exerciseLocalBrowser({page,cdp,harness,origin,request,checked});
   const automatic=await exerciseAutomaticExclusions({page,cdp,harness,origin,request,checked});
-  await p.click('[data-open-saved]');await p.evaluate(`new Promise(resolve=>{const check=()=>{if(document.querySelectorAll('[data-saved-projects] button').length){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(document.querySelector('[data-saved-projects]'),{childList:true,subtree:true});check();})`);await pointer('[data-saved-projects] summary');await shot('desktop-saved');
+  process.stdout.write('Workspace: saved picker screenshot\n');
+  await p.click('[data-open-saved]');await settled();await shot('desktop-saved-loading');
+  process.stdout.write('Workspace saved state: '+JSON.stringify(await p.evaluate(`({open:document.querySelector('[data-saved-picker]').open,message:document.querySelector('[data-saved-message]').textContent,rows:document.querySelectorAll('[data-saved-projects] button').length})`))+'\n');
+  await p.evaluate(`new Promise((resolve,reject)=>{const check=()=>{const message=document.querySelector('[data-saved-message]').textContent;if(document.querySelectorAll('[data-saved-projects] button').length){o.disconnect();resolve(true);}else if(message!=='Loading saved investigations'){o.disconnect();reject(new Error(message));}};const o=new MutationObserver(check);o.observe(document.querySelector('[data-saved-picker]'),{childList:true,subtree:true});check();})`);await pointer('[data-saved-projects] summary');await shot('desktop-saved');
   assert.equal(await p.evaluate(`document.querySelectorAll('[data-saved-projects] details').length>=2&&[...document.querySelectorAll('[data-saved-projects] button')].every(b=>b.querySelector('small')&&b.title)`),true);
   await p.click('[data-close-saved]');
   await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'light'},{name:'prefers-reduced-motion',value:'reduce'}]},p.sessionId);await fits();await shot('desktop-light');
+  process.stdout.write('Workspace: restart and retained-source preservation checks\n');
   await restart();await reopenLocalBrowser({page,cdp,harness,checked,origin,saved:local});await reopenAutomaticExclusions({page,cdp,harness,checked,origin,request,saved:automatic});
   process.stdout.write('Workspace: long mobile source identity\n');
   harness.setMode('no-provider');
@@ -155,7 +330,7 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   assert.equal(longResult.canvases,1,JSON.stringify(longResult));
   process.stdout.write('Workspace: long city published\n');
   await long.click('[data-navigation-toggle]');await long.click('[data-analyzed-rows] button');
-  await long.wait(s=>s.units>0);await long.click('[data-navigation-toggle]');
+  await long.wait(s=>s.units>0);
   process.stdout.write('Workspace: long units ready\n');
   await long.click('[data-unit-rows] button');
   await long.wait(s=>s.sourceReady);

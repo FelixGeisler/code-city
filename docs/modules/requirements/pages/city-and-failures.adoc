@@ -207,7 +207,7 @@ The sections from Layout through Atomic lifecycle describe the active
 browser main-context presentation behavior except where a subsection is explicitly
 marked as a retained legacy semantic-publication reference. The active
 standalone publishes the successful-file inventory, shared selection, canvas,
-Reset control, compact authoritative complexity legend, and reserved raw
+Reset control, optional authoritative complexity legend, and contextual raw
 file-metric inspector. It does not mount the legacy contextual district row,
 and inventory interaction does not invoke the legacy search-triggered camera
 reveal or canvas focus. The
@@ -348,10 +348,13 @@ Initially show compact Source setup with direct Local folder/GitHub URL tabs,
 the active source input, Analyze, and the single editable Exclusions list in a
 closed native disclosure. Choosing a folder does not analyze it. Analyze hides
 setup and shows the captured project bar, actual phase progress, and Cancel.
-Change source is unavailable during analysis. After a result it opens setup in
-place of the left navigation, without changing city size or selection; opening
-it focuses the active source input. Closing restores navigation. Draft edits do
-not change the displayed investigation. Analyze submits the edited source and
+Change source is unavailable during analysis. After a result it opens setup as an
+overlay, without changing city size or selection; opening
+it focuses the active source input. Closing restores the city. Draft edits do
+not change the displayed investigation. Repository, source-tab and exclusion edits,
+and folder-picker initiation (including cancellation or denial), cancel any
+pending primary inspection authorization without discarding draft or applied
+settings. Analyze submits the edited source and
 exclusions through the existing pipeline. Invalid submission restores setup with its error.
 There is no Discard or Reanalyze control. Closing the tab ends its browser-local
 investigation; no server analysis/session cleanup action is required.
@@ -367,17 +370,25 @@ they were parsed. Preserve measured phase counts in the label. Only successful
 view publication fills the bar. Failure/cancellation ends it without fabricated
 completion. This is work progress, not equal-duration work or an ETA.
 
-The completed desktop is a viewport-height workspace: independently scrollable
-left Files/Directories navigation, primary center city, and a reserved right
-metrics/unit inspector. Reserve the right column even with no selection. File,
-directory, clear-selection and source-setup toggles never resize the canvas or
-change its camera, bitmap, geometry or GPU buffers. Close details uses the same
-guarded clear-selection action as the canvas. The app bar and project/capture
-controls stay reachable; full capture identity is available in a disclosure.
+The completed viewport-height workspace shows the full city and one primary
+action, `Inspect highest complexity`. No navigation inventory or empty details
+column is visible or keyboard reachable by default. `Find a file` opens the
+secondary, scrollable Files/Directories overlay on every screen size. Opening
+it or switching its tabs does not select anything or request units/source.
+Close and Escape hide it and return focus to Find a file. Search, sort and
+directory location persist within the investigation. Selecting a row shows
+contextual metrics/units in a dismissible overlay, not a reserved column.
+Close details uses the same guarded clear-selection action as the canvas.
+While lookup is open, selected details are hidden and cannot receive keyboard
+focus; closing lookup restores them without clearing selection. Details fit
+inside the viewport below the city tools, with scroll access to the last metric
+and an uncovered Close details control; they need not occupy half the screen.
 
-On narrow screens navigation is a reachable toggle panel and selected details
-are a scrollable bottom sheet with explicit Close. Both overlay reserved city
-space without resizing it. At 390px there is no horizontal page overflow, and
+File, directory, clear-selection, navigation, legend and source-setup toggles
+never resize or move the canvas or change its camera, bitmap, geometry or GPU
+buffers. Save and Reset remain secondary explicit controls. The app bar and
+project/capture controls stay reachable; full capture identity and the Color key
+are disclosures. At 390px there is no horizontal page overflow, and
 native source/saved dialogs remain in the top layer. Respect OS light/dark
 preference, visible keyboard focus and reduced motion.
 Use primary drag to orbit, secondary drag to pan, wheel zoom, click/tap selection,
@@ -390,7 +401,7 @@ failed-file count, but no city or successful-file navigation.
 
 == Successful-file inventory and shared selection
 
-A committed standalone city initially shows the Files navigation tab and exact
+Opening Find a file initially shows the Files navigation tab and exact
 file count. It contains every successful inspection fact as one semantic list
 item with a native `button type="button"`. Each button shows the exact
 canonical path and raw `S: <value>`, `U: <value>`, and `M: <value>`, and exposes
@@ -410,8 +421,8 @@ selected raw metric descending, then canonical path ascending with unsigned
 UTF-8 comparison. Filtering and sorting never reorder or rewrite geometry,
 inspection, instance buffers, picking identity, or canvas keyboard traversal.
 The complete list has no cap below the existing 4,000-module envelope and uses
-native vertical overflow in the independently scrolling left navigation.
-Directories switches to the existing hierarchy and explicitly selects root;
+native vertical overflow in the navigation overlay.
+Directories switches to the existing hierarchy without selecting root;
 file activation retains that directory location and its list rows. Failed
 files are a separate disclosure above the workspace, labelled
 `N files not analyzed` (singular for one file).
@@ -438,7 +449,7 @@ failure, clears the complete successful presentation as `M1-PRES-1` and
 disposes its presenter once through an idempotent boundary.
 
 List activation changes only the shared canonical-index selection. It preserves
-hover, leaves focus on the native row button, updates the same building and
+hover, closes file lookup and moves its focus into visible details, updates the same building and
 metric inspector, and does not call camera reveal, canvas focus, Reset, camera
 framing, or animation. Selecting an already selected row retains selection.
 City pointer activation and Arrow/Home/End keyboard selection use the same
@@ -838,8 +849,8 @@ labelled exactly “Complexity: low → high”, from `METRIC_PALETTE_LEGEND`. I
 increasing `M` order with visible labels `M = 0`, `M = 1`, `M = 2–3`, `M =
 4–7`, `M = 8–15`, and `M = 16+`; these colours communicate complexity, not
 health, correctness, or safety. It commits with the successful presentation and
-is absent after rollback, failure or disposal. The toolbar is outside the
-WebGL host; legend wrapping cannot change on selection or panel toggles.
+is absent after rollback, failure or disposal. The toolbar overlays the
+WebGL host; opening Color key or wrapping its legend cannot resize the canvas.
 
 Visual quality is an M2 release requirement: the city remains the visual focus;
 controls look intentional and interaction is predictable; surface focus
