@@ -69,7 +69,8 @@ A fresh Analyze enumerates the folder again; files created after an enumeration
 are not magically part of that captured set. Never manufacture a GitHub URL,
 Git commit, remote blob identity or provenance certification claim.
 
-Show the local folder name and `Working-tree capture` identity, not `Commit`.
+Show the local folder name; its native title gives `Working-tree capture: <full ID>`,
+not `Commit`. No capture-identity disclosure or hash row is shown.
 Before the capture ID exists, correlate progress by local session/generation;
 afterwards use the actual content identity. No invented percentage, latency,
 physical-memory or whole-checkout-capacity promise is added. Explicit Cancel

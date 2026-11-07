@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { exerciseLocalBrowser, reopenLocalBrowser } from './standalone-local-browser-scenarios.mjs';
 import { exerciseAutomaticExclusions, reopenAutomaticExclusions } from './standalone-automatic-exclusion-scenarios.mjs';
+import { FIXTURE_REVISION } from './standalone-browser-provider-harness.mjs';
 
 /** Contextual details are bounded overlays, not the former half-height sheet. */
 export async function assertContextualDetailsReachable(p) {
@@ -24,7 +25,7 @@ export async function assertContextualDetailsReachable(p) {
 export async function exerciseWorkspace({page,cdp,harness,origin,request,checked,evidenceDirectory,restart,expectEmpty=true}) {
   assert.ok(evidenceDirectory, 'Workspace evidence needs an explicit output directory');
   await mkdir(evidenceDirectory,{recursive:true});
-  const p=await page(); const proofs=[];
+  const p=await page(); const proofs=[],headerProof=[];
   await cdp.send('Page.bringToFront',{},p.sessionId);
   const settled=()=>p.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
   const shot=async (name,target=p)=>{await target.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');const clip=await target.evaluate('({x:0,y:0,width:innerWidth,height:innerHeight,scale:1})');const {data}=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,clip},target.sessionId);await writeFile(path.join(evidenceDirectory,name+'.png'),Buffer.from(data,'base64'));};
@@ -57,6 +58,21 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await p.submit('invalid');await p.wait(s=>s.feedback==='Invalid input');assert.equal((await p.snapshot()).setup,true);
   await run('districts',s=>s.canvases===1&&s.analyzed===5);await settled();await fits();await shot('desktop-completed');
   const initial=await geometry();
+  assert.equal((await p.snapshot()).sourceIdentity,'Commit: '+FIXTURE_REVISION);
+  const headerState=()=>p.evaluate(`({name:document.querySelector('[data-repository]').textContent,title:document.querySelector('[data-repository]').title,removed:document.querySelectorAll('[data-origin-identity],[data-origin-label],[data-commit],[data-investigation] output').length,links:document.querySelectorAll('[data-investigation] a,[data-save-status] a').length,status:document.querySelector('[data-save-status]').textContent,time:document.querySelector('[data-save-status]').title,url:location.href})`);
+  const headerWork=()=>p.evaluate(`({calls:window.__inspectionCalls.length,matrices:window.__render.matrices.length,frames:window.__render.frames.length,uploads:window.__render.uploads})`);
+  const beforeTitle=await geometry(),titleWork=await headerWork(),titleNetwork=harness.requests.length,titleEvents=harness.events.length;
+  for(const [width,height] of [[1365,900],[390,844]]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<800},p.sessionId);await settled();
+    const before=await geometry(),work=await headerWork();
+    const point=await p.evaluate(`(()=>{const r=document.querySelector('[data-repository]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',...point},p.sessionId);await settled();
+    const state=await headerState();assert.equal(state.title,'Commit: '+FIXTURE_REVISION);assert.equal(state.removed,0);assert.equal(state.links,0);assert.equal(state.status,'');assert.equal(state.time,'');
+    assert.deepEqual(await geometry(),before,'project native title hover changed canvas/camera');assert.deepEqual(await headerWork(),work,'project native title hover caused work');
+    headerProof.push({width,height,hover:state});await shot('header-default-'+width);
+  }
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await settled();
+  assert.deepEqual(await geometry(),beforeTitle);assert.equal((await headerWork()).calls,titleWork.calls);assert.equal(harness.requests.length,titleNetwork);assert.equal(harness.events.length,titleEvents,'title hover caused worker traffic');
   // Real hover, resolved browser colors, and WCAG luminance in each product theme.
   const hoverProof=[];
   const hubPalette={light:{page:'#efefef',surface:'#f5f5f5',raised:'#e7e7e7',navigation:'#f5f5f5',header:'#004696',accent:'#1976d2'},dark:{page:'#1a1a1a',surface:'#2d2d2d',raised:'#262626',navigation:'#212121',header:'#0b1a2d',accent:'#90caf9'}};
@@ -442,8 +458,24 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await p.click('[data-save]');
   await p.evaluate(`new Promise(resolve=>{const e=document.querySelector('[data-save]');const check=()=>{if(e.textContent==='Copy link'){o.disconnect();resolve(true);}};const o=new MutationObserver(check);o.observe(e,{childList:true});check();})`);
   await pointer('[data-inspect-highest]');await p.wait(s=>s.sourceReady&&s.contributions===1);await p.closeSource();
-  const savedUrl=await p.evaluate('location.href'), retainedStart=harness.requests.length;
+  const savedUrl=await p.evaluate('location.href');
+  const savedId=new URL(savedUrl).pathname.split('/').at(-1);
+  assert.match(savedId,/^[A-Za-z0-9_-]{43}$/u);
+  const recordResponse=await checked(request(origin,'/api/investigations/'+savedId+'/record'));assert.equal(recordResponse.status,200);
+  const savedRecord=JSON.parse(recordResponse.body.toString('utf8'));
+  const savedHeader=await headerState();assert.equal(savedHeader.status,'Saved');assert.equal(savedHeader.time,'Saved '+savedRecord.savedAt);assert.equal(savedHeader.title,'Commit: '+savedRecord.revision);assert.equal(savedHeader.links,0);assert.equal(savedHeader.removed,0);
+  const savedNetwork=harness.requests.length,savedWork=await headerWork();
+  await p.click('[data-save-status]');assert.equal(await p.evaluate('location.href'),savedUrl,'plain Saved status navigated');
+  // Observe the real Copy link handler without changing the desktop clipboard.
+  const copied=await p.evaluate(`(async()=>{const clipboard=navigator.clipboard,own=Object.getOwnPropertyDescriptor(clipboard,'writeText');let copied;Object.defineProperty(clipboard,'writeText',{configurable:true,value:async value=>{copied=value;}});try{document.querySelector('[data-save]').click();await Promise.resolve();return copied;}finally{if(own)Object.defineProperty(clipboard,'writeText',own);else delete clipboard.writeText;}})()`);
+  assert.equal(copied,savedUrl,'Copy link did not use canonical current location');assert.equal(harness.requests.length,savedNetwork);assert.deepEqual(await headerWork(),savedWork);
+  for(const [width,height] of [[1365,900],[390,844]]){await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<800},p.sessionId);await settled();await fits();headerProof.push({width,height,saved:await headerState(),copied});await shot('header-saved-'+width);}
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1365,height:900,deviceScaleFactor:1,mobile:false},p.sessionId);await settled();
+  const retainedStart=harness.requests.length;
   harness.setMode('no-provider');const retained=await page({url:savedUrl});await retained.wait(s=>s.saved&&s.canvases===1);
+  assert.equal((await retained.snapshot()).sourceIdentity,'Commit: '+savedRecord.revision);
+  assert.equal(await retained.evaluate(`document.querySelector('[data-save-status]').title`),'Saved '+savedRecord.savedAt);
+  assert.equal(await retained.evaluate(`document.querySelector('[data-save-status] a')`),null);
   assert.equal(await retained.evaluate(`document.querySelector('[data-selection-details]').hidden&&!document.querySelector('[data-unit-source]')`),true);
   await retained.evaluate(`document.querySelector('[data-inspect-highest]').focus();true`);
   for(const type of ['keyDown','keyUp'])await cdp.send('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13,...(type==='keyDown'?{text:'\r'}:{})},retained.sessionId);
@@ -451,6 +483,12 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   assert.deepEqual(harness.requests.slice(retainedStart).filter(r=>new URL(r.url).pathname.startsWith('/parser/')||!r.url.startsWith(origin)),[],'saved primary reacquired source or parser');
   await shot('desktop-saved-primary-code',retained);await retained.closeSource();
   await cdp.send('Target.closeTarget',{targetId:retained.targetId});
+  const replacementStart=harness.events.length;harness.setMode('revision-held');await p.submit();
+  await checked(harness.waitFor(e=>harness.events.indexOf(e)>=replacementStart&&e.kind==='revision-held'));
+  const clearedHeader=await headerState();assert.equal(clearedHeader.title,'');assert.equal(clearedHeader.status,'');assert.equal(clearedHeader.time,'');assert.equal((await p.snapshot()).saved,false);assert.equal(await p.evaluate('location.pathname'),'/');
+  await p.click('[data-status] button');await p.wait(s=>s.status==='Cancelled');assert.equal((await p.snapshot()).sourceIdentity,'');
+  headerProof.push({replacement:clearedHeader});
+  await run('success',s=>s.canvases===1&&s.analyzed===5);
   process.stdout.write('Workspace: local preservation checks\n');
   const local=await exerciseLocalBrowser({page,cdp,harness,origin,request,checked});
   const automatic=await exerciseAutomaticExclusions({page,cdp,harness,origin,request,checked});
@@ -459,7 +497,13 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   process.stdout.write('Workspace saved state: '+JSON.stringify(await p.evaluate(`({open:document.querySelector('[data-saved-picker]').open,message:document.querySelector('[data-saved-message]').textContent,rows:document.querySelectorAll('[data-saved-projects] button').length})`))+'\n');
   await p.evaluate(`new Promise((resolve,reject)=>{const check=()=>{const message=document.querySelector('[data-saved-message]').textContent;if(document.querySelectorAll('[data-saved-projects] button').length){o.disconnect();resolve(true);}else if(message!=='Loading saved investigations'){o.disconnect();reject(new Error(message));}};const o=new MutationObserver(check);o.observe(document.querySelector('[data-saved-picker]'),{childList:true,subtree:true});check();})`);await pointer('[data-saved-projects] summary');await shot('desktop-saved');
   assert.equal(await p.evaluate(`document.querySelectorAll('[data-saved-projects] details').length>=2&&[...document.querySelectorAll('[data-saved-projects] button')].every(b=>b.querySelector('small')&&b.title)`),true);
-  await p.click('[data-close-saved]');
+  const pickerTitle=`${savedRecord.repository} · ${savedRecord.ref} · ${savedRecord.revision} · ${savedRecord.savedAt}`;
+  assert.equal(await p.evaluate(`[...document.querySelectorAll('[data-saved-projects] button')].filter(b=>b.title===${JSON.stringify(pickerTitle)}).length`),1,'saved picker lost full original metadata');
+  const pickerStart=harness.requests.length;harness.setMode('no-provider');
+  await p.evaluate(`[...document.querySelectorAll('[data-saved-projects] button')].find(b=>b.title===${JSON.stringify(pickerTitle)}).click();true`);
+  await p.wait(s=>s.saved&&s.canvases===1);assert.equal(await p.evaluate('location.href'),savedUrl);assert.equal((await p.snapshot()).sourceIdentity,'Commit: '+savedRecord.revision);
+  assert.equal((await headerState()).time,'Saved '+savedRecord.savedAt);
+  assert.deepEqual(harness.requests.slice(pickerStart).filter(r=>new URL(r.url).pathname.startsWith('/parser/')||!r.url.startsWith(origin)),[],'picker reopen reacquired or parsed source');
   await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'light'},{name:'prefers-reduced-motion',value:'reduce'}]},p.sessionId);await fits();await shot('desktop-light');
   process.stdout.write('Workspace: restart and retained-source preservation checks\n');
   await restart();await reopenLocalBrowser({page,cdp,harness,checked,origin,saved:local});await reopenAutomaticExclusions({page,cdp,harness,checked,origin,request,saved:automatic});
@@ -486,4 +530,5 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await shot('mobile-long-path',long);await long.closeSource();
   process.stdout.write('Workspace: long source closed\n');
   await writeFile(path.join(evidenceDirectory,'workspace-dom-proof.json'),JSON.stringify(proofs,null,2)+'\n');
+  await writeFile(path.join(evidenceDirectory,'header-proof.json'),JSON.stringify(headerProof,null,2)+'\n');
 }

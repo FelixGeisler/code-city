@@ -18,7 +18,7 @@ import { exerciseWorkspace, assertContextualDetailsReachable } from "./standalon
 
 const WATCHDOG_MS = 600_000;
 const REPOSITORY = "https://github.com/fixture/standalone";
-const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:document.querySelector('[data-commit]')?.textContent??'',canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,units:document.querySelectorAll('[data-unit-rows] li').length,unitMessage:document.querySelector('[data-units] > [role=status]')?.textContent??'',sourceOpen:document.querySelector('[data-unit-source]')?.open??false,sourceReady:document.querySelectorAll('[data-source-code] [data-source-line]').length>0,sourceRange:document.querySelector('[data-source-range]')?.textContent??'',sourceMessage:document.querySelector('[data-source-body] [role=status]')?.textContent??'',contributionMessage:document.querySelector('[data-owned-contributions] [role=status]')?.textContent??'',contributions:document.querySelectorAll('[data-contribution-rows] li').length,contributionStart:document.querySelector('[data-contribution-rows]')?.start??0,saved:document.querySelector('[data-save]')?.textContent==='Copy link',saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,filesVisible:document.querySelector('[data-analyzed]')? document.querySelector('[data-analyzed]').checkVisibility() : null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
+const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:(document.querySelector('[data-repository]')?.title??'').replace(/^(?:Commit|Working-tree capture): /u,''),canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,units:document.querySelectorAll('[data-unit-rows] li').length,unitMessage:document.querySelector('[data-units] > [role=status]')?.textContent??'',sourceOpen:document.querySelector('[data-unit-source]')?.open??false,sourceReady:document.querySelectorAll('[data-source-code] [data-source-line]').length>0,sourceRange:document.querySelector('[data-source-range]')?.textContent??'',sourceMessage:document.querySelector('[data-source-body] [role=status]')?.textContent??'',contributionMessage:document.querySelector('[data-owned-contributions] [role=status]')?.textContent??'',contributions:document.querySelectorAll('[data-contribution-rows] li').length,contributionStart:document.querySelector('[data-contribution-rows]')?.start??0,saved:document.querySelector('[data-save]')?.textContent==='Copy link',saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,sourceIdentity:document.querySelector('[data-repository]').title,filesVisible:document.querySelector('[data-analyzed]')? document.querySelector('[data-analyzed]').checkVisibility() : null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
 const renderObservation = `(() => {
  window.__render={matrices:[],uploads:0,integers:{},frames:[],capturePixels:false,progress:[]};
  const progressIds=new WeakMap();let nextProgress=0;
@@ -161,11 +161,14 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
       await p.submit();
       const result = await p.wait(predicate);
       await checked(harness.waitFor(e => harness.events.indexOf(e) >= start && e.kind === "event" && ["ANALYSIS_SUCCEEDED", "ANALYSIS_ALL_FILES_FAILED", "ANALYSIS_FAILED"].includes(e.value.type)));
+      const terminal = harness.events.slice(start).find(e => e.kind === 'event' && ['ANALYSIS_SUCCEEDED','ANALYSIS_ALL_FILES_FAILED','ANALYSIS_FAILED'].includes(e.value.type)).value;
+      assert.equal(result.sourceIdentity, terminal.revision ? 'Commit: '+terminal.revision : '', 'title must track the actual selected revision, including failures before selection');
       process.stdout.write(`Browser evidence complete: ${mode}\n`);
       return { result, events: harness.events.slice(start), start };
     }
     let ordinary = await run("success", s => s.canvases === 1 && s.analyzed === 5 && s.controls);
     assert.equal(ordinary.result.commit, FIXTURE_REVISION);
+    assert.equal(ordinary.result.sourceIdentity, 'Commit: '+FIXTURE_REVISION);
     const success = ordinary.events.find(e => e.kind === "event" && e.value.type === "ANALYSIS_SUCCEEDED").value;
     assert.deepEqual(success.city.inspection.map(({ canonicalPath,S,U,M })=>({canonicalPath,S,U,M})), [
       {canonicalPath:"a.js",S:1,U:2,M:2}, {canonicalPath:"b.ts",S:1,U:1,M:1},
@@ -360,6 +363,8 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
       await p.click("[data-save]");
       const saved = await p.wait(s => s.saved || s.saveMessage.includes("unchanged"));
       assert.ok(saved.saved, saved.saveMessage);
+      assert.equal(saved.saveMessage, 'Saved');
+      assert.equal(await p.evaluate(`document.querySelector('[data-save-status] a')`), null);
       return p.evaluate("location.href");
     }
     const savedDistrictFingerprint = await p.evaluate("window.__cityFingerprint");
@@ -451,6 +456,7 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
       const barrier = await checked(harness.waitFor(e => harness.events.indexOf(e) >= start && e.kind === mode));
       await p.click("[data-status] button");
       await p.wait(s => s.status === "Cancelled" && s.canvases === 0 && s.progress === null);
+      assert.equal((await p.snapshot()).sourceIdentity, '');
       await checked(harness.waitFor(e => e.kind === "detached" && e.sessionId === barrier.sessionId));
     }
     start = harness.events.length;
@@ -611,6 +617,7 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     const { browserContextId } = await checked(cdp.send("Target.createBrowserContext"));
     const reopened = await page({ url: maximumSavedUrl, browserContextId });
     await reopened.wait(s => s.canvases === 1 && s.analyzed === 4000 && s.saved);
+    assert.equal((await reopened.snapshot()).sourceIdentity, 'Commit: '+FIXTURE_REVISION);
     assert.ok(await reopened.evaluate("window.__cityFingerprint") === maximumFingerprint, "Restart/fresh-context restoration changed the saved city or metrics");
     assert.ok(harness.requests.slice(restoreStart).every(item => new URL(item.url).origin === origin && !new URL(item.url).pathname.startsWith('/parser/')), "Reopen acquired or parsed source");
     await checked(cdp.send("Target.closeTarget", { targetId: reopened.targetId }));

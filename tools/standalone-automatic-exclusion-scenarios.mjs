@@ -110,6 +110,7 @@ async function save({p,harness,origin,request,checked,expected,paths,markers}) {
   assertLocalRequests(harness.requests.slice(start),origin,{expectedPosts:1});
   const savedUrl=await p.evaluate('location.href');
   const snapshot=await readSnapshot({origin,request,checked,savedUrl,expected,paths,markers});
+  assert.equal((await p.snapshot()).sourceIdentity, 'Working-tree capture: '+snapshot.header.origin.captureId);
   return {savedUrl,fingerprint:await p.evaluate('window.__cityFingerprint'),captureId:(await p.snapshot()).commit,expected,paths,markers,...snapshot};
 }
 
@@ -127,6 +128,8 @@ export async function exerciseAutomaticExclusions({page,cdp,harness,origin,reque
   const initial=await terminal({p,harness,checked,start,paths:localPaths,label:'local default'});
   await assertApplied(harness,start,defaultPolicy);await openSetup(p);await assertRows(p,defaultDetected,[],initialManual);
   const initialIdentity=(await p.snapshot()).commit;
+  assert.match(initialIdentity,/^[0-9a-f]{64}$/u);
+  assert.equal((await p.snapshot()).sourceIdentity,'Working-tree capture: '+initialIdentity);
   start=harness.events.length;await analyze(p);
   await terminal({p,harness,checked,start,paths:localPaths,label:'local identical default rerun'});
   await assertApplied(harness,start,defaultPolicy);
@@ -189,6 +192,7 @@ export async function exerciseAutomaticExclusions({page,cdp,harness,origin,reque
   assert.equal(failed.value.category,'No supported modules');
   const empty=await all.wait(s=>s.progress===null&&s.status.includes('No supported'));
   assert.equal(empty.canvases,0);assert.equal(empty.setup,true);assert.equal(empty.analyzed,0);assert.equal(empty.failed,0);
+  assert.equal(empty.sourceIdentity,'','Failure before capture invented an identity');
   assert.equal(await all.evaluate(`document.querySelector('[data-exclusions]').open&&document.querySelector(${JSON.stringify(editor)}).checkVisibility()`),true);
   assert.equal(harness.events.slice(start).filter(e=>e.kind==='local-read').length,0);
   await assertRows(all,[[excludedRoot,'cache:.vite']]);
@@ -243,6 +247,7 @@ export async function reopenAutomaticExclusions({page,cdp,harness,origin,request
     await p.wait(s=>s.canvases===1&&s.saved&&s.progress===null);
     assert.equal((await p.snapshot()).analyzed,record.paths.length);
     assert.equal((await p.snapshot()).commit,record.captureId);assert.equal(await p.evaluate('window.__cityFingerprint'),record.fingerprint);
+    assert.equal((await p.snapshot()).sourceIdentity,'Working-tree capture: '+record.captureId);
     assert.equal(await p.evaluate(`document.querySelector('[data-folder-name]').textContent`),'No folder selected');
     await openSetup(p);await assertRows(p,record.expected.detected,record.expected.included,record.expected.manual);
     assert.deepEqual(await rows(p),record.expected.effective);

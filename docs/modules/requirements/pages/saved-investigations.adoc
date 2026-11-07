@@ -17,9 +17,12 @@ saved time. Working-tree entries show capture identity and saved time, never a
 fabricated GitHub commit. Different sources, captures and commits coexist under
 random IDs; a name or ref is not an overwrite key. Rows separate ref/capture
 labels from short revision and exact UTC metadata. Full source/ref/revision/time
-remain reachable through the row's native tooltip and the reopened capture
-identity. The saved status uses a short descriptive link with the actual saved
-URL as its target; Copy link remains explicit. Loading, empty and error messages
+remain reachable through the row's native tooltip; the reopened project-name
+native title retains the full commit or working-tree capture ID. The saved
+status is plain `Saved`, not a link back to the current snapshot. Its native
+title gives the exact UTC saved time. Copy link remains explicit and copies the
+current canonical saved address. Replacing or clearing the result clears stale
+saved status and time. Loading, empty and error messages
 stay local to the picker, with Close always available.
 
 A saved URL restores city, outcomes, metrics, unit/contribution evidence and exact

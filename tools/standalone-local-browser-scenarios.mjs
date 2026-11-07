@@ -70,7 +70,7 @@ export async function exerciseLocalBrowser({page,cdp,harness,origin,request,chec
   await submit(p); await healthy(p);
   const captureId=(await p.snapshot()).commit;
   assert.match(captureId,/^[0-9a-f]{64}$/u);
-  assert.equal(await p.evaluate(`document.querySelector('[data-origin-label]').textContent`),'Working-tree capture');
+  assert.equal((await p.snapshot()).sourceIdentity,'Working-tree capture: '+captureId);
   assert.equal((await p.snapshot()).repository,'synthetic-working-tree');
   assert.deepEqual(await p.evaluate(`[...document.querySelectorAll('[data-analyzed-rows] bdi')].map(node=>node.textContent).sort()`),['ignored.js','src/View.cs','src/app.ts','src/view.jsx','untracked.js']);
   const fingerprint=await p.evaluate('window.__cityFingerprint');
@@ -108,6 +108,7 @@ export async function exerciseLocalBrowser({page,cdp,harness,origin,request,chec
   const barrierStart=harness.events.length;harness.setMode('parser-held');await submit(p);
   const barrier=await checked(harness.waitFor(event=>harness.events.indexOf(event)>=barrierStart&&event.kind==='parser-held'));
   await p.click('[data-status] button');await p.wait(s=>s.status==='Cancelled'&&s.canvases===0);
+  assert.equal((await p.snapshot()).sourceIdentity,'','Cancellation retained a stale capture title');
   await checked(harness.waitFor(event=>event.kind==='detached'&&event.sessionId===barrier.sessionId));
   const replacementStart=harness.events.length;harness.setMode('parser-held');await submit(p);
   const replaced=await checked(harness.waitFor(event=>harness.events.indexOf(event)>=replacementStart&&event.kind==='parser-held'));
@@ -125,7 +126,7 @@ export async function reopenLocalBrowser({page,cdp,harness,checked,origin,saved}
   const p=await page({url:saved.savedUrl,browserContextId});
   await p.wait(s=>s.canvases===1&&s.saved);
   assert.equal((await p.snapshot()).commit,saved.captureId);assert.equal(await p.evaluate('window.__cityFingerprint'),saved.fingerprint);
-  assert.equal(await p.evaluate(`document.querySelector('[data-origin-label]').textContent`),'Working-tree capture');
+  assert.equal((await p.snapshot()).sourceIdentity,'Working-tree capture: '+saved.captureId);
   assert.equal(await p.evaluate(`document.querySelector('[data-folder-name]').textContent`),'No folder selected');
   assert.ok(harness.requests.slice(start).every(item=>new URL(item.url).origin===origin&&!new URL(item.url).pathname.startsWith('/parser/')),'Reopen acquired or analyzed source');
   await sourceContains(p,saved.marker);

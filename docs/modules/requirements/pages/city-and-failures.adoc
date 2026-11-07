@@ -128,7 +128,7 @@ expiry.
 Failed Save leaves the temporary investigation usable. Reanalysis never
 overwrites a snapshot. The picker groups entries by `<owner>/<repository>`;
 rows show requested branch/tag, short commit and saved UTC time. Opening an
-entry shows the full commit.
+entry makes the full commit available in the project-name native title.
 
 [[CC-CORE-SAVE-04]]
 === Shared inventory and retained source
@@ -397,8 +397,12 @@ closes on its first Escape. Only the hint's own keyboard-focused button consumes
 Escape to dismiss its hint. Source setup covers overlapping city tools and hints;
 hints remain above lookup when setup is closed. Hints do not take focus or repeat
 the accessible name to assistive technology. The app bar and
-project/capture controls stay reachable; full capture identity and the Color key
-are disclosures. At 390px there is no horizontal page overflow, and
+project name and actions stay reachable. The project-name native title gives
+`Commit: <full revision>` or `Working-tree capture: <full ID>` for the actual
+selected origin, without a disclosure or hash row. Draft source edits do not
+change it; clear, cancellation and failures before selection remove it, while
+failures after selection retain the corresponding identity. Saved captures
+restore their original title. The Color key remains a disclosure. At 390px there is no horizontal page overflow, and
 native source/saved dialogs remain in the top layer. Respect OS light/dark
 preference, visible keyboard focus and reduced motion.
 

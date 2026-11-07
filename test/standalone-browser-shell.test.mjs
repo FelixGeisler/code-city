@@ -6,6 +6,8 @@ import test from "node:test";
 class Element extends EventTarget {
   hidden = false; disabled = false; value = ""; textContent = ""; children = []; attributes = new Map(); open = false; dataset = {};
   constructor(tag = 'div') { super(); this.tagName = tag.toUpperCase(); }
+  get title() { return this.getAttribute('title') ?? ''; }
+  set title(value) { this.setAttribute('title', value); }
   getAttribute(key) { return this.attributes.get(key) ?? null; }
   getClientRects() { return []; }
   append(...children) { this.children.push(...children); }
@@ -20,9 +22,12 @@ class Element extends EventTarget {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 let epoch = 0;
-async function fixture(picker, realInspection = false) {
+async function fixture(picker, realInspection = false, realController = false) {
   const elements = new Map();
-  const node = selector => { if (!elements.has(selector)) elements.set(selector, new Element()); return elements.get(selector); };
+  const node = selector => {
+    assert.doesNotMatch(selector, /data-(?:commit|origin-label|origin-identity)/u, 'removed identity nodes are not a supported surface');
+    if (!elements.has(selector)) elements.set(selector, new Element()); return elements.get(selector);
+  };
   const state = { calls: [], view: undefined, restore: undefined, clears: 0, records: [] };
   const controller = {
     start() { state.calls.push(["start"]); },
@@ -34,19 +39,29 @@ async function fixture(picker, realInspection = false) {
     dispose() {},
   };
   state.controller = controller;
+  state.transport = { open(observer) {
+    state.observer = observer;
+    return { ready: Promise.resolve({kind:'opened',sessionId:'A'.repeat(43)}),
+      analyze(command) { state.command=command; return Promise.resolve(202); },
+      cancel(command) { observer.event({type:'ANALYSIS_CANCELLED',...command}); return Promise.resolve(204); },
+      save() { return controller.save(); }, close() {} };
+  } };
   const originals = new Map();
   const set = (key, value) => { originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { configurable: true, writable: true, value }); };
   set("__shellFixture", state);
   set("document", Object.assign(new EventTarget(), { querySelector: node, createElement: tag => new Element(tag), createElementNS: (namespace, tag) => Object.assign(new Element(tag), {namespaceURI: namespace}) }));
   const window = new EventTarget(); window.isSecureContext = true; window.showDirectoryPicker = picker;
   set("window", window);
-  set("history", { replaceState() {} });
-  set("location", { pathname: "/", origin: "http://localhost" });
+  set("location", { pathname: "/", origin: "http://localhost", href: "http://localhost/" });
+  set("history", { replaceState(_state, _unused, url) { location.pathname=url; location.href=location.origin+url; } });
+  set("navigator", { clipboard: { writeText(value) { state.copied=value; return Promise.resolve(); } } });
   set("fetch", () => { throw new Error("Shell must not upload source"); });
   const hooks = registerHooks({ resolve(specifier, context, next) {
     if (context.parentURL?.includes("standalone-browser-main.ts")) {
       const mocks = {
-        "./standalone-browser-controller": "export function createStandaloneBrowserController(transport,view) { globalThis.__shellFixture.view = view; return globalThis.__shellFixture.controller; }",
+        "./standalone-browser-controller": realController
+          ? `import {createStandaloneBrowserController as create} from ${JSON.stringify(new URL('../src/edge/standalone-browser-controller.ts',import.meta.url).href)}; export function createStandaloneBrowserController(_transport,view) { const state=globalThis.__shellFixture;state.view=view;return state.controller=create(state.transport,view); }`
+          : "export function createStandaloneBrowserController(transport,view) { globalThis.__shellFixture.view = view; return globalThis.__shellFixture.controller; }",
         "./browser-worker-transport": "export function createBrowserWorkerTransport(factory,restore) { globalThis.__shellFixture.restore = restore; return {}; }",
         "./standalone-presentation-session": realInspection
           ? "export function createStandalonePresentationCoordinator(options) { return globalThis.__shellFixture.createPresentation(options); }"
@@ -131,7 +146,8 @@ test("shell defaults to local-first setup with separate choose/Analyze and expli
   assert.match(html, /type="submit">Analyze/u);
   assert.match(html, /data-github-setup hidden/u);
   assert.match(html, /<div data-workspace>[\s\S]*<form[\s\S]*<section data-presentation hidden><\/section>[\s\S]*<\/div>/u);
-  assert.match(html, /<details data-origin-identity><summary>Capture identity<\/summary>/u);
+  assert.doesNotMatch(html, /data-origin-|data-commit|Capture identity|<output/u);
+  assert.match(html, /<header data-investigation hidden>\s*<bdi data-repository dir="auto"><\/bdi>\s*<div data-investigation-controls>/u);
   assert.ok(html.indexOf('data-investigation hidden') < html.indexOf('data-workspace'), 'project controls precede workspace in keyboard order');
   assert.match(html, /Save uploads code and results\. Everyone with access can read them\./u);
 });
@@ -149,7 +165,7 @@ test("read-only selection does not Analyze, read sources, upload or clear an exi
     assert.deepEqual(f.state.calls, [["start"]]); assert.equal(f.state.clears, clears);
     f.submit();
     assert.deepEqual(f.state.calls.at(-1), ["local", root, "Synthetic", "", []]);
-    assert.equal(f.node("[data-origin-label]").textContent, "Working-tree capture");
+    assert.equal(f.node('[data-repository]').title, '', 'starting a capture must not invent its identity');
     assert.equal(f.state.calls.some(([name]) => name === "save"), false);
   } finally { f.close(); }
 });
@@ -219,7 +235,7 @@ test("restoring local origin never reopens the folder and groups saved local/Git
     f.state.view.working(()=>{}); // saved opening binds callbacks to the current source epoch
     f.state.restore({ kind: "working-tree", name: "same", captureId: record.revision }, record, {version:'code-city-auto-exclusions-1',manual:[],included:[],detected:[],effective:[]});
     assert.equal(picked, 1); assert.equal(f.node("input[name=repository]").value, "");
-    assert.equal(f.node("[data-origin-label]").textContent, "Working-tree capture");
+    assert.equal(f.node('[data-repository]').title, 'Working-tree capture: '+record.revision);
     f.submit(); assert.deepEqual(f.state.calls, [["start"]]);
     assert.match(f.node("[data-folder-status]").textContent, /Choose a folder/u);
     f.state.records = [record, { ...record, kind: "github", ref: "main" }];
@@ -231,10 +247,70 @@ test("restoring local origin never reopens the folder and groups saved local/Git
       assert.match(button.children[1].textContent, /cccccccccccc · now/u);
       assert.ok(button.title.includes(record.revision), 'full identity remains reachable');
     }
-    const savedLink=f.node('[data-save-status]').children[1];
-    assert.equal(savedLink.textContent,'Saved investigation');
-    assert.equal(savedLink.href,'http://localhost/saved/'+record.id);
+    assert.equal(f.node('[data-save-status]').textContent,'Saved');
+    assert.equal(f.node('[data-save-status]').title,'Saved now');
+    assert.equal(f.node('[data-save-status]').children.length,0,'Saved is text, not a reload-to-self anchor');
+    assert.equal(location.href,'http://localhost/saved/'+record.id);
+    f.click('[data-save]');assert.equal(f.state.copied,location.href);
   } finally { f.close(); }
+});
+
+test('real controller binds only the current selected origin to the project title across failures, cancel, clear and drafts', async()=>{
+  const f=await fixture(async()=>({name:'Synthetic'}),false,true);
+  const sha='a'.repeat(40), id='c'.repeat(64), title=()=>f.node('[data-repository]').title;
+  const send=(type,fields={})=>f.state.observer.event({type,...f.state.command,...fields});
+  const github=async()=>{f.click('[data-source-github]');f.node('input[name=repository]').value='https://github.com/fixture/repo';f.submit();await flush();};
+  try {
+    await github();assert.equal(title(),'');
+    send('REVISION_SELECTED',{revision:sha});assert.equal(title(),'Commit: '+sha);
+    f.node('input[name=repository]').value='https://github.com/fixture/draft';f.node('input[name=repository]').dispatchEvent(new Event('input'));
+    f.click('[data-source-local]');assert.equal(title(),'Commit: '+sha,'drafts must not relabel the retained revision');
+    send('ANALYSIS_FAILED',{category:'Provider/resolution failure',revision:sha});assert.equal(title(),'Commit: '+sha);
+    await github();assert.equal(title(),'');
+    send('ANALYSIS_FAILED',{category:'Revision unavailable'});assert.equal(title(),'');
+    await github();const stale={...f.state.command};
+    send('REVISION_SELECTED',{revision:sha});
+    f.node('[data-status]').children[1].click();await flush();assert.equal(title(),'');
+    f.click('[data-source-local]');f.click('[data-choose-folder]');await flush();f.submit();await flush();
+    send('WORKING_TREE_STARTED',{name:'Synthetic'});
+    send('WORKING_TREE_FAILED',{category:'Local working tree unavailable'});assert.equal(title(),'');
+    f.submit();await flush();send('WORKING_TREE_STARTED',{name:'Synthetic'});
+    send('WORKING_TREE_CAPTURED',{origin:{kind:'working-tree',name:'Synthetic',captureId:id}});
+    assert.equal(title(),'Working-tree capture: '+id);
+    send('ANALYSIS_FAILED',{category:'Metric processing failed',code:'M1-MET-1',revision:id});assert.equal(title(),'Working-tree capture: '+id);
+    f.state.observer.event({type:'REVISION_SELECTED',...stale,revision:'b'.repeat(40)});assert.equal(title(),'Working-tree capture: '+id,'stale callback overwrote current origin');
+    f.submit();await flush();send('WORKING_TREE_STARTED',{name:'Synthetic'});send('WORKING_TREE_CAPTURED',{origin:{kind:'working-tree',name:'Synthetic',captureId:id}});
+    f.node('[data-status]').children[1].click();await flush();assert.equal(title(),'');
+    await github();send('REVISION_SELECTED',{revision:sha});send('ANALYSIS_ALL_FILES_FAILED',{revision:sha,notAnalyzedFiles:[]});assert.equal(title(),'Commit: '+sha);
+    await github();send('REVISION_SELECTED',{revision:sha});f.state.observer.lost();assert.equal(title(),'');
+    assert.equal(f.node('[data-repository]').textContent,'https://github.com/fixture/repo');
+  } finally {f.close();}
+});
+
+test('saved GitHub/local titles restore, plain status and Copy link retain ownership, replacement clears time and rejects late Save',async()=>{
+  const f=await fixture(undefined);
+  const sha='a'.repeat(40), id='c'.repeat(64), savedAt='2026-07-01T12:34:56.000Z';
+  const restoredPolicy={version:'code-city-auto-exclusions-1',manual:[],included:[],detected:[],effective:[]};
+  try {
+    for(const origin of [{kind:'github',repositoryUrl:'https://github.com/fixture/repo',revision:sha},{kind:'working-tree',name:'Synthetic',captureId:id}]) {
+      f.state.view.clear();f.state.view.working(()=>{});
+      const record={id:'S'.repeat(43),kind:origin.kind,repository:origin.kind==='github'?'fixture/repo':'Synthetic',ref:'main',revision:origin.kind==='github'?sha:id,savedAt};
+      f.state.restore(origin,record,restoredPolicy);
+      f.state.view.succeeded(1,{},[],record.revision);
+      assert.equal(f.node('[data-repository]').title,(origin.kind==='github'?'Commit: ':'Working-tree capture: ')+record.revision);
+      assert.equal(f.node('[data-save-status]').textContent,'Saved');assert.equal(f.node('[data-save-status]').title,'Saved '+savedAt);assert.equal(f.node('[data-save-status]').children.length,0);
+      const before=location.href;f.click('[data-save-status]');assert.equal(location.href,before);f.click('[data-save]');assert.equal(f.state.copied,before);
+      f.state.view.clear();assert.equal(f.node('[data-repository]').title,'');assert.equal(f.node('[data-save-status]').title,'');assert.equal(f.node('[data-save-status]').textContent,'');assert.equal(f.node('[data-save]').textContent,'Save');
+    }
+    f.state.view.working(()=>{});f.node('input[name=repository]').dispatchEvent(new Event('input'));
+    f.state.restore({kind:'github',repositoryUrl:'https://github.com/fixture/stale',revision:sha},{id:'T'.repeat(43),savedAt},restoredPolicy);
+    assert.equal(f.node('[data-repository]').title,'');assert.equal(f.node('[data-save-status]').textContent,'');assert.equal(f.node('[data-save-status]').title,'','stale restore overwrote current metadata');
+    let complete;f.state.controller.save=()=>new Promise(resolve=>{complete=resolve;});
+    f.state.view.origin({kind:'github',repositoryUrl:'https://github.com/fixture/repo',revision:sha});f.state.view.succeeded(2,{},[],sha);
+    f.click('[data-save]');f.state.view.clear();const before=location.href;
+    complete({id:'T'.repeat(43),savedAt});await flush();assert.equal(f.node('[data-save-status]').textContent,'');assert.equal(f.node('[data-save-status]').title,'');assert.equal(location.href,before,'late Save changed current history');
+    f.state.controller.save=()=>Promise.reject(new Error('Write unavailable'));f.state.view.succeeded(3,{},[],sha);f.click('[data-save]');await flush();assert.match(f.node('[data-save-status]').textContent,/Write unavailable.*unchanged/u);assert.equal(f.node('[data-save-status]').title,'');assert.equal(f.node('[data-save]').textContent,'Save');
+  } finally {f.close();}
 });
 
 const policy = (manual=[], included=[], detected=[['.vite','cache:.vite']], effective=[]) => ({version:'code-city-auto-exclusions-1',manual,included,detected,effective});

@@ -116,6 +116,13 @@ xref:requirements:unit-inspection.adoc[Unit Source Inspection].
   It verifies hashes and version, restores retained source/evidence and
   publishes the recorded city. GitHub and parser initialization are not used.
 
+The header binds the validated current origin/revision to the project-name
+native title; it has no separate identity disclosure/output. Clear and cancel
+remove the binding; correlated post-selection failures retain it. Save/reopen
+shows plain Saved status with UTC time in its native title, while Copy link
+uses the canonical saved address. Replacement clears status/time and record
+ownership using the existing UI epoch guard.
+
 The picker reads only receipt metadata and groups by input kind and
 repository/folder; refs/commits and local captures coexist under random IDs. Capacity, corruption and operator recovery are owned
 by xref:requirements:saved-investigations.adoc[Saved Investigations].
