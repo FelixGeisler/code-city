@@ -6,6 +6,10 @@ using System.Text;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 public class NativeProbe {
+ [DllImport("user32.dll")] public static extern IntPtr GetThreadDesktop(uint tid);
+ [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern bool GetUserObjectInformation(IntPtr h,int index,StringBuilder value,int size,out int needed);
+ public static string Desktop(){int n;var b=new StringBuilder(512);if(!GetUserObjectInformation(GetThreadDesktop(GetCurrentThreadId()),2,b,1024,out n))throw new Exception("Desktop query failed");return b.ToString();}
  [DllImport("user32.dll",CharSet=CharSet.Unicode,EntryPoint="SendMessageTimeoutW")] public static extern IntPtr ReadText(IntPtr h,uint msg,IntPtr w,[Out] StringBuilder text,uint flags,uint timeout,out IntPtr result);
  public delegate bool EnumProc(IntPtr hwnd, IntPtr lp);
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lp);
@@ -35,6 +39,11 @@ function Verify {
  if($CreationTicks -and $ticks -ne $CreationTicks){throw 'Creation time mismatch'}
  return $ticks
 }
+$started=[DateTime]::UtcNow.ToString('o')
+$phase='verify'
+$failure=$null;$ownedProcesses=@();$windows=@();$descriptions=@();$browserUi=@();$action=$null
+try {
+$desktop=[NativeProbe]::Desktop()
 $ticks=Verify
 $ownedProcesses=@(@{pid=$OwnedPid;creationTicks=$ticks;role='browser'})
 foreach($c in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$OwnedPid")){
@@ -44,6 +53,7 @@ foreach($c in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$OwnedPid
  $ownedProcesses+=@{pid=$c.ProcessId;creationTicks=$cp.StartTime.ToUniversalTime().Ticks.ToString();role='chrome-child'}
  }
 }
+$phase='enumerate-windows'
 $windows=@();foreach($op in $ownedProcesses){$windows+=@([NativeProbe]::Windows($op.pid))}
 $descriptions=@();$dialogs=@()
 foreach($w in $windows){
@@ -51,9 +61,10 @@ foreach($w in $windows){
  if($cl -eq '#32770'){
   $dialogs+= $w
   $children=@([NativeProbe]::Children($w)|ForEach-Object { @{handle=$_.ToInt64();class=[NativeProbe]::Class($_);id=[NativeProbe]::GetDlgCtrlID($_);pid=[NativeProbe]::Pid($_)} })
-  $descriptions+=@{handle=$w.ToInt64();class=$cl;children=$children}
+  $descriptions+=@{handle=$w.ToInt64();pid=[NativeProbe]::Pid($w);visible=[NativeProbe]::IsWindowVisible($w);class=$cl;children=$children}
  }
 }
+$phase='action-'+$Mode
 $action=$null
 if($Mode -eq 'prepare'){
  if((Verify) -ne $ticks){throw 'Process changed'}
@@ -78,7 +89,7 @@ if($Mode -in @('inspect-browser','allow-read','cancel-blocked')){
  $descendants=$element.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
  foreach($el in $descendants){$key=($el.GetRuntimeId() -join ':');if(-not $seen.ContainsKey($key)){$seen[$key]=$true;$all+=$el}}
  }
- foreach($el in $all){$cur=$el.Current;$browserUi+=@{type=$cur.ControlType.ProgrammaticName;name=$cur.Name;pid=$cur.ProcessId;automationId=$cur.AutomationId}}
+ foreach($el in $all){$cur=$el.Current;$browserUi+=@{type=$cur.ControlType.ProgrammaticName;name=$cur.Name;pid=$cur.ProcessId;automationId=$cur.AutomationId;enabled=$cur.IsEnabled;offscreen=$cur.IsOffscreen;runtimeId=($el.GetRuntimeId() -join ':')}}
  if($Mode -eq 'allow-read' -or $Mode -eq 'cancel-blocked'){
  $wanted='Allow'
  if($Mode -eq 'allow-read'){
@@ -136,4 +147,8 @@ if($Mode -notin @('inspect','prepare','inspect-browser','allow-read','cancel-blo
  $ok=[NativeProbe]::Send($button[0],0x00F5,[IntPtr]::Zero,[IntPtr]::Zero,2,2000,[ref]$r)
  $action=@{mode=$Mode;verifiedFolder=$verifiedFolder;button=$id;sendCompleted=($ok -ne [IntPtr]::Zero)}
 }
-@{browserUi=$browserUi;ownedProcesses=$ownedProcesses;ownedTopClasses=@($windows|ForEach-Object { @{pid=[NativeProbe]::Pid($_);class=[NativeProbe]::Class($_);visible=[NativeProbe]::IsWindowVisible($_)} });pid=$OwnedPid;executable=$Executable;creationTicks=$ticks;dialogs=$descriptions;action=$action}|ConvertTo-Json -Depth 8 -Compress
+} catch {
+ $failure=$_.Exception.Message
+}
+@{desktop=$desktop;started=$started;finished=[DateTime]::UtcNow.ToString('o');mode=$Mode;phase=$phase;error=$failure;browserUi=$browserUi;ownedProcesses=$ownedProcesses;ownedTopClasses=@($windows|ForEach-Object { @{pid=[NativeProbe]::Pid($_);class=[NativeProbe]::Class($_);visible=[NativeProbe]::IsWindowVisible($_)} });pid=$OwnedPid;executable=$Executable;creationTicks=$ticks;dialogs=$descriptions;action=$action}|ConvertTo-Json -Depth 8 -Compress
+if($failure){[Console]::Error.WriteLine($failure);exit 1}

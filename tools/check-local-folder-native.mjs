@@ -367,6 +367,23 @@ async function selfTest() {
   } finally { await remove(scratch); }
 }
 
+// Preserve the failed helper's ownership snapshot before propagating its original
+// nonzero exit. A completed InvokePattern/send is still not picker acceptance.
+export async function recordWindowsHelper(invoke, mode, result, save) {
+  let output;
+  try { output = await invoke(); }
+  catch (error) {
+    if (error.stdout) try { result.actions.push(JSON.parse(error.stdout.trim())); } catch {} // only owned-helper JSON
+    result.windowsHelperFailure = { mode, stderr: error.stderr?.slice(-16384), message: error.message };
+    await save();
+    throw error;
+  }
+  const data = JSON.parse(output.stdout.trim());
+  result.actions.push(data);
+  await save();
+  return data;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 1 && args[0] === '--self-test') return selfTest();
@@ -394,8 +411,8 @@ async function main() {
   async function assertOwned(p) { const s=await lstat(p); assert(s.isDirectory()&&!s.isSymbolicLink()&&identities.has(p)&&same(s,identities.get(p)), 'Owned root changed: '+p); }
   async function dialog(mode, target=fixture) {
     if(mode==='select') await assertOwned(target);
-    const x=await ps(['-File',path.join(tools,'local-folder-native-windows.ps1'),'-OwnedPid',String(chrome.child.pid),'-Executable',discovery.executable,'-Profile',profile,'-Mode',mode,'-Fixture',target,'-ExpectedOrigin',result.origin,'-OwnershipFile',path.join(scratch,'ownership.json'),...(ticks?['-CreationTicks',ticks]:[])]);
-    const data=JSON.parse(x.stdout.trim()); ticks??=data.creationTicks; result.actions.push(data); await save(); return data;
+    const data=await recordWindowsHelper(()=>ps(['-File',path.join(tools,'local-folder-native-windows.ps1'),'-OwnedPid',String(chrome.child.pid),'-Executable',discovery.executable,'-Profile',profile,'-Mode',mode,'-Fixture',target,'-ExpectedOrigin',result.origin,'-OwnershipFile',path.join(scratch,'ownership.json'),...(ticks?['-CreationTicks',ticks]:[])]),mode,result,save);
+    ticks??=data.creationTicks; return data;
   }
   let linuxDialogCount=0;
   async function linuxDialog(mode, target=fixture) {
@@ -446,6 +463,13 @@ async function main() {
     try {
       await until(async()=>(await evaluate('pickerState'))!=='pending','Native picker resolution');
     } catch(error) {
+      if(process.platform==='win32') {
+        try {
+          result.windowsPickerFailure=await evaluate('({state:pickerState,error:window.pickerError,focused:document.hasFocus()})');
+          await dialog('inspect-browser',target);
+        } catch(diagnosticError){result.windowsInspectionError=diagnosticError.message;}
+        await save();
+      }
       if(process.platform==='linux') {
         result.linuxPickerPhase='picker-resolution-failed';
         try {await linuxDialog('inspect',target);}catch(diagnosticError){result.linuxInspectionError=diagnosticError.message;}
