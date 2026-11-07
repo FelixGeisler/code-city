@@ -155,6 +155,15 @@ export function attachUnitInspection(documentTarget: InspectionDocument, inspect
   }
   function focusSelectedSource(): void {
     dialog.scrollTop = 0; body.scrollTop = 0;
+    // Short-screen source guidance can wrap beyond this independent pane. Reveal
+    // code inside it before revealing the selected glyph; never scroll the sibling
+    // contribution region/list. Keep the body at its top whenever code fits there.
+    for (const container of [sourceSection, body]) {
+      const target = code.getBoundingClientRect(), viewport = container.getBoundingClientRect();
+      const top = viewport.top + container.clientTop, bottom = top + container.clientHeight;
+      if (target.top < top) container.scrollTop += Math.floor(target.top - top);
+      else if (target.bottom > bottom) container.scrollTop += Math.ceil(target.bottom - bottom);
+    }
     if (firstMarked) {
       const target = firstMarked.getBoundingClientRect(), viewport = code.getBoundingClientRect();
       // Scroll offsets are integer-rounded by browsers; round toward the leading

@@ -32,7 +32,8 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
     const bounds=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height},clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop,overflowX:s.overflowX,overflowY:s.overflowY};};
     const read=selector=>bounds(document.querySelector(selector));
     return {viewport:{width:innerWidth,height:innerHeight},helpOpen:document.querySelector('[data-owned-contributions] details').open,
-      dialog:read('[data-unit-source]'),body:read('[data-source-body]'),code:read('[data-source-code]'),contributionRegion:read('[data-owned-contributions]'),list:read('[data-contribution-rows]'),
+      dialog:read('[data-unit-source]'),body:read('[data-source-body]'),sourceSection:read('[data-source-body]>section:first-child'),code:read('[data-source-code]'),contributionRegion:read('[data-owned-contributions]'),list:read('[data-contribution-rows]'),
+      focus:(()=>{const e=document.activeElement,r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),identify=e=>e?{tag:e.tagName,id:e.id,data:{...e.dataset}}:null,ancestors=[];for(let a=e;a;a=a.parentElement)ancestors.push({element:identify(a),...bounds(a),scrollLeft:a.scrollLeft,clientWidth:a.clientWidth,scrollWidth:a.scrollWidth});return {element:identify(e),centerHit:identify(hit),containsCenterHit:e.contains(hit),ancestors};})(),
       controls:[...document.querySelectorAll('[data-source-title], [data-unit-details], [data-source-paging], [data-owned-contributions]>:not([data-contribution-rows]), [data-owned-contributions] button, [data-contribution-scope]')].map(e=>({tag:e.tagName,text:e.textContent,...bounds(e)}))};
   })()`);
   const recordSource=async(name,target=p)=>{const measurement=await sourceMeasurement(target);await writeFile(path.join(evidenceDirectory,name+'-proof.json'),JSON.stringify(measurement,null,2)+'\n');return measurement;};
@@ -149,6 +150,8 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   // A stacked scroll pane may exceed its outer viewport: require a useful visible
   // intersection for that pane, but the full bounds for individual controls/rows.
   const focusedReachable=()=>p.evaluate(`(()=>{const e=document.activeElement,r=e.getBoundingClientRect(),dialog=document.querySelector('[data-unit-source]'),d=dialog.getBoundingClientRect();if(e.matches('[data-owned-contributions]')){let left=Math.max(r.left,d.left),right=Math.min(r.right,d.right),top=Math.max(r.top,d.top),bottom=Math.min(r.bottom,d.bottom);for(let p=e.parentElement;p&&p!==dialog;p=p.parentElement){const s=getComputedStyle(p),v=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)){top=Math.max(top,v.top);bottom=Math.min(bottom,v.bottom);}if(/auto|scroll|hidden|clip/.test(s.overflowX)){left=Math.max(left,v.left);right=Math.min(right,v.right);}}return right-left>=100&&bottom-top>=100&&e.contains(document.elementFromPoint((left+right)/2,(top+bottom)/2));}if(!(r.width>0&&r.height>0&&r.left>=d.left&&r.right<=d.right&&r.top>=d.top&&r.bottom<=d.bottom&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))))return false;for(let p=e.parentElement;p&&p!==dialog;p=p.parentElement){const s=getComputedStyle(p),v=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)&&(r.top<v.top-1||r.bottom>v.bottom+1))return false;if(/auto|scroll|hidden|clip/.test(s.overflowX)&&(r.left<v.left-1||r.right>v.right+1))return false;}return true;})()`);
+  const assertFocusedReachable=async name=>{const reachable=await focusedReachable();if(!reachable){const proof=await recordSource(name+'-focus-failure');await shot(name+'-focus-failure');process.stdout.write(name+' focus diagnostics: '+JSON.stringify(proof)+'\n');}assert.equal(reachable,true,name);};
+  const selectedSourceProof=()=>p.evaluate(`(()=>{const c=document.querySelector('[data-source-code]'),mark=c.querySelector('mark'),r=mark.getBoundingClientRect();let left=r.left,right=r.right,top=r.top,bottom=r.bottom;const ancestors=[];for(let e=mark.parentElement;e;e=e.parentElement){const s=getComputedStyle(e),v=e.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)){top=Math.max(top,v.top+e.clientTop);bottom=Math.min(bottom,v.top+e.clientTop+e.clientHeight);}if(/auto|scroll|hidden|clip/.test(s.overflowX)){left=Math.max(left,v.left+e.clientLeft);right=Math.min(right,v.left+e.clientLeft+e.clientWidth);}ancestors.push({tag:e.tagName,data:{...e.dataset},bounds:[v.left,v.top,v.right,v.bottom],scroll:[e.scrollLeft,e.scrollTop]});if(e.matches('[data-unit-source]'))break;}const hit=document.elementFromPoint((left+right)/2,(top+bottom)/2);return {text:mark.textContent,rect:[r.left,r.top,r.right,r.bottom],clipped:[left,top,right,bottom],fullyVisible:left<=r.left&&right>=r.right&&top<=r.top&&bottom>=r.bottom,hit:mark.contains(hit),ancestors};})()`);
   const shortCamera=await geometry();
   for(const open of [false,true]) {
     // Toggle help with a real pointer. Then exercise native Tab scrolling, not DOM click().
@@ -196,12 +199,30 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   }
   await writeFile(path.join(evidenceDirectory,'landscape-source-proof.json'),JSON.stringify(landscape,null,2)+'\n');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:390,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();
-  const narrow=await recordSource('narrow-short-source');
-  assert.equal(await p.evaluate(`(()=>{const b=document.querySelector('[data-source-body]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]');return b.scrollHeight>b.clientHeight&&c.clientHeight>=140&&r.clientHeight>=100;})()`),true,'narrow short screens need bounded stacked scrolling: '+JSON.stringify(narrow));
+  const narrowCamera=await geometry(),narrow=await recordSource('narrow-short-source');
+  assert.equal(await p.evaluate(`(()=>{const b=document.querySelector('[data-source-body]'),c=document.querySelector('[data-source-code]'),r=document.querySelector('[data-contribution-rows]');return b.scrollHeight>b.clientHeight&&c.clientHeight>=140&&r.clientHeight>=120;})()`),true,'narrow short screens need bounded stacked scrolling: '+JSON.stringify(narrow));
   await p.evaluate(`document.querySelector('[data-contribution-rows] li:last-child button').focus();true`);assert.equal(await focusedReachable(),true);
   await key('Enter','Enter',13);await settled();
+  await recordSource('narrow-short-after-selection');
   assert.equal(await p.evaluate(`document.querySelector('[data-source-body]').scrollTop===0&&document.activeElement===document.querySelector('[data-source-code]')`),true,'narrow stacked selection must return to source');
-  assert.equal(await focusedReachable(),true,'narrow short code must remain reachable after selection');await fits();await shot('narrow-short-source');
+  await assertFocusedReachable('narrow-short-code-after-selection');
+  const narrowSelected=await selectedSourceProof();assert.ok(narrowSelected.text==='x&&x'&&narrowSelected.fullyVisible&&narrowSelected.hit,'narrow short exact selected span must be exposed: '+JSON.stringify(narrowSelected));
+  await fits();await shot('narrow-short-source');
+  // Deterministic source-parent clipping using the same trusted CSSOM technique
+  // as the all-controls stress below. Enlarged source guidance makes this section
+  // overflow even with Windows fonts; retain a nonzero offset across selection.
+  await p.evaluate(`(()=>{const sheet=[...document.styleSheets].find(s=>s.href&&new URL(s.href).origin===location.origin&&new URL(s.href).pathname.endsWith('/browser.css')),index=sheet.cssRules.length;sheet.insertRule('[data-source-body]>section:first-child>p{font-size:22px !important;line-height:1.6 !important}',index);window.__sourceParentStress={sheet,index};document.querySelector('[data-contribution-rows] li:last-child button').focus();return true;})()`);
+  const retainedOffset=await p.evaluate(`(()=>{const section=document.querySelector('[data-source-body]>section:first-child'),rows=document.querySelector('[data-contribution-rows]');section.scrollTop=1;window.__narrowRows=[...rows.querySelectorAll('button')];const c=document.querySelector('[data-source-code]').getBoundingClientRect(),v=section.getBoundingClientRect();return {section:section.scrollTop,clipped:c.top<v.top||c.bottom>v.bottom,font:getComputedStyle(section.querySelector('p')).fontSize,pane:document.querySelector('[data-owned-contributions]').scrollTop,list:rows.scrollTop,calls:window.__inspectionCalls.length,range:document.querySelector('[data-source-range]').textContent};})()`);
+  assert.ok(retainedOffset.section>0&&retainedOffset.clipped&&retainedOffset.font==='22px','controlled source section must actually scroll and clip code: '+JSON.stringify(retainedOffset));
+  await recordSource('narrow-short-retained-source-offset-before');await shot('narrow-short-retained-source-offset-before');
+  await key('Enter','Enter',13);await settled();
+  await assertFocusedReachable('narrow-short-retained-source-offset-after');
+  const retainedSelected=await selectedSourceProof();assert.ok(retainedSelected.text==='x&&x'&&retainedSelected.fullyVisible&&retainedSelected.hit,'retained source offset must reveal exact span: '+JSON.stringify(retainedSelected));
+  assert.equal(await p.evaluate(`(()=>{const rows=document.querySelector('[data-contribution-rows]');return window.__narrowRows.every((b,i)=>b===rows.querySelectorAll('button')[i])&&rows.scrollTop===${retainedOffset.list}&&document.querySelector('[data-owned-contributions]').scrollTop===${retainedOffset.pane}&&window.__inspectionCalls.length===${retainedOffset.calls}&&document.querySelector('[data-source-range]').textContent===${JSON.stringify(retainedOffset.range)};})()`),true,'source-parent reveal must preserve contributions, source range and RPC count');
+  assert.deepEqual(await geometry(),narrowCamera,'narrow source-parent reveal moved camera/buffers');
+  await recordSource('narrow-short-retained-source-offset-after');await shot('narrow-short-retained-source-offset-after');
+  await writeFile(path.join(evidenceDirectory,'narrow-short-selection-proof.json'),JSON.stringify({narrowSelected,retainedOffset,retainedSelected},null,2)+'\n');
+  await p.evaluate(`window.__sourceParentStress.sheet.deleteRule(window.__sourceParentStress.index);delete window.__sourceParentStress;true`);
   await p.evaluate(`document.querySelector('[data-owned-contributions] details').open=false;true`);
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},p.sessionId);await settled();await fits();await shot('mobile-code-dense');
   const portrait=await recordSource('portrait-source');
@@ -227,15 +248,22 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
         await key('Tab','Tab',9);await settled();
         const target=await p.evaluate(`(()=>{const e=document.activeElement;return e.matches('[data-close-source]')?'close':e.matches('[data-source-code]')?'code':e.matches('[data-owned-contributions]')?'pane':e.matches('[data-contribution-scope]')?'scope':e.matches('summary')?'help':e.closest('[data-contribution-paging]')?'paging':e.hasAttribute('data-contribution')?'row':null;})()`);
         if(target){
-          const reachable=await focusedReachable();
-          if(!reachable){await recordSource(nameWithState+'-focus-failure');await shot(nameWithState+'-focus-failure');const focus=await p.evaluate(`(()=>{const a=[];for(let e=document.activeElement;e;e=e.parentElement){const r=e.getBoundingClientRect();a.push({tag:e.tagName,rect:[r.left,r.top,r.right,r.bottom],scroll:[e.scrollLeft,e.scrollTop],overflow:[getComputedStyle(e).overflowX,getComputedStyle(e).overflowY]});}return a;})()`);process.stdout.write(JSON.stringify(focus)+'\n');}
-          assert.equal(reachable,true,nameWithState+' clipped native '+target);visited.push(target);
+          await assertFocusedReachable(nameWithState+'-native-'+target);visited.push(target);
         }
         if(target==='close')break;
       }
       for(const target of ['code','pane','scope','help','paging','row','close'])assert.ok(visited.includes(target),nameWithState+' missing '+target);
       assert.equal(visited.filter(v=>v==='row').length,32,nameWithState+' must reach all rows');
-      stressProof.push({width,height,open,fonts,listHeight:measurement.list.clientHeight,visited});
+      // Native activation after traversal must reveal the exact selected code,
+      // not merely focus an offscreen PRE inside the independently scrolled pane.
+      await p.evaluate(`document.querySelector('[data-contribution-rows] li:last-child button').focus();window.__stressRows=[...document.querySelectorAll('[data-contribution-rows] button')];true`);
+      const beforeSelection=await p.evaluate(`({pane:document.querySelector('[data-owned-contributions]').scrollTop,list:document.querySelector('[data-contribution-rows]').scrollTop,calls:window.__inspectionCalls.length})`);
+      await key('Enter','Enter',13);await settled();await assertFocusedReachable(nameWithState+'-selected-code');
+      const selected=await selectedSourceProof();assert.ok(selected.text==='x&&x'&&selected.fullyVisible&&selected.hit,nameWithState+' selected exact span clipped: '+JSON.stringify(selected));
+      assert.deepEqual(await p.evaluate(`({pane:document.querySelector('[data-owned-contributions]').scrollTop,list:document.querySelector('[data-contribution-rows]').scrollTop,calls:window.__inspectionCalls.length})`),beforeSelection,nameWithState+' selection changed contribution offsets or RPC count');
+      assert.equal(await p.evaluate(`window.__stressRows.every((b,i)=>b===document.querySelectorAll('[data-contribution-rows] button')[i])&&document.activeElement===document.querySelector('[data-source-code]')`),true);
+      await recordSource(nameWithState+'-selected-code');await shot(nameWithState+'-selected-code');
+      stressProof.push({width,height,open,fonts,listHeight:measurement.list.clientHeight,visited,selected,beforeSelection});
     }
   }
   await writeFile(path.join(evidenceDirectory,'typography-stress-proof.json'),JSON.stringify(stressProof,null,2)+'\n');

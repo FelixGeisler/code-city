@@ -108,9 +108,13 @@ the latest source request; older replies cannot replace it. Retained whole-unit
 buttons remain usable during these reads. Source failure stays local and leaves
 the list available for another explicit selection.
 
-Explicit activation brings the source dialog and any stacked-body scroll to their
-top, reveals the first highlighted span by scrolling the code pane as needed,
-and focuses the code.
+Explicit activation brings the source dialog and stacked body to their top,
+reveals the code pane through its independently scrolling source section, then
+reveals the first highlighted span inside the code and focuses it. Wrapped source
+guidance or retained native focus-scrolling offsets must not leave the code clipped
+by its parent. The stacked body stays at zero when the code pane fits there;
+otherwise it scrolls only far enough to expose the pane, rather than resetting to
+an offset that hides code. Close remains visible above the body.
 This also works when activating a location far down a long contribution list,
 without changing that pane's scroll position or its native row identities.
 Previous source returns through navigation history. This moves only the source
