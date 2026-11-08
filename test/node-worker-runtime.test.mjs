@@ -237,21 +237,31 @@ parentPort.on("message", (command) => {
     progress("analysis", 1, 1);
     progress("city-construction");
   }
-  const event = eventFor(command, workerData.mode);
-  if (workerData.mode === "valid-transfer") {
-    const before = [
-      event.result.city.geometry.origins.buffer, event.result.city.geometry.sizes.buffer,
-      event.result.city.geometry.rgba.buffer, event.result.city.geometry.bounds.buffer,
-      event.sources[0].normalizedUtf8.buffer,
-    ];
-    publishNodeWorkerEvent(parentPort, prepareNodeWorkerSuccessForPublication(event));
-    parentPort.postMessage({ type: "DETACHED", distinct: new Set(before).size, byteLengths: before.map((buffer) => buffer.byteLength) });
-  } else if (workerData.mode.startsWith("publish-")) {
-    publishPrepared(event);
-  } else {
-    parentPort.postMessage(event);
-  }
-  parentPort.close();
+  const publish = () => {
+    const event = eventFor(command, workerData.mode);
+    if (workerData.mode === "valid-transfer") {
+      const before = [
+        event.result.city.geometry.origins.buffer, event.result.city.geometry.sizes.buffer,
+        event.result.city.geometry.rgba.buffer, event.result.city.geometry.bounds.buffer,
+        event.sources[0].normalizedUtf8.buffer,
+      ];
+      publishNodeWorkerEvent(parentPort, prepareNodeWorkerSuccessForPublication(event));
+      parentPort.postMessage({ type: "DETACHED", distinct: new Set(before).size, byteLengths: before.map((buffer) => buffer.byteLength) });
+    } else if (workerData.mode.startsWith("publish-")) {
+      publishPrepared(event);
+    } else {
+      parentPort.postMessage(event);
+    }
+    parentPort.close();
+  };
+  if (workerData.waitForRevision) {
+    parentPort.once("message", (ack) => {
+      if (ack?.type !== "TEST_REVISION_OBSERVED" || ack.attemptId !== command.attemptId || ack.generation !== command.generation) {
+        throw new Error("invalid test revision acknowledgement");
+      }
+      publish();
+    });
+  } else publish();
 });
 `);
 
@@ -259,10 +269,23 @@ parentPort.on("message", (command) => {
 }
 
 function start(bundle, scenario, release = () => {}, onProgress) {
-  return startNodeWorkerAttempt({
+  // A Proxy fails in the sender's structured clone, not in receiver validation.
+  // Worker errors and public messages have no cross-channel FIFO: establish the
+  // revision in the receiver before deliberately triggering a post-revision error.
+  const waitForRevision = scenario === "raw-proxy";
+  let worker;
+  const attempt = startNodeWorkerAttempt({
     repository: REPOSITORY, generation: 3, workerUrl: bundle,
-    workerFactory: (url) => new Worker(url, { workerData: { scenario, mode: scenario } }), release, onProgress,
+    workerFactory: (url) => {
+      worker = new Worker(url, { workerData: { scenario, mode: scenario, waitForRevision } });
+      return worker;
+    },
+    onRevisionSelected: () => {
+      if (waitForRevision) worker.postMessage({ type: "TEST_REVISION_OBSERVED", attemptId: attempt.attemptId, generation: 3 });
+    },
+    release, onProgress,
   });
+  return attempt;
 }
 
 function gateTerminated(kind, condition, terminal) {
@@ -832,6 +855,61 @@ test("actual structured clones separate normalized sender identity from receiver
     { type: city.type, revision: city.revision, category: city.category, code: city.code },
     { type: "FAILURE", revision: SHA, category: "City construction failed", code: "M1-CITY-1" },
   );
+});
+
+test("an actual proxy clone error before revision delivery ignores late frames and releases only after join", async (t) => {
+  const { transfer } = await compiledWorkerFixture(t);
+  let worker;
+  let errorObserved = false;
+  let exited = false;
+  let releases = 0;
+  let releasedAfterExit = false;
+  const revisions = [];
+  const lateFrames = [];
+  const attempt = startNodeWorkerAttempt({
+    repository: REPOSITORY, generation: 3, workerUrl: transfer,
+    workerFactory: (url) => {
+      worker = new Worker(url, { workerData: { mode: "raw-proxy" } });
+      const emit = worker.emit.bind(worker);
+      const pending = [];
+      // Node sends uncaught errors and public messages over different ports.
+      // Force the permitted error-first schedule, using the real clone failure.
+      const deliverLate = (message) => {
+        lateFrames.push(message.type);
+        return emit("message", message);
+      };
+      worker.emit = (event, ...args) => {
+        if (event === "message") {
+          if (errorObserved) return deliverLate(args[0]);
+          pending.push(args[0]);
+          return true;
+        }
+        if (event === "error") {
+          errorObserved = true;
+          const emitted = emit(event, ...args);
+          for (const message of pending.splice(0)) deliverLate(message);
+          return emitted;
+        }
+        if (event === "exit") exited = true;
+        return emit(event, ...args);
+      };
+      return worker;
+    },
+    onRevisionSelected: (revision) => revisions.push(revision),
+    release: () => { releases += 1; releasedAfterExit = exited; },
+  });
+  t.after(() => attempt.cancel());
+  assert.deepEqual(await attempt.result, {
+    type: "FAILURE", attemptId: attempt.attemptId, generation: 3, category: "Provider/resolution failure",
+  });
+  assert.equal(errorObserved, true);
+  assert.deepEqual(lateFrames, ["REVISION_SELECTED", ...Array(6).fill("PROGRESS")]);
+  assert.deepEqual(revisions, []);
+  assert.equal(releasedAfterExit, true);
+  assert.equal(releases, 1);
+  await attempt.cancel();
+  assert.equal(releases, 1);
+  for (const event of ["exit", "message", "messageerror", "error"]) assert.equal(worker.listenerCount(event), 0);
 });
 
 test("Node parser assets use actual package-compatible file URLs for runtime, JS, TS, TSX, and C#", async () => {
