@@ -2,12 +2,14 @@
 // Node 24+, installed Google Chrome; Windows: PowerShell/UIAutomation, English Chrome UI.
 // Linux qualification only: non-root, Xvfb (-displayfd), python3, libX11/libXtst. Never caller DISPLAY.
 // Run: node tools/check-local-folder-native.mjs --evidence <directory>
+// Windows automatically owns a fresh non-input desktop + no-breakaway job, before Chrome.
 // Windows additionally requires: --allow-public-documents-synthetic
+// --isolation-proof: owned no-GUI child/guard proof only; never starts Chrome.
 // Each run writes a unique evidence subdirectory; failure is nonzero, never a native-gate skip.
 // No installs/build outputs. Actual gateway/acquisition TS is stripped by Node and served as ESM.
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
-import { spawn, execFile as execFileCallback } from 'node:child_process';
+import { spawn, execFileSync, execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stripTypeScriptTypes } from 'node:module';
 import { mkdtemp, mkdir, readFile, writeFile, lstat, readdir, unlink, rmdir, readlink, symlink, chmod } from 'node:fs/promises';
@@ -16,7 +18,7 @@ import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { discoverInstalledChrome, readInstalledChromeVersion, connectCdp, closeInstalledChrome } from './chrome-cdp.mjs';
+import { discoverInstalledChrome, readInstalledChromeVersion, connectCdp } from './chrome-cdp.mjs';
 
 const execFile = promisify(execFileCallback);
 const tools = path.dirname(fileURLToPath(import.meta.url));
@@ -88,28 +90,60 @@ export function observeChromeStartup(chrome, result) {
   else if (child.exitCode !== null || child.signalCode !== null) onExit(child.exitCode, child.signalCode);
   return { endpoint, dispose() { finish('disposed', Error('Chrome startup observation disposed')); } };
 }
+function windowsIsolationProof() {
+  return JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-File',
+    path.join(tools, 'local-folder-native-windows.ps1'), '-Mode', 'isolation-proof',
+    '-OwnedPid', String(process.pid)], { windowsHide: true, timeout: 20000, encoding: 'utf8' }).trim());
+}
 export function launchNativeChrome(executable, args, options, result) {
+  // Test-only Node children do no GUI work. Actual browser launch rechecks the
+  // live actor/owner/job/desktop, not a command-line flag or cached proof.
+  if (process.platform === 'win32' && path.resolve(executable) !== process.execPath) {
+    result.windowsIsolation = windowsIsolationProof();
+  }
   const chrome = processHandle(executable, args, options);
   chrome.startup = observeChromeStartup(chrome, result);
   return chrome;
 }
 // A timeout must also release the OS child/stdio handles, not just reject a promise.
 // Forced shutdown is a failed qualification: preserve its profile for inspection.
-async function closeNativeChrome(chrome, cdp, terminateOwned, timeout = 15000) {
-  try { await bounded(closeInstalledChrome(chrome, cdp), timeout, 'Chrome closed barrier'); }
+export async function closeNativeChrome(chrome, cdp, terminateOwned, timeout = 15000, diagnostics = {}) {
+  const snapshot = () => ({ exitCode: chrome.child.exitCode, signalCode: chrome.child.signalCode,
+    killed: chrome.child.killed, stderrEnded: chrome.child.stderr?.readableEnded,
+    stderrClosed: chrome.child.stderr?.closed, stderrDestroyed: chrome.child.stderr?.destroyed });
+  const graceful = async () => {
+    assert(cdp, 'Chrome normal shutdown unavailable without CDP');
+    try { await cdp.send('Browser.close'); diagnostics.acknowledged = true; }
+    catch (error) { diagnostics.requestError = error.message; }
+    finally { cdp.close(); }
+    // Browser.close may disconnect CDP before its response. Join the actual
+    // process AND inherited stdio before deciding; never kill on lost ACK alone.
+    diagnostics.closed = await chrome.closed;
+    assert(diagnostics.closed.code === 0 && diagnostics.closed.signal === null,
+      `Chrome did not shut down cleanly (code=${diagnostics.closed.code}, signal=${diagnostics.closed.signal}); retain its temporary profile`);
+  };
+  try { await bounded(graceful(), timeout, 'Chrome closed barrier'); }
   catch (error) {
-    cdp?.close();
-    try { await terminateOwned('SIGTERM'); }
-    finally {
-      if(chrome.child.exitCode===null&&chrome.child.signalCode===null)chrome.child.kill();
-      try { await bounded(chrome.closed, 5000, 'Forced Chrome closure'); }
-      catch {
-        try { await terminateOwned('SIGKILL');if(chrome.child.exitCode===null&&chrome.child.signalCode===null)chrome.child.kill('SIGKILL');await bounded(chrome.closed,2000,'Killed Chrome closure'); }
-        finally { chrome.child.unref();chrome.child.stderr?.destroy(); }
+    diagnostics.beforeForced = snapshot();
+    diagnostics.forced = true; // forced cleanup never turns this rejection into success
+    try { cdp?.close(); } catch (disconnectError) { diagnostics.disconnectError = disconnectError.message; }
+    try {
+      try { await terminateOwned('SIGTERM'); }
+      finally {
+        if(chrome.child.exitCode===null&&chrome.child.signalCode===null)chrome.child.kill();
+        try { await bounded(chrome.closed, 5000, 'Forced Chrome closure'); }
+        catch {
+          try { await terminateOwned('SIGKILL');if(chrome.child.exitCode===null&&chrome.child.signalCode===null)chrome.child.kill('SIGKILL');await bounded(chrome.closed,2000,'Killed Chrome closure'); }
+          finally { chrome.child.unref();chrome.child.stderr?.destroy(); }
+        }
       }
-    }
+    } catch (cleanupError) { diagnostics.cleanupError = cleanupError.message; }
     throw error;
-  }
+  } finally { diagnostics.final = snapshot(); }
+}
+export function recordShutdownError(result, stage, error) {
+  result.shutdownError ??= error.message;
+  (result.shutdownErrors ??= []).push({ stage, message: error.message, stack: error.stack });
 }
 async function closeNativeDisplay(display, timeout = 5000) {
   if(display.child.exitCode===null&&display.child.signalCode===null)display.child.kill('SIGTERM');
@@ -367,21 +401,81 @@ async function selfTest() {
   } finally { await remove(scratch); }
 }
 
+// A failed diagnostic write is secondary to the native failure. Keep at most one
+// bounded message per failure path in memory and report it without claiming a save.
+async function saveWindowsFailure(result, save, phase) {
+  try { await save(); }
+  catch (error) {
+    const failure = { message: String(error?.message ?? error).slice(0, 2048) };
+    (result.windowsEvidenceSaveErrors ??= {})[phase] = failure;
+    console.error('Windows failure evidence save failed (snapshot not persisted): ' + JSON.stringify({ phase, ...failure }));
+  }
+}
+
+// Attempt to save the failed helper's ownership snapshot before propagating its
+// original nonzero exit. A completed InvokePattern/send is not picker acceptance.
+export async function recordWindowsHelper(invoke, mode, result, save) {
+  let output;
+  try { output = await invoke(); }
+  catch (error) {
+    if (error.stdout) try { result.actions.push(JSON.parse(error.stdout.trim())); } catch {} // only owned-helper JSON
+    result.windowsHelperFailure = { mode, stderr: error.stderr?.slice(-16384), message: error.message };
+    await saveWindowsFailure(result, save, 'helper');
+    throw error;
+  }
+  const data = JSON.parse(output.stdout.trim());
+  result.actions.push(data);
+  await save();
+  return data;
+}
+
+// Failure-only Windows picker inspection: no additional input or resolution retry.
+export async function recordWindowsPickerFailure(error, readState, inspect, result, save) {
+  try {
+    result.windowsPickerFailure = await readState();
+    await inspect();
+  } catch (diagnosticError) { result.windowsInspectionError = diagnosticError.message; }
+  await saveWindowsFailure(result, save, 'pickerResolution');
+  throw error;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 1 && args[0] === '--self-test') return selfTest();
   if (args.length === 1 && args[0] === '--help') {
-    console.log('node tools/check-local-folder-native.mjs --evidence <directory> [--allow-public-documents-synthetic]\nWindows: installed English Chrome, PowerShell/UIAutomation. Linux: installed Chrome, non-root, Xvfb, python3, libX11/libXtst (qualification only); own display only. --self-test runs non-browser cleanup/compiler regressions.'); return;
+    console.log('node tools/check-local-folder-native.mjs --evidence <directory> [--allow-public-documents-synthetic]\nWindows: automatically owned non-input desktop/job, installed English Chrome, PowerShell/UIAutomation. --isolation-proof runs owned no-GUI child guards only. Linux unchanged: installed Chrome, non-root, Xvfb, python3, libX11/libXtst. --self-test runs non-browser cleanup/compiler regressions.'); return;
   }
-  let evidenceRoot, authorized = false;
+  let evidenceRoot, authorized = false, proofOnly = false, proofChild = false;
   for (let i=0;i<args.length;i++) {
     if (args[i] === '--evidence' && args[i+1]) evidenceRoot = path.resolve(args[++i]);
     else if (args[i] === '--allow-public-documents-synthetic') authorized = true;
+    else if (args[i] === '--isolation-proof') proofOnly = true;
+    else if (args[i] === '--isolation-child-proof') proofChild = true;
     else throw Error('Unknown/incomplete argument: ' + args[i]);
   }
   assert(evidenceRoot, '--evidence <directory> is required');
   assert(['win32','linux'].includes(process.platform), 'Only Windows and Linux native paths are supported');
-  assert(process.platform !== 'win32' || authorized, 'Explicit --allow-public-documents-synthetic authorization required');
+  assert(process.platform !== 'win32' || authorized || proofOnly || proofChild, 'Explicit --allow-public-documents-synthetic authorization required');
+  if (process.platform === 'win32') {
+    if (proofOnly || (!proofChild && !process.env.CODE_CITY_NATIVE_ISOLATION_FILE)) {
+      // Both normal npm entry points come through here. The parent never starts
+      // Chrome or inspects windows; the suspended child gets explicit lpDesktop.
+      const child = processHandle('powershell.exe', ['-NoProfile', '-File',
+        path.join(tools, 'native-desktop-launcher.ps1'), '-Node', process.execPath,
+        '-Evidence', evidenceRoot, ...(proofOnly ? ['-Proof'] : [])], { stdio: 'inherit' });
+      const closed = await child.closed;
+      if (child.error) throw child.error;
+      assert.equal(closed.code, 0, 'Owned desktop qualification/cleanup failed');
+      return;
+    }
+    const proof = windowsIsolationProof(); // before Chrome discovery or any action
+    if (proofChild) {
+      await mkdir(evidenceRoot, {recursive:true});
+      await writeFile(path.join(evidenceRoot, 'child-' + proof.isolation.nonce + '.json'), JSON.stringify(proof, null, 2) + '\n');
+      console.log(JSON.stringify(proof));
+      return;
+    }
+  } else assert(!proofOnly && !proofChild, 'Desktop proof is Windows only');
   await mkdir(evidenceRoot, {recursive:true});
   const evidence = await mkdtemp(path.join(evidenceRoot, 'run-'));
   const result = { status:'failed', started:new Date().toISOString(), platform:process.platform, os:os.release(), evidence, actions:[], links:{}, cleanup:[], limitations:[] };
@@ -394,8 +488,8 @@ async function main() {
   async function assertOwned(p) { const s=await lstat(p); assert(s.isDirectory()&&!s.isSymbolicLink()&&identities.has(p)&&same(s,identities.get(p)), 'Owned root changed: '+p); }
   async function dialog(mode, target=fixture) {
     if(mode==='select') await assertOwned(target);
-    const x=await ps(['-File',path.join(tools,'local-folder-native-windows.ps1'),'-OwnedPid',String(chrome.child.pid),'-Executable',discovery.executable,'-Profile',profile,'-Mode',mode,'-Fixture',target,'-ExpectedOrigin',result.origin,'-OwnershipFile',path.join(scratch,'ownership.json'),...(ticks?['-CreationTicks',ticks]:[])]);
-    const data=JSON.parse(x.stdout.trim()); ticks??=data.creationTicks; result.actions.push(data); await save(); return data;
+    const data=await recordWindowsHelper(()=>ps(['-File',path.join(tools,'local-folder-native-windows.ps1'),'-OwnedPid',String(chrome.child.pid),'-Executable',discovery.executable,'-Profile',profile,'-Mode',mode,'-Fixture',target,'-ExpectedOrigin',result.origin,'-OwnershipFile',path.join(scratch,'ownership.json'),...(ticks?['-CreationTicks',ticks]:[])]),mode,result,save);
+    ticks??=data.creationTicks; return data;
   }
   let linuxDialogCount=0;
   async function linuxDialog(mode, target=fixture) {
@@ -421,6 +515,7 @@ async function main() {
   const worker = command => evaluate('rpc('+JSON.stringify(command)+')',true);
   async function pick(target) {
     await assertOwned(target);
+    if(process.platform==='win32')await dialog('guard-browser');
     await cdp.send('Page.bringToFront',{},sessionId);
     await until(()=>evaluate('document.hasFocus()'),'Owned native picker page focus');
     await evaluate('pick();void 0',false,true);
@@ -446,6 +541,11 @@ async function main() {
     try {
       await until(async()=>(await evaluate('pickerState'))!=='pending','Native picker resolution');
     } catch(error) {
+      if(process.platform==='win32') {
+        await recordWindowsPickerFailure(error,
+          ()=>evaluate('({state:pickerState,error:window.pickerError,focused:document.hasFocus()})'),
+          ()=>dialog('inspect-browser',target),result,save);
+      }
       if(process.platform==='linux') {
         result.linuxPickerPhase='picker-resolution-failed';
         try {await linuxDialog('inspect',target);}catch(diagnosticError){result.linuxInspectionError=diagnosticError.message;}
@@ -471,7 +571,7 @@ async function main() {
     discovery=await discoverInstalledChrome();result.chrome={...discovery,version:await readInstalledChromeVersion(discovery,{execFileImpl:(command,args,options)=>execFile(command,args,{...options,timeout:10000})})};
     const modules=await sourceModules();
     result.servedModuleSha256=Object.fromEntries([...modules].map(([name,text])=>[name,createHash('sha256').update(text).digest('hex')]));
-    result.toolSha256={};for(const name of ['check-local-folder-native.mjs','local-folder-native-windows.ps1','local-folder-native-linux.py'])result.toolSha256[name]=createHash('sha256').update(await readFile(path.join(tools,name))).digest('hex');
+    result.toolSha256={};for(const name of ['check-local-folder-native.mjs','local-folder-native-windows.ps1','local-folder-native-linux.py',...(process.platform==='win32'?['native-desktop-launcher.ps1','native-desktop-guard.ps1','native-desktop-isolation.cs','native-process-cleanup.ps1']:[])])result.toolSha256[name]=createHash('sha256').update(await readFile(path.join(tools,name))).digest('hex');
     scratch=await mkdtemp(path.join(os.tmpdir(),'code-city-native-'));identities.set(scratch,await lstat(scratch));
     profile=path.join(scratch,'profile');await ownDirectory(profile);
     if(process.platform==='linux') {
@@ -514,7 +614,7 @@ async function main() {
     });
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve)});
     assert.notEqual(server.address().port,55583);result.origin='http://127.0.0.1:'+server.address().port;
-    const arguments_=['--remote-debugging-port=0','--user-data-dir='+profile,'--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update','--disable-default-apps','--disable-sync','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows','--disable-features=CalculateNativeWinOcclusion','--lang=en-US',...(process.platform==='win32'?['--window-position=-22000,-22000']:['--ozone-platform=x11','--disable-gpu']),'--window-size=900,650','about:blank'];
+    const arguments_=['--remote-debugging-port=0','--user-data-dir='+profile,'--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update','--disable-default-apps','--disable-sync','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows','--disable-features=CalculateNativeWinOcclusion','--lang=en-US',...(process.platform==='win32'?[]:['--ozone-platform=x11','--disable-gpu']),'--window-size=900,650','about:blank'];
     // Snapshot the actual spawn option at source, before Chrome can rewrite proc metadata.
     if(process.platform==='linux') {
       result.linuxChromeSpawn=linuxSpawnDisplay(linuxEnvironment,result.display,xvfb.child.pid,'Chrome spawn env');
@@ -581,6 +681,7 @@ async function main() {
     assert.equal(result.gatewayReads['mutate.cs'].kind,'source');assert.equal(result.gatewayReads['delete.cs'].kind,'unavailable');assert.equal(result.gatewayReads['denied.cs'].kind,'unavailable');
     assert.equal(result.directoryDenied.ok,false);assert.equal(result.captureDenied.capture.category,'Local working tree unavailable');
     for(const p of [...denied])await restore(p);result.directoryRestored=await worker('directory-read');assert.equal(result.directoryRestored.ok,true);
+    if(process.platform==='win32')await dialog('guard-browser');
     await evaluate('pick();void 0',false,true);
     if(process.platform==='win32'){await until(async()=>(await dialog('inspect')).dialogs.length,'Cancel chooser');await dialog('cancel');}else await linuxDialog('cancel');
     await until(async()=>(await evaluate('pickerState'))!=='pending','Chooser cancellation');result.cancel=await evaluate('({error:pickerError,retained:root.name})');assert.equal(result.cancel.error.name,'AbortError');assert.equal(result.cancel.retained,path.basename(fixture));
@@ -596,10 +697,10 @@ async function main() {
           if(process.platform==='win32') {
             // Only previously recorded PID/start-time/executable identities, never taskkill /T or global Chrome.
             const known=new Map();for(const a of result.actions)for(const p of a.ownedProcesses??[])known.set(p.pid+':'+p.creationTicks,p);
-            const executable=discovery.executable.replaceAll("'","''");
-            const items=[...known.values()].sort((a,b)=>(a.role==='browser')-(b.role==='browser')).map(p=>'@{pid='+p.pid+';ticks="'+p.creationTicks+'"}').join(',');
-            const script="$stopped=@();foreach($i in @("+items+")){$p=Get-Process -Id $i.pid -ErrorAction SilentlyContinue;if($p -and $p.Path -eq '"+executable+"' -and $p.StartTime.ToUniversalTime().Ticks.ToString() -eq $i.ticks){Stop-Process -Id $p.Id -ErrorAction Stop;$stopped+=$i}};ConvertTo-Json -InputObject @($stopped) -Compress";
-            result.forcedProcesses=JSON.parse((await ps(['-Command',script])).stdout);
+            const items=[...known.values()].sort((a,b)=>(a.role==='browser')-(b.role==='browser')).map(p=>({pid:p.pid,ticks:p.creationTicks}));
+            result.forcedProcessObservation=JSON.parse((await ps(['-File',path.join(tools,'native-process-cleanup.ps1'),
+              '-IdentitiesJson',JSON.stringify(items),'-Executable',discovery.executable,'-Terminate'])).stdout);
+            result.forcedProcesses=result.forcedProcessObservation.stopped;
           } else {
             // Chrome alone owns this new process group; never signal a caller's group/display.
             const members=[];
@@ -608,26 +709,27 @@ async function main() {
             const liveLauncher=linuxLauncher?.pid===chrome.child.pid&&linuxLauncher.pgid===chrome.child.pid&&linuxLauncher.uid===process.getuid()&&chrome.child.exitCode===null&&chrome.child.signalCode===null;
             if(members.length||liveLauncher)try{process.kill(-linuxLauncher.pgid,signal);}catch(e){if(e.code!=='ESRCH')throw e;}
           }
-        });result.browserClosed=await chrome.closed;
+        },15000,result.chromeShutdown={});result.browserClosed=await chrome.closed;
       }
-    }catch(e){result.shutdownError=e.message;cdp?.close();}
+    }catch(e){recordShutdownError(result,'chrome-close',e);try{cdp?.close();}catch(disconnectError){recordShutdownError(result,'cdp-disconnect',disconnectError);}}
     if(server?.listening){const port=server.address().port;await new Promise(resolve=>server.close(resolve));result.serverClosed=await new Promise(resolve=>{const s=net.connect({host:'127.0.0.1',port});s.on('connect',()=>{s.destroy();resolve(false)});s.on('error',e=>resolve(e.code==='ECONNREFUSED'));});}
-    if(xvfb){try{result.xvfbClosed=await closeNativeDisplay(xvfb);if(result.display){const number=result.display.slice(1);result.xvfbDisplayRemoved=await absent('/tmp/.X11-unix/X'+number)&&await absent('/tmp/.X'+number+'-lock');assert(result.xvfbDisplayRemoved,'Owned Xvfb display socket/lock remains; inspect, do not force-delete');}}catch(e){result.shutdownError=e.message;}}
+    if(xvfb){try{result.xvfbClosed=await closeNativeDisplay(xvfb);if(result.display){const number=result.display.slice(1);result.xvfbDisplayRemoved=await absent('/tmp/.X11-unix/X'+number)&&await absent('/tmp/.X'+number+'-lock');assert(result.xvfbDisplayRemoved,'Owned Xvfb display socket/lock remains; inspect, do not force-delete');}}catch(e){recordShutdownError(result,'display-close',e);}}
     // Windows helper records PID+creation-time identities; verify no recorded Chrome child is still live.
     try {
       if(process.platform==='win32'&&chrome){
         const identities=new Map();for(const a of result.actions)for(const p of a.ownedProcesses??[])identities.set(p.pid+':'+p.creationTicks,p);
         assert(identities.size,'No owned process identities recorded; retain profile');
-        const items=[...identities.values()].map(p=>'@{pid='+p.pid+';ticks="'+p.creationTicks+'"}').join(',');
-        const script='$live=@();foreach($i in @('+items+')){$p=Get-Process -Id $i.pid -ErrorAction SilentlyContinue;if($p -and $p.StartTime.ToUniversalTime().Ticks.ToString() -eq $i.ticks){$live+=$i}};ConvertTo-Json -InputObject @($live) -Compress';
-        result.remainingProcesses=JSON.parse((await ps(['-Command',script])).stdout);assert.equal(result.remainingProcesses.length,0,'Owned Chrome processes remain');
+        const items=[...identities.values()].map(p=>({pid:p.pid,ticks:p.creationTicks}));
+        result.processCleanupObservation=JSON.parse((await ps(['-File',path.join(tools,'native-process-cleanup.ps1'),
+          '-IdentitiesJson',JSON.stringify(items),'-Executable',discovery.executable])).stdout);
+        result.remainingProcesses=result.processCleanupObservation.remaining;assert.equal(result.remainingProcesses.length,0,'Owned Chrome processes remain');
       }
       if(process.platform==='linux'&&profile){
         const remaining=[];
         for(const name of await readdir('/proc'))if(/^\d+$/.test(name)){try{const p=await linuxProcess(Number(name));if(linuxProfileValues(p.args).includes(profile)||ownedLinuxGroupMember(p,linuxLauncher,linuxCandidate,process.getuid()))remaining.push(p.pid);}catch(e){if(!['ENOENT','ESRCH','EACCES'].includes(e.code))throw e;}}
         result.remainingProcesses=remaining;assert.equal(remaining.length,0,'Owned Chrome processes remain');
       }
-    }catch(e){result.shutdownError=e.message;}
+    }catch(e){recordShutdownError(result,'remaining-processes',e);}
     if(!result.shutdownError&&!denied.size){
       for(const p of [fixture,empty,scratch].filter(Boolean))try{if(identities.has(p)&&!(await absent(p))){await assertOwned(p);await remove(p);}result.cleanup.push({path:p,status:await absent(p)?'removed':'retained'});}catch(e){result.cleanup.push({path:p,status:'retained',error:e.message});}
     }
@@ -647,4 +749,20 @@ async function main() {
     if(result.status!=='qualified')process.exitCode=1;
   }
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { await main(); }
+  catch (error) {
+    // CreateProcess children deliberately inherit no caller handles. Persist
+    // pre-browser guard errors without depending on an interactive console.
+    const index = process.argv.indexOf('--evidence');
+    if (process.env.CODE_CITY_NATIVE_ISOLATION_FILE && index >= 0 && process.argv[index + 1]) {
+      try {
+        await writeFile(path.join(path.resolve(process.argv[index + 1]), 'isolation-child-failure-' + process.pid + '.json'),
+          JSON.stringify({ message: error.message, stack: error.stack, stdout: error.stdout?.toString(), stderr: error.stderr?.toString() }, null, 2) + '\n');
+      } catch (saveError) {
+        console.error('Isolation guard error not persisted: ' + String(saveError.message).slice(0, 2048));
+      }
+    }
+    throw error;
+  }
+}

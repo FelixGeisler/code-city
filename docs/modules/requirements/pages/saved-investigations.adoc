@@ -7,9 +7,12 @@ Decisions:: xref:architecture:adr/0016-immutable-investigation-file-store.adoc[I
 
 A completed GitHub or local working-tree investigation remains browser-local
 until Save. Save publishes one immutable snapshot and changes the address to
-`/saved/<id>`. Copy link copies that address. Saving does not reacquire source,
-rerun analysis or replace an existing snapshot. A failed Save leaves the current
-city/inspection usable; clicking Save again on a saved result copies its link.
+`/saved/<id>`. Save is available only for an unsaved completed investigation;
+successful Save or saved reopen hides that action. Copy the saved URL from the
+browser address bar; there is no copy action or clipboard access in the UI.
+Saving does not reacquire source, rerun analysis or replace an existing snapshot.
+A failed Save leaves the current city/inspection usable and Save available for
+an explicit retry.
 
 Open saved is a read-only picker grouped by input kind and repository/folder
 name. GitHub entries show branch/release/default choice, short commit and UTC
@@ -20,10 +23,11 @@ labels from short revision and exact UTC metadata. Full source/ref/revision/time
 remain reachable through the row's native tooltip; the reopened project-name
 native title retains the full commit or working-tree capture ID. The saved
 status is plain `Saved`, not a link back to the current snapshot. Its native
-title gives the exact UTC saved time. Copy link remains explicit and copies the
-current canonical saved address. Replacing or clearing the result clears stale
-saved status and time. Loading, empty and error messages
-stay local to the picker, with Close always available.
+title gives the exact UTC saved time. The address bar retains the canonical
+saved address. Draft source/settings edits do not change that saved identity or
+address. Replacing or clearing the result clears stale saved status and time;
+late Save callbacks cannot change the replacement investigation. Loading, empty
+and error messages stay local to the picker, with Close always available.
 
 A saved URL restores city, outcomes, metrics, unit/contribution evidence and exact
 normalized code without acquisition, filesystem permission, GitHub requests or

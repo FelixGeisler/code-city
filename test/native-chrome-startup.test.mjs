@@ -66,7 +66,10 @@ test('owned Node endpoint during setup survives later exit and retains the close
 
 test('spawn error during async setup stays handled but still rejects to its owner', async () => {
   const result = {};
-  const chrome = launchNativeChrome(path.join(os.tmpdir(), 'code-city-missing-' + randomUUID()), [], {}, result);
+  // A missing cwd produces a real ENOENT spawn error with a no-GUI Node
+  // executable; Windows correctly refuses unproved browser launches earlier.
+  const chrome = launchNativeChrome(process.execPath, ['-e', 'process.exit(0)'],
+    { cwd: path.join(os.tmpdir(), 'code-city-missing-' + randomUUID()) }, result);
   await chrome.closed;
   await nextTurn();
   assert.equal(result.chromeStartup.status, 'error');

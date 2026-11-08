@@ -26,7 +26,12 @@ async function fixture(picker, realInspection = false, realController = false) {
   const elements = new Map();
   const node = selector => {
     assert.doesNotMatch(selector, /data-(?:commit|origin-label|origin-identity)/u, 'removed identity nodes are not a supported surface');
-    if (!elements.has(selector)) elements.set(selector, new Element()); return elements.get(selector);
+    if (!elements.has(selector)) {
+      const element = new Element();
+      if (selector === '[data-save]') { element.hidden = true; element.textContent = 'Save'; }
+      elements.set(selector, element);
+    }
+    return elements.get(selector);
   };
   const state = { calls: [], view: undefined, restore: undefined, clears: 0, records: [] };
   const controller = {
@@ -54,7 +59,8 @@ async function fixture(picker, realInspection = false, realController = false) {
   set("window", window);
   set("location", { pathname: "/", origin: "http://localhost", href: "http://localhost/" });
   set("history", { replaceState(_state, _unused, url) { location.pathname=url; location.href=location.origin+url; } });
-  set("navigator", { clipboard: { writeText(value) { state.copied=value; return Promise.resolve(); } } });
+  state.clipboardReads = 0;
+  set("navigator", { get clipboard() { state.clipboardReads++; throw new Error('Clipboard access is forbidden'); } });
   set("fetch", () => { throw new Error("Shell must not upload source"); });
   const hooks = registerHooks({ resolve(specifier, context, next) {
     if (context.parentURL?.includes("standalone-browser-main.ts")) {
@@ -66,7 +72,7 @@ async function fixture(picker, realInspection = false, realController = false) {
         "./standalone-presentation-session": realInspection
           ? "export function createStandalonePresentationCoordinator(options) { return globalThis.__shellFixture.createPresentation(options); }"
           : "export function createStandalonePresentationCoordinator() { const state=globalThis.__shellFixture; return {clear(){state.clears++;},publish(){return true;},dispose(){},failCurrent(){},cancelInspectionIntent(){}}; }",
-        "./browser-saved-investigations": "export async function listSavedInvestigations(){return globalThis.__shellFixture.records;} export function savedUrl(id){return 'http://localhost/saved/'+id;}",
+        "./browser-saved-investigations": "export async function listSavedInvestigations(){return globalThis.__shellFixture.records;}",
       };
       if (mocks[specifier]) return { url: `data:text/javascript,${encodeURIComponent(mocks[specifier])}`, shortCircuit: true };
     }
@@ -102,7 +108,7 @@ async function fixture(picker, realInspection = false, realController = false) {
   hooks.deregister();
   const click = selector => node(selector).dispatchEvent(new Event("click"));
   const submit = () => node("form").dispatchEvent(new Event("submit", { cancelable: true }));
-  return { state, node, click, submit, close() { window.dispatchEvent(new Event("pagehide")); for (const [key, value] of originals) { if (value) Object.defineProperty(globalThis, key, value); else delete globalThis[key]; } } };
+  return { state, node, click, submit, close() { window.dispatchEvent(new Event("pagehide")); for (const [key, value] of originals) { if (value) Object.defineProperty(globalThis, key, value); else delete globalThis[key]; } assert.equal(state.clipboardReads, 0, 'shell must never access the clipboard API'); } };
 }
 
 const descendants = root => [root, ...root.children.flatMap(child => child instanceof Element ? descendants(child) : [])];
@@ -142,6 +148,9 @@ test("shell defaults to local-first setup with separate choose/Analyze and expli
   const html = await readFile(new URL("../standalone.html", import.meta.url), "utf8");
   assert.match(html, /aria-selected="true" aria-controls="local-setup" data-source-local>Local folder/u);
   assert.doesNotMatch(html, /<select|data-automatic-exclusions|checkbox/u);
+  assert.doesNotMatch(html, /copy link|data-copy|clipboard/iu, 'no hidden copy compatibility widget');
+  const main = await readFile(new URL('../src/edge/standalone-browser-main.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(main, /clipboard|savedUrl|Copy link/u, 'the shell has no clipboard handler or dead copy helper');
   assert.match(html, /type="button" data-choose-folder/u);
   assert.match(html, /type="submit">Analyze/u);
   assert.match(html, /data-github-setup hidden/u);
@@ -251,7 +260,8 @@ test("restoring local origin never reopens the folder and groups saved local/Git
     assert.equal(f.node('[data-save-status]').title,'Saved now');
     assert.equal(f.node('[data-save-status]').children.length,0,'Saved is text, not a reload-to-self anchor');
     assert.equal(location.href,'http://localhost/saved/'+record.id);
-    f.click('[data-save]');assert.equal(f.state.copied,location.href);
+    assert.equal(f.node('[data-save]').hidden,true);
+    f.click('[data-save]');assert.deepEqual(f.state.calls,[['start']], 'saved reopen has no Save/copy action');
   } finally { f.close(); }
 });
 
@@ -287,30 +297,81 @@ test('real controller binds only the current selected origin to the project titl
   } finally {f.close();}
 });
 
-test('saved GitHub/local titles restore, plain status and Copy link retain ownership, replacement clears time and rejects late Save',async()=>{
+test('saved GitHub/local reopen keeps Save absent through success/all-failed, plain status and original identity; clear resets metadata',async()=>{
   const f=await fixture(undefined);
   const sha='a'.repeat(40), id='c'.repeat(64), savedAt='2026-07-01T12:34:56.000Z';
   const restoredPolicy={version:'code-city-auto-exclusions-1',manual:[],included:[],detected:[],effective:[]};
   try {
     for(const origin of [{kind:'github',repositoryUrl:'https://github.com/fixture/repo',revision:sha},{kind:'working-tree',name:'Synthetic',captureId:id}]) {
-      f.state.view.clear();f.state.view.working(()=>{});
-      const record={id:'S'.repeat(43),kind:origin.kind,repository:origin.kind==='github'?'fixture/repo':'Synthetic',ref:'main',revision:origin.kind==='github'?sha:id,savedAt};
-      f.state.restore(origin,record,restoredPolicy);
-      f.state.view.succeeded(1,{},[],record.revision);
-      assert.equal(f.node('[data-repository]').title,(origin.kind==='github'?'Commit: ':'Working-tree capture: ')+record.revision);
-      assert.equal(f.node('[data-save-status]').textContent,'Saved');assert.equal(f.node('[data-save-status]').title,'Saved '+savedAt);assert.equal(f.node('[data-save-status]').children.length,0);
-      const before=location.href;f.click('[data-save-status]');assert.equal(location.href,before);f.click('[data-save]');assert.equal(f.state.copied,before);
-      f.state.view.clear();assert.equal(f.node('[data-repository]').title,'');assert.equal(f.node('[data-save-status]').title,'');assert.equal(f.node('[data-save-status]').textContent,'');assert.equal(f.node('[data-save]').textContent,'Save');
+      for(const terminal of ['succeeded','allFilesFailed']) {
+        f.state.view.clear();f.state.view.working(()=>{});
+        const record={id:'S'.repeat(43),kind:origin.kind,repository:origin.kind==='github'?'fixture/repo':'Synthetic',ref:'main',revision:origin.kind==='github'?sha:id,savedAt};
+        f.state.restore(origin,record,restoredPolicy);
+        if(terminal==='succeeded')f.state.view.succeeded(1,{},[],record.revision);
+        else f.state.view.allFilesFailed(1,[],record.revision);
+        assert.equal(f.node('[data-repository]').title,(origin.kind==='github'?'Commit: ':'Working-tree capture: ')+record.revision);
+        assert.equal(f.node('[data-save]').hidden,true);
+        assert.equal(f.node('[data-save]').textContent,'Save','no hidden copy compatibility button');
+        assert.equal(f.node('[data-save-status]').textContent,'Saved');assert.equal(f.node('[data-save-status]').title,'Saved '+savedAt);assert.equal(f.node('[data-save-status]').children.length,0);
+        const before=location.href;f.click('[data-save-status]');f.click('[data-save]');
+        assert.equal(location.href,before);assert.deepEqual(f.state.calls,[['start']]);
+        f.state.view.clear();assert.equal(f.node('[data-repository]').title,'');assert.equal(f.node('[data-save-status]').title,'');assert.equal(f.node('[data-save-status]').textContent,'');assert.equal(f.node('[data-save]').hidden,true);
+      }
     }
     f.state.view.working(()=>{});f.node('input[name=repository]').dispatchEvent(new Event('input'));
+    const before=location.href;
     f.state.restore({kind:'github',repositoryUrl:'https://github.com/fixture/stale',revision:sha},{id:'T'.repeat(43),savedAt},restoredPolicy);
-    assert.equal(f.node('[data-repository]').title,'');assert.equal(f.node('[data-save-status]').textContent,'');assert.equal(f.node('[data-save-status]').title,'','stale restore overwrote current metadata');
-    let complete;f.state.controller.save=()=>new Promise(resolve=>{complete=resolve;});
-    f.state.view.origin({kind:'github',repositoryUrl:'https://github.com/fixture/repo',revision:sha});f.state.view.succeeded(2,{},[],sha);
-    f.click('[data-save]');f.state.view.clear();const before=location.href;
-    complete({id:'T'.repeat(43),savedAt});await flush();assert.equal(f.node('[data-save-status]').textContent,'');assert.equal(f.node('[data-save-status]').title,'');assert.equal(location.href,before,'late Save changed current history');
-    f.state.controller.save=()=>Promise.reject(new Error('Write unavailable'));f.state.view.succeeded(3,{},[],sha);f.click('[data-save]');await flush();assert.match(f.node('[data-save-status]').textContent,/Write unavailable.*unchanged/u);assert.equal(f.node('[data-save-status]').title,'');assert.equal(f.node('[data-save]').textContent,'Save');
+    assert.equal(f.node('[data-repository]').title,'');assert.equal(f.node('[data-save-status]').textContent,'');assert.equal(f.node('[data-save-status]').title,'','stale restore overwrote current metadata');assert.equal(location.href,before);
   } finally {f.close();}
+});
+
+test('Save failure preserves result/settings and permits one retry; draft edits cannot change saved identity or canonical history',async()=>{
+  const f=await fixture(undefined);
+  const sha='a'.repeat(40), record={id:'S'.repeat(43),savedAt:'2026-07-01T12:34:56.000Z'};
+  try {
+    f.state.view.origin({kind:'github',repositoryUrl:'https://github.com/fixture/original',revision:sha});
+    f.state.view.succeeded(1,{},[],sha);edit(f,'pending-only');
+    const clears=f.state.clears,before=location.href;
+    let reject;f.state.controller.save=()=>{f.state.calls.push(['save']);return new Promise((_,no)=>{reject=no;});};
+    f.click('[data-save]');f.click('[data-save]');assert.equal(f.node('[data-save]').disabled,true);
+    assert.deepEqual(f.state.calls,[['start'],['save']]);
+    reject(new Error('Write unavailable'));await flush();
+    assert.match(f.node('[data-save-status]').textContent,/Write unavailable.*unchanged/u);
+    assert.equal(f.node('[data-save-status]').title,'');assert.equal(location.href,before);
+    assert.equal(f.node('[data-save]').hidden,false);assert.equal(f.node('[data-save]').disabled,false);
+    assert.equal(f.state.clears,clears);assert.equal(editor(f).value,'pending-only');assert.equal(f.node('[data-repository]').title,'Commit: '+sha);
+    let complete;f.state.controller.save=()=>{f.state.calls.push(['save']);return new Promise(resolve=>{complete=resolve;});};
+    f.click('[data-save]');
+    f.node('input[name=repository]').value='https://github.com/fixture/draft';f.node('input[name=repository]').dispatchEvent(new Event('input'));
+    f.click('[data-source-github]');edit(f,'different-pending');complete(record);await flush();
+    assert.equal(location.href,'http://localhost/saved/'+record.id);
+    assert.equal(f.node('[data-repository]').textContent,'https://github.com/fixture/original');assert.equal(f.node('[data-repository]').title,'Commit: '+sha);
+    assert.equal(f.node('[data-save-status]').textContent,'Saved');assert.equal(f.node('[data-save-status]').title,'Saved '+record.savedAt);assert.equal(f.node('[data-save-status]').children.length,0);
+    assert.equal(f.node('[data-save]').hidden,true);assert.equal(f.node('[data-save]').textContent,'Save');
+    f.click('[data-save]');assert.deepEqual(f.state.calls,[['start'],['save'],['save']]);assert.equal(f.state.clears,clears);
+    f.state.view.clear();f.state.view.succeeded(2,{},[],sha);
+    assert.equal(f.node('[data-save]').hidden,false);assert.equal(f.node('[data-save]').disabled,false);assert.equal(f.node('[data-save-status]').textContent,'');assert.equal(f.node('[data-save-status]').title,'');
+  } finally {f.close();}
+});
+
+test('new source rejects stale Save success/failure/finally without enabling its pending Save',async()=>{
+  for(const outcome of ['success','failure']) {
+    const f=await fixture(undefined);
+    try {
+      const pending=[];f.state.controller.save=()=>new Promise((resolve,reject)=>pending.push({resolve,reject}));
+      f.state.view.origin({kind:'github',repositoryUrl:'https://github.com/fixture/old',revision:'a'.repeat(40)});f.state.view.succeeded(1,{},[],'a'.repeat(40));
+      f.click('[data-save]');
+      f.click('[data-source-github]');f.node('input[name=repository]').value='https://github.com/fixture/new';f.submit();
+      f.state.view.clear();f.state.view.origin({kind:'github',repositoryUrl:'https://github.com/fixture/new',revision:'b'.repeat(40)});f.state.view.succeeded(2,{},[],'b'.repeat(40));
+      assert.equal(f.node('[data-save]').disabled,false);assert.equal(f.node('[data-save-status]').textContent,'');
+      f.click('[data-save]');
+      if(outcome==='success')pending[0].resolve({id:'T'.repeat(43),savedAt:'old'});else pending[0].reject(new Error('Stale failure'));
+      await flush();assert.equal(location.pathname,'/');assert.equal(f.node('[data-save-status]').textContent,'Saving investigation');assert.equal(f.node('[data-save-status]').title,'');assert.equal(f.node('[data-save]').disabled,true);
+      assert.equal(f.node('[data-repository]').title,'Commit: '+'b'.repeat(40));
+      pending[1].resolve({id:'N'.repeat(43),savedAt:'new'});await flush();
+      assert.equal(location.pathname,'/saved/'+'N'.repeat(43));assert.equal(f.node('[data-save]').hidden,true);assert.equal(f.node('[data-save-status]').title,'Saved new');
+    } finally {f.close();}
+  }
 });
 
 const policy = (manual=[], included=[], detected=[['.vite','cache:.vite']], effective=[]) => ({version:'code-city-auto-exclusions-1',manual,included,detected,effective});

@@ -119,9 +119,11 @@ xref:requirements:unit-inspection.adoc[Unit Source Inspection].
 The header binds the validated current origin/revision to the project-name
 native title; it has no separate identity disclosure/output. Clear and cancel
 remove the binding; correlated post-selection failures retain it. Save/reopen
-shows plain Saved status with UTC time in its native title, while Copy link
-uses the canonical saved address. Replacement clears status/time and record
-ownership using the existing UI epoch guard.
+shows plain Saved status with UTC time in its native title and hides Save;
+result publication preserves that saved state. The canonical address stays in
+browser history, with no clipboard API path. Replacement clears status/time
+and saved state using the existing UI epoch guard; stale Save completion or
+failure cannot alter the replacement's controls or history.
 
 The picker reads only receipt metadata and groups by input kind and
 repository/folder; refs/commits and local captures coexist under random IDs. Capacity, corruption and operator recovery are owned
@@ -143,7 +145,11 @@ latency, or total-memory guarantees.
 
 Evidence also saves the maximum envelope, preserves the scene on failed Save,
 restarts the host, and reopens in a fresh browser context with provider access
-blocked and no parser-asset requests. Inspection evidence covers nested owners,
+blocked and no parser-asset requests. Save readiness observes its own status,
+hidden action and canonical address, independently of retained inspection
+errors. A held real worker receipt proves Save remains pending and neither
+clears the inspection failure nor retries inspection automatically; explicit
+Inspect code recovers afterward. Inspection evidence covers nested owners,
 Unicode byte/column mapping, inert HTML-like text, dense long-line paging,
 keyboard/mobile source dialogs and fresh/saved operation without network or
 camera changes. Recursive presentation remains a later outcome.

@@ -18,8 +18,10 @@ import { exerciseWorkspace, assertContextualDetailsReachable } from "./standalon
 
 const WATCHDOG_MS = 600_000;
 const REPOSITORY = "https://github.com/fixture/standalone";
-const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:(document.querySelector('[data-repository]')?.title??'').replace(/^(?:Commit|Working-tree capture): /u,''),canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,units:document.querySelectorAll('[data-unit-rows] li').length,unitMessage:document.querySelector('[data-units] > [role=status]')?.textContent??'',sourceOpen:document.querySelector('[data-unit-source]')?.open??false,sourceReady:document.querySelectorAll('[data-source-code] [data-source-line]').length>0,sourceRange:document.querySelector('[data-source-range]')?.textContent??'',sourceMessage:document.querySelector('[data-source-body] [role=status]')?.textContent??'',contributionMessage:document.querySelector('[data-owned-contributions] [role=status]')?.textContent??'',contributions:document.querySelectorAll('[data-contribution-rows] li').length,contributionStart:document.querySelector('[data-contribution-rows]')?.start??0,saved:document.querySelector('[data-save]')?.textContent==='Copy link',saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,sourceIdentity:document.querySelector('[data-repository]').title,filesVisible:document.querySelector('[data-analyzed]')? document.querySelector('[data-analyzed]').checkVisibility() : null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
+const snapshotExpression = `({ready:document.readyState,status:document.querySelector('[data-status]')?.textContent??'',feedback:document.querySelector('[data-feedback]')?.textContent??'',commit:(document.querySelector('[data-repository]')?.title??'').replace(/^(?:Commit|Working-tree capture): /u,''),canvases:document.querySelectorAll('[data-city] canvas').length,analyzed:document.querySelectorAll('[data-analyzed-rows] li').length,failed:document.querySelectorAll('[data-failed-rows] li').length,units:document.querySelectorAll('[data-unit-rows] li').length,unitMessage:document.querySelector('[data-units] > [role=status]')?.textContent??'',sourceOpen:document.querySelector('[data-unit-source]')?.open??false,sourceReady:document.querySelectorAll('[data-source-code] [data-source-line]').length>0,sourceRange:document.querySelector('[data-source-range]')?.textContent??'',sourceMessage:document.querySelector('[data-source-body] [role=status]')?.textContent??'',contributionMessage:document.querySelector('[data-owned-contributions] [role=status]')?.textContent??'',contributions:document.querySelectorAll('[data-contribution-rows] li').length,contributionStart:document.querySelector('[data-contribution-rows]')?.start??0,saved:document.querySelector('[data-save-status]')?.textContent==='Saved'&&document.querySelector('[data-save]')?.hidden===true&&/^\\/saved\\/[A-Za-z0-9_-]{43}$/u.test(location.pathname),saveMessage:document.querySelector('[data-save-status]')?.textContent??'',setup:!document.querySelector('form').hidden,summary:!document.querySelector('[data-investigation]').hidden,repository:document.querySelector('[data-repository]').textContent,sourceIdentity:document.querySelector('[data-repository]').title,filesVisible:document.querySelector('[data-analyzed]')? document.querySelector('[data-analyzed]').checkVisibility() : null,failuresOpen:document.querySelector('[data-failed]').open,district:document.querySelector('[data-district-path]')?.textContent??null,selectedFile:document.querySelector('[data-canonical-path]')?.textContent??null,controls:!document.querySelector('[data-investigation-controls]').hidden,progress:(()=>{const p=document.querySelector('progress');return p?{value:p.value,max:p.max,determinate:p.hasAttribute('value')}:null})()})`;
 const renderObservation = `(() => {
+ window.__clipboardReads=0;
+ Object.defineProperty(navigator,'clipboard',{configurable:true,get(){window.__clipboardReads++;throw new Error('Clipboard access is forbidden');}});
  window.__render={matrices:[],uploads:0,integers:{},frames:[],capturePixels:false,progress:[]};
  const progressIds=new WeakMap();let nextProgress=0;
  const value=Object.getOwnPropertyDescriptor(HTMLProgressElement.prototype,'value');
@@ -40,6 +42,9 @@ const renderObservation = `(() => {
   if(type!=='message'||typeof callback!=='function')return add.call(this,type,callback,...options);
   const wrapped=event=>{const gate=window.__gate;const data=event.data;
    if(data.type==='ANALYSIS_SUCCEEDED')window.__cityFingerprint=JSON.stringify(data.city);
+   if(data.type==='SAVE_RESULT'&&window.__saveGate){
+    window.__saveGate.release=()=>callback.call(this,event);window.__saveGate.held.resolve();return;
+   }
    if(gate.active){
     if(!gate.opened&&data.type==='ANALYSIS_PROGRESS'&&data.stage==='analysis'&&data.completed===0)gate.opened=true;
     else if(gate.opened){gate.queue.push({data,deliver:()=>callback.call(this,event)});window.__codeCityDeliveryEvidence(JSON.stringify({type:data.type,stage:data.stage,completed:data.completed}));return;}
@@ -360,11 +365,15 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
 
     process.stdout.write("Browser evidence: explicit Save and project/ref picker\n");
     async function saveCurrent() {
+      const start=harness.requests.length;
+      assert.equal(await p.evaluate(`!document.querySelector('[data-save]').hidden&&!document.querySelector('[data-save]').disabled&&document.querySelector('[data-save]').textContent==='Save'`),true);
       await p.click("[data-save]");
       const saved = await p.wait(s => s.saved || s.saveMessage.includes("unchanged"));
       assert.ok(saved.saved, saved.saveMessage);
       assert.equal(saved.saveMessage, 'Saved');
       assert.equal(await p.evaluate(`document.querySelector('[data-save-status] a')`), null);
+      assert.equal(await p.evaluate(`document.querySelector('[data-save]').hidden&&![...document.querySelectorAll('button,a')].some(e=>/copy link/i.test(e.textContent))&&window.__clipboardReads===0`),true,'saved result must have no copy action or clipboard access');
+      assert.equal(harness.requests.slice(start).filter(r=>r.method==='POST'&&r.url===origin+'/api/investigations').length,1,'one explicit Save must perform one real upload');
       return p.evaluate("location.href");
     }
     const savedDistrictFingerprint = await p.evaluate("window.__cityFingerprint");
@@ -619,6 +628,7 @@ export async function checkStandaloneBrowser({ workspaceOnly = false, evidenceDi
     await reopened.wait(s => s.canvases === 1 && s.analyzed === 4000 && s.saved);
     assert.equal((await reopened.snapshot()).sourceIdentity, 'Commit: '+FIXTURE_REVISION);
     assert.ok(await reopened.evaluate("window.__cityFingerprint") === maximumFingerprint, "Restart/fresh-context restoration changed the saved city or metrics");
+    assert.equal(await reopened.evaluate(`document.querySelector('[data-save]').hidden&&document.querySelector('[data-save]').textContent==='Save'&&window.__clipboardReads===0`),true,'maximum saved reopen must not expose a copy/Save action');
     assert.ok(harness.requests.slice(restoreStart).every(item => new URL(item.url).origin === origin && !new URL(item.url).pathname.startsWith('/parser/')), "Reopen acquired or parsed source");
     await checked(cdp.send("Target.closeTarget", { targetId: reopened.targetId }));
     await checked(cdp.send("Target.disposeBrowserContext", { browserContextId }));
