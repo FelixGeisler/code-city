@@ -18,7 +18,7 @@ import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { discoverInstalledChrome, readInstalledChromeVersion, connectCdp, closeInstalledChrome } from './chrome-cdp.mjs';
+import { discoverInstalledChrome, readInstalledChromeVersion, connectCdp } from './chrome-cdp.mjs';
 
 const execFile = promisify(execFileCallback);
 const tools = path.dirname(fileURLToPath(import.meta.url));
@@ -107,21 +107,43 @@ export function launchNativeChrome(executable, args, options, result) {
 }
 // A timeout must also release the OS child/stdio handles, not just reject a promise.
 // Forced shutdown is a failed qualification: preserve its profile for inspection.
-async function closeNativeChrome(chrome, cdp, terminateOwned, timeout = 15000) {
-  try { await bounded(closeInstalledChrome(chrome, cdp), timeout, 'Chrome closed barrier'); }
+export async function closeNativeChrome(chrome, cdp, terminateOwned, timeout = 15000, diagnostics = {}) {
+  const snapshot = () => ({ exitCode: chrome.child.exitCode, signalCode: chrome.child.signalCode,
+    killed: chrome.child.killed, stderrEnded: chrome.child.stderr?.readableEnded,
+    stderrClosed: chrome.child.stderr?.closed, stderrDestroyed: chrome.child.stderr?.destroyed });
+  const graceful = async () => {
+    assert(cdp, 'Chrome normal shutdown unavailable without CDP');
+    try { await cdp.send('Browser.close'); diagnostics.acknowledged = true; }
+    catch (error) { diagnostics.requestError = error.message; }
+    finally { cdp.close(); }
+    // Browser.close may disconnect CDP before its response. Join the actual
+    // process AND inherited stdio before deciding; never kill on lost ACK alone.
+    diagnostics.closed = await chrome.closed;
+    assert(diagnostics.closed.code === 0 && diagnostics.closed.signal === null,
+      `Chrome did not shut down cleanly (code=${diagnostics.closed.code}, signal=${diagnostics.closed.signal}); retain its temporary profile`);
+  };
+  try { await bounded(graceful(), timeout, 'Chrome closed barrier'); }
   catch (error) {
-    cdp?.close();
-    try { await terminateOwned('SIGTERM'); }
-    finally {
-      if(chrome.child.exitCode===null&&chrome.child.signalCode===null)chrome.child.kill();
-      try { await bounded(chrome.closed, 5000, 'Forced Chrome closure'); }
-      catch {
-        try { await terminateOwned('SIGKILL');if(chrome.child.exitCode===null&&chrome.child.signalCode===null)chrome.child.kill('SIGKILL');await bounded(chrome.closed,2000,'Killed Chrome closure'); }
-        finally { chrome.child.unref();chrome.child.stderr?.destroy(); }
+    diagnostics.beforeForced = snapshot();
+    diagnostics.forced = true; // forced cleanup never turns this rejection into success
+    try { cdp?.close(); } catch (disconnectError) { diagnostics.disconnectError = disconnectError.message; }
+    try {
+      try { await terminateOwned('SIGTERM'); }
+      finally {
+        if(chrome.child.exitCode===null&&chrome.child.signalCode===null)chrome.child.kill();
+        try { await bounded(chrome.closed, 5000, 'Forced Chrome closure'); }
+        catch {
+          try { await terminateOwned('SIGKILL');if(chrome.child.exitCode===null&&chrome.child.signalCode===null)chrome.child.kill('SIGKILL');await bounded(chrome.closed,2000,'Killed Chrome closure'); }
+          finally { chrome.child.unref();chrome.child.stderr?.destroy(); }
+        }
       }
-    }
+    } catch (cleanupError) { diagnostics.cleanupError = cleanupError.message; }
     throw error;
-  }
+  } finally { diagnostics.final = snapshot(); }
+}
+export function recordShutdownError(result, stage, error) {
+  result.shutdownError ??= error.message;
+  (result.shutdownErrors ??= []).push({ stage, message: error.message, stack: error.stack });
 }
 async function closeNativeDisplay(display, timeout = 5000) {
   if(display.child.exitCode===null&&display.child.signalCode===null)display.child.kill('SIGTERM');
@@ -549,7 +571,7 @@ async function main() {
     discovery=await discoverInstalledChrome();result.chrome={...discovery,version:await readInstalledChromeVersion(discovery,{execFileImpl:(command,args,options)=>execFile(command,args,{...options,timeout:10000})})};
     const modules=await sourceModules();
     result.servedModuleSha256=Object.fromEntries([...modules].map(([name,text])=>[name,createHash('sha256').update(text).digest('hex')]));
-    result.toolSha256={};for(const name of ['check-local-folder-native.mjs','local-folder-native-windows.ps1','local-folder-native-linux.py',...(process.platform==='win32'?['native-desktop-launcher.ps1','native-desktop-guard.ps1','native-desktop-isolation.cs']:[])])result.toolSha256[name]=createHash('sha256').update(await readFile(path.join(tools,name))).digest('hex');
+    result.toolSha256={};for(const name of ['check-local-folder-native.mjs','local-folder-native-windows.ps1','local-folder-native-linux.py',...(process.platform==='win32'?['native-desktop-launcher.ps1','native-desktop-guard.ps1','native-desktop-isolation.cs','native-process-cleanup.ps1']:[])])result.toolSha256[name]=createHash('sha256').update(await readFile(path.join(tools,name))).digest('hex');
     scratch=await mkdtemp(path.join(os.tmpdir(),'code-city-native-'));identities.set(scratch,await lstat(scratch));
     profile=path.join(scratch,'profile');await ownDirectory(profile);
     if(process.platform==='linux') {
@@ -675,10 +697,10 @@ async function main() {
           if(process.platform==='win32') {
             // Only previously recorded PID/start-time/executable identities, never taskkill /T or global Chrome.
             const known=new Map();for(const a of result.actions)for(const p of a.ownedProcesses??[])known.set(p.pid+':'+p.creationTicks,p);
-            const executable=discovery.executable.replaceAll("'","''");
-            const items=[...known.values()].sort((a,b)=>(a.role==='browser')-(b.role==='browser')).map(p=>'@{pid='+p.pid+';ticks="'+p.creationTicks+'"}').join(',');
-            const script="$stopped=@();foreach($i in @("+items+")){$p=Get-Process -Id $i.pid -ErrorAction SilentlyContinue;if($p -and $p.Path -eq '"+executable+"' -and $p.StartTime.ToUniversalTime().Ticks.ToString() -eq $i.ticks){Stop-Process -Id $p.Id -ErrorAction Stop;$stopped+=$i}};ConvertTo-Json -InputObject @($stopped) -Compress";
-            result.forcedProcesses=JSON.parse((await ps(['-Command',script])).stdout);
+            const items=[...known.values()].sort((a,b)=>(a.role==='browser')-(b.role==='browser')).map(p=>({pid:p.pid,ticks:p.creationTicks}));
+            result.forcedProcessObservation=JSON.parse((await ps(['-File',path.join(tools,'native-process-cleanup.ps1'),
+              '-IdentitiesJson',JSON.stringify(items),'-Executable',discovery.executable,'-Terminate'])).stdout);
+            result.forcedProcesses=result.forcedProcessObservation.stopped;
           } else {
             // Chrome alone owns this new process group; never signal a caller's group/display.
             const members=[];
@@ -687,26 +709,27 @@ async function main() {
             const liveLauncher=linuxLauncher?.pid===chrome.child.pid&&linuxLauncher.pgid===chrome.child.pid&&linuxLauncher.uid===process.getuid()&&chrome.child.exitCode===null&&chrome.child.signalCode===null;
             if(members.length||liveLauncher)try{process.kill(-linuxLauncher.pgid,signal);}catch(e){if(e.code!=='ESRCH')throw e;}
           }
-        });result.browserClosed=await chrome.closed;
+        },15000,result.chromeShutdown={});result.browserClosed=await chrome.closed;
       }
-    }catch(e){result.shutdownError=e.message;cdp?.close();}
+    }catch(e){recordShutdownError(result,'chrome-close',e);try{cdp?.close();}catch(disconnectError){recordShutdownError(result,'cdp-disconnect',disconnectError);}}
     if(server?.listening){const port=server.address().port;await new Promise(resolve=>server.close(resolve));result.serverClosed=await new Promise(resolve=>{const s=net.connect({host:'127.0.0.1',port});s.on('connect',()=>{s.destroy();resolve(false)});s.on('error',e=>resolve(e.code==='ECONNREFUSED'));});}
-    if(xvfb){try{result.xvfbClosed=await closeNativeDisplay(xvfb);if(result.display){const number=result.display.slice(1);result.xvfbDisplayRemoved=await absent('/tmp/.X11-unix/X'+number)&&await absent('/tmp/.X'+number+'-lock');assert(result.xvfbDisplayRemoved,'Owned Xvfb display socket/lock remains; inspect, do not force-delete');}}catch(e){result.shutdownError=e.message;}}
+    if(xvfb){try{result.xvfbClosed=await closeNativeDisplay(xvfb);if(result.display){const number=result.display.slice(1);result.xvfbDisplayRemoved=await absent('/tmp/.X11-unix/X'+number)&&await absent('/tmp/.X'+number+'-lock');assert(result.xvfbDisplayRemoved,'Owned Xvfb display socket/lock remains; inspect, do not force-delete');}}catch(e){recordShutdownError(result,'display-close',e);}}
     // Windows helper records PID+creation-time identities; verify no recorded Chrome child is still live.
     try {
       if(process.platform==='win32'&&chrome){
         const identities=new Map();for(const a of result.actions)for(const p of a.ownedProcesses??[])identities.set(p.pid+':'+p.creationTicks,p);
         assert(identities.size,'No owned process identities recorded; retain profile');
-        const items=[...identities.values()].map(p=>'@{pid='+p.pid+';ticks="'+p.creationTicks+'"}').join(',');
-        const script='$live=@();foreach($i in @('+items+')){$p=Get-Process -Id $i.pid -ErrorAction SilentlyContinue;if($p -and $p.StartTime.ToUniversalTime().Ticks.ToString() -eq $i.ticks){$live+=$i}};ConvertTo-Json -InputObject @($live) -Compress';
-        result.remainingProcesses=JSON.parse((await ps(['-Command',script])).stdout);assert.equal(result.remainingProcesses.length,0,'Owned Chrome processes remain');
+        const items=[...identities.values()].map(p=>({pid:p.pid,ticks:p.creationTicks}));
+        result.processCleanupObservation=JSON.parse((await ps(['-File',path.join(tools,'native-process-cleanup.ps1'),
+          '-IdentitiesJson',JSON.stringify(items),'-Executable',discovery.executable])).stdout);
+        result.remainingProcesses=result.processCleanupObservation.remaining;assert.equal(result.remainingProcesses.length,0,'Owned Chrome processes remain');
       }
       if(process.platform==='linux'&&profile){
         const remaining=[];
         for(const name of await readdir('/proc'))if(/^\d+$/.test(name)){try{const p=await linuxProcess(Number(name));if(linuxProfileValues(p.args).includes(profile)||ownedLinuxGroupMember(p,linuxLauncher,linuxCandidate,process.getuid()))remaining.push(p.pid);}catch(e){if(!['ENOENT','ESRCH','EACCES'].includes(e.code))throw e;}}
         result.remainingProcesses=remaining;assert.equal(remaining.length,0,'Owned Chrome processes remain');
       }
-    }catch(e){result.shutdownError=e.message;}
+    }catch(e){recordShutdownError(result,'remaining-processes',e);}
     if(!result.shutdownError&&!denied.size){
       for(const p of [fixture,empty,scratch].filter(Boolean))try{if(identities.has(p)&&!(await absent(p))){await assertOwned(p);await remove(p);}result.cleanup.push({path:p,status:await absent(p)?'removed':'retained'});}catch(e){result.cleanup.push({path:p,status:'retained',error:e.message});}
     }
