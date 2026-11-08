@@ -145,7 +145,11 @@ latency, or total-memory guarantees.
 
 Evidence also saves the maximum envelope, preserves the scene on failed Save,
 restarts the host, and reopens in a fresh browser context with provider access
-blocked and no parser-asset requests. Inspection evidence covers nested owners,
+blocked and no parser-asset requests. Save readiness observes its own status,
+hidden action and canonical address, independently of retained inspection
+errors. A held real worker receipt proves Save remains pending and neither
+clears the inspection failure nor retries inspection automatically; explicit
+Inspect code recovers afterward. Inspection evidence covers nested owners,
 Unicode byte/column mapping, inert HTML-like text, dense long-line paging,
 keyboard/mobile source dialogs and fresh/saved operation without network or
 camera changes. Recursive presentation remains a later outcome.

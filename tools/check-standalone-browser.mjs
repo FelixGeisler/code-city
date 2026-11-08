@@ -42,6 +42,9 @@ const renderObservation = `(() => {
   if(type!=='message'||typeof callback!=='function')return add.call(this,type,callback,...options);
   const wrapped=event=>{const gate=window.__gate;const data=event.data;
    if(data.type==='ANALYSIS_SUCCEEDED')window.__cityFingerprint=JSON.stringify(data.city);
+   if(data.type==='SAVE_RESULT'&&window.__saveGate){
+    window.__saveGate.release=()=>callback.call(this,event);window.__saveGate.held.resolve();return;
+   }
    if(gate.active){
     if(!gate.opened&&data.type==='ANALYSIS_PROGRESS'&&data.stage==='analysis'&&data.completed===0)gate.opened=true;
     else if(gate.opened){gate.queue.push({data,deliver:()=>callback.call(this,event)});window.__codeCityDeliveryEvidence(JSON.stringify({type:data.type,stage:data.stage,completed:data.completed}));return;}

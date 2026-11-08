@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { waitForSave } from './browser-save-barrier.mjs';
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -456,9 +457,25 @@ export async function exerciseWorkspace({page,cdp,harness,origin,request,checked
   await p.evaluate(`window.__rejectUnits=false;true`);
   const failedCalls=await p.evaluate('window.__inspectionCalls.length');await settled();assert.equal(await p.evaluate('window.__inspectionCalls.length'),failedCalls,'inspection retried automatically');
   const saveStart=harness.requests.length;
-  await p.click('[data-save]');
-  const saved=await p.wait(s=>s.saved||s.saveMessage.includes('unchanged'));
-  assert.equal(saved.saved,true,saved.saveMessage);
+  // The deliberately failed unit list remains visible until an explicit retry.
+  // Save has a different owner: hold its real worker receipt to prove readiness
+  // cannot be inferred from that stale inspection status or an HTTP receipt.
+  const saveProof=await p.evaluate(`(async()=>{
+    let settled=false;const gate=window.__saveGate={held:Promise.withResolvers()};
+    try {
+      const pending=(${waitForSave.toString()})(document,location).then(value=>{settled=true;return value;});
+      document.querySelector('[data-save]').click();
+      await Promise.race([gate.held.promise,pending.then(()=>{throw new Error('Save completed before the held worker receipt');})]);
+      const beforeRelease={settled,message:document.querySelector('[data-save-status]').textContent,unitMessage:document.querySelector('[data-units] > [role=status]').textContent,primaryMessage:document.querySelector('[data-primary-inspection-status]').textContent,sourceOpen:document.querySelector('[data-unit-source]').open,calls:window.__inspectionCalls.length};
+      gate.release();const result=await pending;
+      return {beforeRelease,result,unitMessage:document.querySelector('[data-units] > [role=status]').textContent,calls:window.__inspectionCalls.length};
+    } finally {delete window.__saveGate;}
+  })()`);
+  assert.deepEqual(saveProof.beforeRelease,{settled:false,message:'Saving investigation',unitMessage:'Unit inspection unavailable.',primaryMessage:'Inspection unavailable. Click Inspect code to retry.',sourceOpen:false,calls:failedCalls});
+  assert.equal(saveProof.unitMessage,'Unit inspection unavailable.','Save must not erase an independent inspection failure');
+  assert.equal(saveProof.calls,failedCalls,'Save retried inspection automatically');
+  const saved=saveProof.result;assert.equal(saved.saved,true,saved.saveMessage);
+  await writeFile(path.join(evidenceDirectory,'save-owner-proof.json'),JSON.stringify(saveProof,null,2)+'\n');
   assert.equal(harness.requests.slice(saveStart).filter(r=>r.method==='POST'&&r.url===origin+'/api/investigations').length,1,'one explicit Save must perform one real upload');
   await pointer('[data-inspect-highest]');await p.wait(s=>s.sourceReady&&s.contributions===1);await p.closeSource();
   const savedUrl=await p.evaluate('location.href');
