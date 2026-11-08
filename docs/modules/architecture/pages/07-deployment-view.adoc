@@ -44,12 +44,61 @@ A no-GUI Node regression demonstrates the lost-event race in the old waiter;
 this does not establish the cause of a prior hosted timeout whose startup state
 was unavailable.
 
+=== Windows native isolation
+
+The normal checker and `npm run verify` automatically launch the Windows native
+stage on a fresh `WinSta0\\CodeCityNative-<nonce>` desktop. The observing parent
+never enumerates or acts on windows. It creates the desktop without
+`DESKTOP_SWITCHDESKTOP`, creates a non-breakaway kill-on-close job, and launches
+Node suspended with explicit `STARTUPINFO.lpDesktop`. Before resuming it, the
+parent assigns the job and records its own PID/creation time/executable and the
+child's PID/creation time/executable/desktop in an ordinary nonce-bound Temp file.
+Windows child-process desktop inheritance carries this desktop to Chrome and
+PowerShell helpers; see
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-startupinfow[STARTUPINFOW].
+No desktop switch, input-desktop fallback, global input, foreground API or
+active-desktop window/content inspection is used.
+
+A record/environment variable alone authorizes nothing. Before Chrome discovery
+and again immediately before launch, an actual inherited no-GUI helper validates
+its current desktop against the nonce, the query-only input-desktop identity,
+live parent and Node launch identities, Node parentage and job membership.
+Every helper invocation repeats those checks, including manual invocation of the
+helper. Win32 action wrappers additionally validate the exact target window's
+PID, job and thread desktop immediately before the native call. UIAutomation
+focus and Invoke have the same immediate owned-window check. CDP picker/focus
+actions require a uniquely identified isolated browser window first. A missing,
+changed, input or unprovable identity fails before actuation. Non-USER Node
+threads have no queryable desktop; their launch binding and the inherited
+helper's actual USER desktop are the pre-browser proof, not a fabricated thread
+query result.
+
+The owner holds the desktop until job accounting proves *all* descendants have
+exited, not merely recorded browser children. Failure terminates only the owned
+job, remains failure, and joins it before closure. Cleanup closes child handles,
+closes the desktop, proves that exact desktop absent through `EnumDesktops`,
+closes/proves absence of the named job, then removes its metadata. An uncertain
+observation retains the precise record and fails. The historical
+`EnumDesktopWindows` finalization error remains a failed historical run; it is
+not reinterpreted as an empty desktop. The new observer uses whole-job exit and
+exact desktop-object absence instead of that failed window-count inference.
+Fixture/profile ownership and cleanup checks remain mandatory in the checker.
+
+`node tools/check-local-folder-native.mjs --isolation-proof --evidence <directory>`
+exercises only an owned no-GUI Node/helper child and the production guards. It
+never starts Chrome or focuses a window. Regression tests compile the actual
+Win32 wrappers and reject Default/wrong/input desktop identities before native
+actuation, and exercise wrong owner creation/job identities and cleanup. This
+establishes isolation plumbing, not native Chrome qualification: the first
+isolated GUI probe is held for independent safety review. Packaged/headless
+checks and the Linux path are unchanged.
+
 Windows helper failures attempt to save their process/start-time and chooser/control
 snapshot in `result.json` before propagating the original nonzero helper error.
 Snapshots record their time, phase, desktop name, chooser PID/visibility,
 permission control enabled/offscreen/focus state, and owned-window GUI-thread
-activation. Foreground information is only an equality check against the owned
-window; no other window's identity, title or content is collected. Permission
+activation on the validated non-input desktop. No input-desktop foreground
+information or other window's identity, title or content is collected. Permission
 actions also record the invoked runtime ID, invocation times and a fresh
 post-action prompt snapshot. A picker-resolution timeout also
 captures the remaining owned browser prompt and picker state, without sending
@@ -64,8 +113,10 @@ even with foreground and button focus proved immediately before the call.
 
 Windows permission interaction therefore separates focus acquisition from
 Invoke. It focuses the verified owned permission button once, then observes the
-same enabled, visible, focused target, unchanged bounds and owned foreground
-window for Windows' `GetDoubleClickTime()` interval. Chromium uses this interval
+same enabled, visible, focused target, unchanged bounds and per-desktop active
+owned window for Windows' `GetDoubleClickTime()` interval. The old global
+foreground assumption is not applicable to a non-input desktop; this replacement
+is conditional on validated isolation and still needs real capability acceptance. Chromium uses this interval
 for dialog input protection; its accessibility Invoke can return success without
 acceptance. See the qualifying browser revision's
 https://github.com/chromium/chromium/blob/fb096c0011f9d50f0a264a9376420cdea9c421e3/chrome/browser/ui/file_system_access/file_system_access_permission_dialog.cc[permission dialog],
@@ -74,16 +125,15 @@ https://github.com/chromium/chromium/blob/fb096c0011f9d50f0a264a9376420cdea9c421
 Loss of focus, movement or identity change fails without restarting the interval
 or repeating input. One Invoke follows readiness; actual picker resolution,
 granted native permission and acquisition remain mandatory. The 20-second helper
-and 10-second resolution bounds are unchanged. This path needs exclusive GUI
-automation access: offscreen placement does not make native focus acquisition
-non-interactive. It never moves the pointer, sends global input or activates an
-unrelated window.
+and 10-second resolution bounds are unchanged. Offscreen placement is not an
+isolation boundary and is no longer used. GUI interaction is permitted only
+within the newly owned non-input desktop; never on the user's active desktop.
 
 The observed focus/acceptance timing supports this readiness repair, but the
 browser's internal rejection branch was not instrumented. Exact attribution of
 earlier unresolved-picker runs remains uncertain; the separate inspect/select
-cardinality failure and isolated-desktop launcher-observer failure are not
-explained by this change. Successful synthetic runs do not retrospectively prove
+cardinality failure is not explained by this change. The old isolated-desktop
+observer's error is replaced by the cleanup protocol above, not explained away. Successful synthetic runs do not retrospectively prove
 all historical failures repaired.
 
 == Main publication path

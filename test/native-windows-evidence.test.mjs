@@ -148,7 +148,7 @@ test('both rejecting-save failure paths remain nonzero in no-GUI Node children',
 
 test('focused permission Invoke with an unchanged remaining prompt still propagates picker timeout', async () => {
   const permission = { ...snapshot, mode: 'allow-read', error: null,
-    permissionFocus: { state: { foreground: true, active: true, focused: true }, settleMs: 500 },
+    permissionFocus: { state: { isolationValidated: true, active: true, focused: true }, settleMs: 500 },
     action: { mode: 'allow-read', runtimeId: 'owned:731', invokeReturned: 'now' },
     permissionAfter: [{ runtimeId: 'owned:716', enabled: true }, { runtimeId: 'owned:731', enabled: true }] };
   const result = { actions: [], status: 'failed' };
@@ -177,13 +177,13 @@ test('Windows permission readiness requires a stable focused target for the enti
       if($f.Count -ne 1){throw 'Expected production readiness function'}
       Invoke-Expression $f[0].Extent.Text
       $counts=@{reads=0};$evidence=@{}
-      $ready=@{foreground=$true;active=$true;focused=$true;pid=42;enabled=$true;offscreen=$false;runtimeId='owned:731';rect='synthetic rectangle'}
+      $ready=@{isolationValidated=$true;active=$true;focused=$true;pid=42;enabled=$true;offscreen=$false;runtimeId='owned:731';rect='synthetic rectangle'}
       Wait-PermissionReady -ExpectedPid 42 -RuntimeId 'owned:731' -SettleMs 5 -Evidence $evidence -ReadState {
         $counts.reads++;if($counts.reads -eq 1){Start-Sleep -Milliseconds 20};$ready
       }
       $positive=@{reads=$counts.reads;observedMs=$evidence.observedMs;settled=$evidence.settled}
       $failures=@()
-      foreach($change in @('foreground','active','focused','pid','enabled','offscreen','runtimeId','rect')){
+      foreach($change in @('isolationValidated','active','focused','pid','enabled','offscreen','runtimeId','rect')){
         $counts.reads=0;$evidence=@{};$bad=$ready.Clone()
         switch($change){
           'pid' {$bad.pid=43}
@@ -218,7 +218,7 @@ test('Windows permission readiness requires a stable focused target for the enti
 
 // Exercise the actual PowerShell catch/output path, using an owned Node child
 // with NO GUI, Chrome, synthetic directory or access to any other process window.
-test('Windows helper emits ownership/cardinality and identity failures as JSON plus nonzero exit',
+test('Windows helper on Default fails isolation before ownership, cardinality or action even when invoked manually',
   { skip: process.platform !== 'win32' }, async () => {
     const profile = 'CodeCitySynthetic-evidence-test';
     const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)', '--', '--user-data-dir=' + profile],
@@ -234,20 +234,19 @@ test('Windows helper emits ownership/cardinality and identity failures as JSON p
       await assert.rejects(recordWindowsHelper(() => invoke(['-Mode', 'select']), 'select', result,
         async () => { saved = structuredClone(result); }), e => e.code === 1);
       const [data] = saved.actions;
-      assert.equal(data.error, 'Expected exactly one owned dialog, got 0');
-      assert.equal(data.phase, 'action-select');
+      assert.match(data.error, /Owned non-input desktop record required/);
+      assert.equal(data.phase, 'isolation-guard');
       assert.equal(data.pid, child.pid);
-      assert.equal(data.ownedProcesses[0].pid, child.pid);
-      assert.match(data.ownedProcesses[0].creationTicks, /^\d+$/);
+      assert.deepEqual(data.ownedProcesses, [], 'Default helper must fail before process/window inspection');
       assert.deepEqual(data.dialogs, []);
       assert.equal(data.action, null);
       assert(data.started <= data.finished);
-      assert.equal(typeof data.desktop, 'string');
+      assert.equal(data.desktop, null);
       await assert.rejects(invoke(['-Mode', 'inspect', '-CreationTicks', '1']), e => {
         const failure = JSON.parse(e.stdout);
         assert.equal(e.code, 1);
-        assert.equal(failure.error, 'Creation time mismatch');
-        assert.equal(failure.phase, 'verify');
+        assert.match(failure.error, /Owned non-input desktop record required/);
+        assert.equal(failure.phase, 'isolation-guard');
         assert.deepEqual(failure.ownedProcesses, []);
         assert.deepEqual(failure.ownedTopClasses, []);
         assert.equal(failure.action, null);

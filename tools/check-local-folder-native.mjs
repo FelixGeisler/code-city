@@ -2,12 +2,14 @@
 // Node 24+, installed Google Chrome; Windows: PowerShell/UIAutomation, English Chrome UI.
 // Linux qualification only: non-root, Xvfb (-displayfd), python3, libX11/libXtst. Never caller DISPLAY.
 // Run: node tools/check-local-folder-native.mjs --evidence <directory>
+// Windows automatically owns a fresh non-input desktop + no-breakaway job, before Chrome.
 // Windows additionally requires: --allow-public-documents-synthetic
+// --isolation-proof: owned no-GUI child/guard proof only; never starts Chrome.
 // Each run writes a unique evidence subdirectory; failure is nonzero, never a native-gate skip.
 // No installs/build outputs. Actual gateway/acquisition TS is stripped by Node and served as ESM.
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
-import { spawn, execFile as execFileCallback } from 'node:child_process';
+import { spawn, execFileSync, execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stripTypeScriptTypes } from 'node:module';
 import { mkdtemp, mkdir, readFile, writeFile, lstat, readdir, unlink, rmdir, readlink, symlink, chmod } from 'node:fs/promises';
@@ -88,7 +90,17 @@ export function observeChromeStartup(chrome, result) {
   else if (child.exitCode !== null || child.signalCode !== null) onExit(child.exitCode, child.signalCode);
   return { endpoint, dispose() { finish('disposed', Error('Chrome startup observation disposed')); } };
 }
+function windowsIsolationProof() {
+  return JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-File',
+    path.join(tools, 'local-folder-native-windows.ps1'), '-Mode', 'isolation-proof',
+    '-OwnedPid', String(process.pid)], { windowsHide: true, timeout: 20000, encoding: 'utf8' }).trim());
+}
 export function launchNativeChrome(executable, args, options, result) {
+  // Test-only Node children do no GUI work. Actual browser launch rechecks the
+  // live actor/owner/job/desktop, not a command-line flag or cached proof.
+  if (process.platform === 'win32' && path.resolve(executable) !== process.execPath) {
+    result.windowsIsolation = windowsIsolationProof();
+  }
   const chrome = processHandle(executable, args, options);
   chrome.startup = observeChromeStartup(chrome, result);
   return chrome;
@@ -409,17 +421,39 @@ async function main() {
   const args = process.argv.slice(2);
   if (args.length === 1 && args[0] === '--self-test') return selfTest();
   if (args.length === 1 && args[0] === '--help') {
-    console.log('node tools/check-local-folder-native.mjs --evidence <directory> [--allow-public-documents-synthetic]\nWindows: installed English Chrome, PowerShell/UIAutomation. Linux: installed Chrome, non-root, Xvfb, python3, libX11/libXtst (qualification only); own display only. --self-test runs non-browser cleanup/compiler regressions.'); return;
+    console.log('node tools/check-local-folder-native.mjs --evidence <directory> [--allow-public-documents-synthetic]\nWindows: automatically owned non-input desktop/job, installed English Chrome, PowerShell/UIAutomation. --isolation-proof runs owned no-GUI child guards only. Linux unchanged: installed Chrome, non-root, Xvfb, python3, libX11/libXtst. --self-test runs non-browser cleanup/compiler regressions.'); return;
   }
-  let evidenceRoot, authorized = false;
+  let evidenceRoot, authorized = false, proofOnly = false, proofChild = false;
   for (let i=0;i<args.length;i++) {
     if (args[i] === '--evidence' && args[i+1]) evidenceRoot = path.resolve(args[++i]);
     else if (args[i] === '--allow-public-documents-synthetic') authorized = true;
+    else if (args[i] === '--isolation-proof') proofOnly = true;
+    else if (args[i] === '--isolation-child-proof') proofChild = true;
     else throw Error('Unknown/incomplete argument: ' + args[i]);
   }
   assert(evidenceRoot, '--evidence <directory> is required');
   assert(['win32','linux'].includes(process.platform), 'Only Windows and Linux native paths are supported');
-  assert(process.platform !== 'win32' || authorized, 'Explicit --allow-public-documents-synthetic authorization required');
+  assert(process.platform !== 'win32' || authorized || proofOnly || proofChild, 'Explicit --allow-public-documents-synthetic authorization required');
+  if (process.platform === 'win32') {
+    if (proofOnly || (!proofChild && !process.env.CODE_CITY_NATIVE_ISOLATION_FILE)) {
+      // Both normal npm entry points come through here. The parent never starts
+      // Chrome or inspects windows; the suspended child gets explicit lpDesktop.
+      const child = processHandle('powershell.exe', ['-NoProfile', '-File',
+        path.join(tools, 'native-desktop-launcher.ps1'), '-Node', process.execPath,
+        '-Evidence', evidenceRoot, ...(proofOnly ? ['-Proof'] : [])], { stdio: 'inherit' });
+      const closed = await child.closed;
+      if (child.error) throw child.error;
+      assert.equal(closed.code, 0, 'Owned desktop qualification/cleanup failed');
+      return;
+    }
+    const proof = windowsIsolationProof(); // before Chrome discovery or any action
+    if (proofChild) {
+      await mkdir(evidenceRoot, {recursive:true});
+      await writeFile(path.join(evidenceRoot, 'child-' + proof.isolation.nonce + '.json'), JSON.stringify(proof, null, 2) + '\n');
+      console.log(JSON.stringify(proof));
+      return;
+    }
+  } else assert(!proofOnly && !proofChild, 'Desktop proof is Windows only');
   await mkdir(evidenceRoot, {recursive:true});
   const evidence = await mkdtemp(path.join(evidenceRoot, 'run-'));
   const result = { status:'failed', started:new Date().toISOString(), platform:process.platform, os:os.release(), evidence, actions:[], links:{}, cleanup:[], limitations:[] };
@@ -459,6 +493,7 @@ async function main() {
   const worker = command => evaluate('rpc('+JSON.stringify(command)+')',true);
   async function pick(target) {
     await assertOwned(target);
+    if(process.platform==='win32')await dialog('guard-browser');
     await cdp.send('Page.bringToFront',{},sessionId);
     await until(()=>evaluate('document.hasFocus()'),'Owned native picker page focus');
     await evaluate('pick();void 0',false,true);
@@ -514,7 +549,7 @@ async function main() {
     discovery=await discoverInstalledChrome();result.chrome={...discovery,version:await readInstalledChromeVersion(discovery,{execFileImpl:(command,args,options)=>execFile(command,args,{...options,timeout:10000})})};
     const modules=await sourceModules();
     result.servedModuleSha256=Object.fromEntries([...modules].map(([name,text])=>[name,createHash('sha256').update(text).digest('hex')]));
-    result.toolSha256={};for(const name of ['check-local-folder-native.mjs','local-folder-native-windows.ps1','local-folder-native-linux.py'])result.toolSha256[name]=createHash('sha256').update(await readFile(path.join(tools,name))).digest('hex');
+    result.toolSha256={};for(const name of ['check-local-folder-native.mjs','local-folder-native-windows.ps1','local-folder-native-linux.py',...(process.platform==='win32'?['native-desktop-launcher.ps1','native-desktop-guard.ps1','native-desktop-isolation.cs']:[])])result.toolSha256[name]=createHash('sha256').update(await readFile(path.join(tools,name))).digest('hex');
     scratch=await mkdtemp(path.join(os.tmpdir(),'code-city-native-'));identities.set(scratch,await lstat(scratch));
     profile=path.join(scratch,'profile');await ownDirectory(profile);
     if(process.platform==='linux') {
@@ -557,7 +592,7 @@ async function main() {
     });
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve)});
     assert.notEqual(server.address().port,55583);result.origin='http://127.0.0.1:'+server.address().port;
-    const arguments_=['--remote-debugging-port=0','--user-data-dir='+profile,'--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update','--disable-default-apps','--disable-sync','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows','--disable-features=CalculateNativeWinOcclusion','--lang=en-US',...(process.platform==='win32'?['--window-position=-22000,-22000']:['--ozone-platform=x11','--disable-gpu']),'--window-size=900,650','about:blank'];
+    const arguments_=['--remote-debugging-port=0','--user-data-dir='+profile,'--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update','--disable-default-apps','--disable-sync','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows','--disable-features=CalculateNativeWinOcclusion','--lang=en-US',...(process.platform==='win32'?[]:['--ozone-platform=x11','--disable-gpu']),'--window-size=900,650','about:blank'];
     // Snapshot the actual spawn option at source, before Chrome can rewrite proc metadata.
     if(process.platform==='linux') {
       result.linuxChromeSpawn=linuxSpawnDisplay(linuxEnvironment,result.display,xvfb.child.pid,'Chrome spawn env');
@@ -624,6 +659,7 @@ async function main() {
     assert.equal(result.gatewayReads['mutate.cs'].kind,'source');assert.equal(result.gatewayReads['delete.cs'].kind,'unavailable');assert.equal(result.gatewayReads['denied.cs'].kind,'unavailable');
     assert.equal(result.directoryDenied.ok,false);assert.equal(result.captureDenied.capture.category,'Local working tree unavailable');
     for(const p of [...denied])await restore(p);result.directoryRestored=await worker('directory-read');assert.equal(result.directoryRestored.ok,true);
+    if(process.platform==='win32')await dialog('guard-browser');
     await evaluate('pick();void 0',false,true);
     if(process.platform==='win32'){await until(async()=>(await dialog('inspect')).dialogs.length,'Cancel chooser');await dialog('cancel');}else await linuxDialog('cancel');
     await until(async()=>(await evaluate('pickerState'))!=='pending','Chooser cancellation');result.cancel=await evaluate('({error:pickerError,retained:root.name})');assert.equal(result.cancel.error.name,'AbortError');assert.equal(result.cancel.retained,path.basename(fixture));
@@ -690,4 +726,20 @@ async function main() {
     if(result.status!=='qualified')process.exitCode=1;
   }
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { await main(); }
+  catch (error) {
+    // CreateProcess children deliberately inherit no caller handles. Persist
+    // pre-browser guard errors without depending on an interactive console.
+    const index = process.argv.indexOf('--evidence');
+    if (process.env.CODE_CITY_NATIVE_ISOLATION_FILE && index >= 0 && process.argv[index + 1]) {
+      try {
+        await writeFile(path.join(path.resolve(process.argv[index + 1]), 'isolation-child-failure-' + process.pid + '.json'),
+          JSON.stringify({ message: error.message, stack: error.stack, stdout: error.stdout?.toString(), stderr: error.stderr?.toString() }, null, 2) + '\n');
+      } catch (saveError) {
+        console.error('Isolation guard error not persisted: ' + String(saveError.message).slice(0, 2048));
+      }
+    }
+    throw error;
+  }
+}
