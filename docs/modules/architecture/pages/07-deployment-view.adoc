@@ -93,12 +93,15 @@ before forced cleanup and at completion. The first shutdown error remains
 primary; subsequent cleanup observations are recorded separately rather than
 replacing it.
 
-Windows cleanup compares recorded PID and creation time, then checks
-`Process.HasExited` before counting a process as live. A process object obtained
-before exit can retain its creation time and kernel handle after exit; those are
-identity evidence, not liveness. Live processes also require the recorded
-executable before any signal. Process observation handles are disposed. No-GUI
-regressions use actual children, including retained handles with exit code 259
+Windows cleanup opens the recorded PID and explicitly retains its process handle
+before the first identity or liveness check; `GetProcessById` alone does not bind
+that handle. Failure to bind fails closed. Creation time, `Process.HasExited`
+and the recorded executable are checked before any signal. The same handle is
+retained through termination so PID reuse cannot retarget it, and disposed on
+every outcome. A process object can retain its creation time and handle after
+exit; those are identity evidence, not liveness. No-GUI regressions check the
+production predicate's initially unbound object and retained binding, refused
+identities, unavailable binding, disposal, and actual children with exit code 259
 (`STILL_ACTIVE`), a lost close response, and inherited stderr held by a descendant.
 They reproduce these races but cannot identify the first close error in the
 historical failed run, where a later remaining-process assertion overwrote it.

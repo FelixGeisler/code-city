@@ -111,13 +111,15 @@ test('Windows cleanup CLI preserves multiple JSON identities and signals only a 
       `[Diagnostics.Process]::GetProcessById(${chrome.child.pid}).StartTime.ToUniversalTime().Ticks.ToString()`], options);
     const identity = { pid: chrome.child.pid, ticks: stdout.trim() };
     const reused = { pid: chrome.child.pid, ticks: '1' };
-    const run = async (items, terminate = false) => JSON.parse((await execFile('powershell.exe', ['-NoProfile', '-File', helper,
-      '-IdentitiesJson', JSON.stringify(items), '-Executable', process.execPath, ...(terminate ? ['-Terminate'] : [])], options)).stdout);
+    const run = async (items, terminate = false, executable = process.execPath) => JSON.parse((await execFile('powershell.exe', ['-NoProfile', '-File', helper,
+      '-IdentitiesJson', JSON.stringify(items), '-Executable', executable, ...(terminate ? ['-Terminate'] : [])], options)).stdout);
     const live = await run([identity, reused]);
     assert.deepEqual(live.remaining, [identity]);
     assert.deepEqual(live.reused, [reused]);
     const refusal = await run([reused], true);
     assert.deepEqual(refusal.stopped, []);
+    await assert.rejects(run([identity], true, 'wrong.exe'), /Owned process executable mismatch/);
+    assert.deepEqual((await run([identity])).remaining, [identity], 'wrong identities must not terminate the owned child');
     assert.equal(chrome.child.exitCode, null);
     const forced = await run([identity], true);
     assert.deepEqual(forced.stopped, [identity]);
@@ -125,8 +127,8 @@ test('Windows cleanup CLI preserves multiple JSON identities and signals only a 
     assert(closed.code !== 0 || closed.signal !== null, 'forced cleanup is not normal qualification');
   });
 
-test('production Windows predicate distinguishes retained exited handles, reused identities and real live children',
-  { skip: process.platform !== 'win32' }, async () => {
+test('production Windows predicate pins an initially unbound process through identity checks and real exit',
+  { skip: process.platform !== 'win32' }, async t => {
     const helper = fileURLToPath(new URL('../tools/native-process-cleanup.ps1', import.meta.url)).replaceAll("'", "''");
     const node = process.execPath.replaceAll("'", "''");
     const script = `
@@ -138,35 +140,64 @@ test('production Windows predicate distinguishes retained exited handles, reused
       $info.UseShellExecute=$false;$info.CreateNoWindow=$true
       $info.RedirectStandardInput=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
       $child=[Diagnostics.Process]::Start($info)
-      $enumerated=$null
+      $enumerated=$null;$unavailable=$null;$retained=$null
       try {
+        $flags=[Reflection.BindingFlags]'Instance,NonPublic'
+        $haveHandle=[Diagnostics.Process].GetField('haveProcessHandle',$flags)
+        $handleField=[Diagnostics.Process].GetField('m_processHandle',$flags)
+        if(-not $haveHandle -or -not $handleField){throw 'Expected installed .NET Framework handle fields'}
         $ready=New-Object char[] 5
         if($child.StandardOutput.Read($ready,0,5) -ne 5){throw 'No real ready barrier'}
-        $enumerated=Get-Process -Id $child.Id
-        [void]$enumerated.Handle
-        $ticks=$enumerated.StartTime.ToUniversalTime().Ticks.ToString()
+        # Exactly the production CLI acquisition, with NO test-side Handle read.
+        $enumerated=[Diagnostics.Process]::GetProcessById($child.Id)
+        $initiallyBound=$haveHandle.GetValue($enumerated)
+        $initialHandle=$handleField.GetValue($enumerated)
+        $ticks=$child.StartTime.ToUniversalTime().Ticks.ToString()
         $live=Get-OwnedProcessState $enumerated $ticks '${node}'
+        $boundAfterCall=$haveHandle.GetValue($enumerated)
+        $retained=$handleField.GetValue($enumerated)
+        if(-not $boundAfterCall -or $null -eq $retained -or $retained.IsClosed -or $retained.IsInvalid){throw 'Production predicate did not retain a valid handle'}
         $reused=Get-OwnedProcessState $enumerated '1' '${node}'
         $wrongExeRefused=$false
         try{Get-OwnedProcessState $enumerated $ticks 'wrong.exe'}catch{if($_.Exception.Message -ne 'Owned process executable mismatch'){throw};$wrongExeRefused=$true}
         $identities=ConvertTo-Json -InputObject @(@{pid=$child.Id;ticks=$ticks}) -Compress
         $scanLive=(& '${helper}' -IdentitiesJson $identities -Executable '${node}')|ConvertFrom-Json
+        # A real object whose binding is unavailable must fail closed, not
+        # continue using identity observations or signal the still-live child.
+        $unavailable=[Diagnostics.Process]::GetProcessById($child.Id)
+        $unavailable.Dispose()
+        $unavailableRefused=$false
+        try{Get-OwnedProcessState $unavailable $ticks '${node}'}catch{$unavailableRefused=$true}
+        $childAliveAfterRefusal=-not $child.HasExited
         $child.StandardInput.WriteLine('exit');$child.StandardInput.Flush()
         if(-not $child.WaitForExit(5000)){throw 'Owned child did not exit'}
         # The exit code is STILL_ACTIVE (259), but the exact handle is signalled.
         # HasExited must still win over the stale StartTime/handle observation.
         $exited=Get-OwnedProcessState $enumerated $ticks '${node}'
         $oldPredicate=($enumerated.StartTime.ToUniversalTime().Ticks.ToString() -eq $ticks)
+        $sameHandleAfterExit=[object]::ReferenceEquals($retained,$handleField.GetValue($enumerated)) -and $haveHandle.GetValue($enumerated) -and -not $retained.IsClosed
         $scanDead=(& '${helper}' -IdentitiesJson $identities -Executable '${node}')|ConvertFrom-Json
-        @{live=$live;reused=$reused;wrongExeRefused=$wrongExeRefused;exited=$exited;exitCode=$child.ExitCode;
-          oldPredicate=$oldPredicate;scanLive=$scanLive;scanDead=$scanDead}|ConvertTo-Json -Depth 6 -Compress
+        $result=@{live=$live;reused=$reused;wrongExeRefused=$wrongExeRefused;exited=$exited;exitCode=$child.ExitCode;
+          runtime=[Environment]::Version.ToString();powershell=$PSVersionTable.PSVersion.ToString();
+          initiallyBound=$initiallyBound;initialHandleNull=($null -eq $initialHandle);boundAfterCall=$boundAfterCall;
+          sameHandleAfterExit=$sameHandleAfterExit;unavailableRefused=$unavailableRefused;childAliveAfterRefusal=$childAliveAfterRefusal;
+          oldPredicate=$oldPredicate;scanLive=$scanLive;scanDead=$scanDead;childPid=$child.Id;ticks=$ticks}
       } finally {
-        if(-not $child.HasExited){$child.Kill();$child.WaitForExit()}
-        if($enumerated){$enumerated.Dispose()};$child.Dispose()
+        try{if(-not $child.HasExited){$child.Kill();if(-not $child.WaitForExit(5000)){throw 'Owned child cleanup failed'}}}
+        finally{if($enumerated){$enumerated.Dispose()};if($unavailable){$unavailable.Dispose()};$child.Dispose()}
       }
+      $result.handleDisposed=$retained.IsClosed
+      $result|ConvertTo-Json -Depth 6 -Compress
     `;
     const { stdout } = await promisify(callback)('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true, timeout: 20000 });
     const r = JSON.parse(stdout);
+    assert.equal(r.initiallyBound, false, 'test must not pre-pin the production input');
+    assert.equal(r.initialHandleNull, true);
+    assert.equal(r.boundAfterCall, true, 'production must bind before observing identity');
+    assert.equal(r.sameHandleAfterExit, true, 'exit must not reopen/retarget the retained process handle by PID');
+    assert.equal(r.handleDisposed, true);
+    assert.equal(r.unavailableRefused, true);
+    assert.equal(r.childAliveAfterRefusal, true);
     assert.equal(r.live, 'live');
     assert.equal(r.reused, 'reused');
     assert.equal(r.wrongExeRefused, true);
@@ -177,4 +208,5 @@ test('production Windows predicate distinguishes retained exited handles, reused
     assert.equal(r.scanDead.remaining.length, 0);
     assert.equal(r.scanDead.exited.length + r.scanDead.absent.length, 1);
     assert.deepEqual(r.scanDead.stopped, []);
+    t.diagnostic(JSON.stringify(r));
   });

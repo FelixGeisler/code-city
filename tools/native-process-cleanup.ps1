@@ -2,8 +2,12 @@
 param([string]$IdentitiesJson,[string]$Executable,[switch]$Terminate)
 $ErrorActionPreference='Stop'
 function Get-OwnedProcessState($Process,[string]$Ticks,[string]$ExpectedExecutable) {
- # A Process obtained while live may have exited before this check. Its start
- # time (and retained kernel handle) survives exit; neither proves liveness.
+ # GetProcessById does not retain a handle. Bind before ANY identity/liveness
+ # check so those checks and Kill use the same kernel process, never a reused
+ # PID. Failure to open throws (fail closed); the caller retains this Process
+ # through termination and disposes it in finally on every outcome.
+ [void]$Process.Handle
+ # A bound process can still exit; its start time is not liveness evidence.
  if($Process.StartTime.ToUniversalTime().Ticks.ToString() -ne $Ticks){return 'reused'}
  if($Process.HasExited){return 'exited'}
  if($Process.Path -ine $ExpectedExecutable){
