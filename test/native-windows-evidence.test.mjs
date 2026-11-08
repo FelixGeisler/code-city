@@ -146,6 +146,76 @@ test('both rejecting-save failure paths remain nonzero in no-GUI Node children',
   }
 });
 
+test('focused permission Invoke with an unchanged remaining prompt still propagates picker timeout', async () => {
+  const permission = { ...snapshot, mode: 'allow-read', error: null,
+    permissionFocus: { state: { foreground: true, active: true, focused: true }, settleMs: 500 },
+    action: { mode: 'allow-read', runtimeId: 'owned:731', invokeReturned: 'now' },
+    permissionAfter: [{ runtimeId: 'owned:716', enabled: true }, { runtimeId: 'owned:731', enabled: true }] };
+  const result = { actions: [], status: 'failed' };
+  let calls = 0;
+  await recordWindowsHelper(async () => { calls++; return { stdout: JSON.stringify(permission) }; }, 'allow-read', result, async () => {});
+  const error = Error('Native picker resolution unavailable within 10s');
+  await assert.rejects(recordWindowsPickerFailure(error, async () => ({ state: 'pending', focused: false }),
+    async () => { calls++; }, result, async () => {}), e => e === error);
+  assert.equal(calls, 2, 'one Invoke helper and one read-only inspection, no action retry');
+  assert.deepEqual(result.actions, [permission]);
+  assert.equal(result.windowsPickerFailure.state, 'pending');
+  assert.equal(result.status, 'failed', 'foreground/focus and Invoke success do not grant a capability');
+});
+
+// Execute the production readiness function with synthetic state only. No GUI,
+// input, Chrome or other windows. Native acceptance is exercised by the checker.
+test('Windows permission readiness requires a stable focused target for the entire protection interval',
+  { skip: process.platform !== 'win32' }, async () => {
+    const helper = fileURLToPath(new URL('../tools/local-folder-native-windows.ps1', import.meta.url));
+    const script = `
+      $ErrorActionPreference='Stop'
+      $tokens=$null;$errors=$null
+      $ast=[Management.Automation.Language.Parser]::ParseFile('${helper.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)
+      if($errors.Count){throw 'Helper parse errors'}
+      $f=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Wait-PermissionReady'},$true))
+      if($f.Count -ne 1){throw 'Expected production readiness function'}
+      Invoke-Expression $f[0].Extent.Text
+      $counts=@{reads=0};$evidence=@{}
+      $ready=@{foreground=$true;active=$true;focused=$true;pid=42;enabled=$true;offscreen=$false;runtimeId='owned:731';rect='synthetic rectangle'}
+      Wait-PermissionReady -ExpectedPid 42 -RuntimeId 'owned:731' -SettleMs 5 -Evidence $evidence -ReadState {
+        $counts.reads++;if($counts.reads -eq 1){Start-Sleep -Milliseconds 20};$ready
+      }
+      $positive=@{reads=$counts.reads;observedMs=$evidence.observedMs;settled=$evidence.settled}
+      $failures=@()
+      foreach($change in @('foreground','active','focused','pid','enabled','offscreen','runtimeId','rect')){
+        $counts.reads=0;$evidence=@{};$bad=$ready.Clone()
+        switch($change){
+          'pid' {$bad.pid=43}
+          'offscreen' {$bad.offscreen=$true}
+          'runtimeId' {$bad.runtimeId='replacement'}
+          'rect' {$bad.rect='moved'}
+          default {$bad[$change]=$false}
+        }
+        $message=$null
+        try {
+          Wait-PermissionReady -ExpectedPid 42 -RuntimeId 'owned:731' -SettleMs 5 -Evidence $evidence -ReadState {
+            $counts.reads++;if($counts.reads -eq 1){$ready}else{$bad}
+          }
+        } catch {$message=$_.Exception.Message}
+        if(-not $message){throw ('Accepted changed '+$change)}
+        $failures+=@{change=$change;reads=$counts.reads;message=$message;settled=$evidence.ContainsKey('settled')}
+      }
+      @{positive=$positive;failures=$failures}|ConvertTo-Json -Depth 5 -Compress
+    `;
+    const { stdout } = await execFile('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true, timeout: 20000 });
+    const result = JSON.parse(stdout);
+    assert(result.positive.reads >= 2, 'slow first read cannot consume the readiness interval');
+    assert(result.positive.observedMs >= 5);
+    assert(result.positive.settled);
+    assert.equal(result.failures.length, 8);
+    for (const failure of result.failures) {
+      assert.equal(failure.reads, 2, failure.change + ': no readiness restart');
+      assert.equal(failure.settled, false);
+      assert.match(failure.message, /focus unavailable|target changed|target moved/);
+    }
+  });
+
 // Exercise the actual PowerShell catch/output path, using an owned Node child
 // with NO GUI, Chrome, synthetic directory or access to any other process window.
 test('Windows helper emits ownership/cardinality and identity failures as JSON plus nonzero exit',

@@ -46,18 +46,45 @@ was unavailable.
 
 Windows helper failures attempt to save their process/start-time and chooser/control
 snapshot in `result.json` before propagating the original nonzero helper error.
-Snapshots record their time, phase, desktop name, chooser PID/visibility and
-permission control enabled/offscreen state. A picker-resolution timeout also
+Snapshots record their time, phase, desktop name, chooser PID/visibility,
+permission control enabled/offscreen/focus state, and owned-window GUI-thread
+activation. Foreground information is only an equality check against the owned
+window; no other window's identity, title or content is collected. Permission
+actions also record the invoked runtime ID, invocation times and a fresh
+post-action prompt snapshot. A picker-resolution timeout also
 captures the remaining owned browser prompt and picker state, without sending
 another action or extending the deadline. If either failure-diagnostic save fails,
 the original error remains primary; the secondary save error is reported on stderr
 as not persisted and retained in memory (one message of at most 2,048 characters
 per failure path) for any later normal flush. No save retry is added; normal saves
 and final cleanup/error handling remain mandatory and unchanged.
-These are diagnostics, not proof that a completed
-button invocation granted read access. Prior unresolved-picker and inspect/select
-mismatch failures have no established cause; successful synthetic runs do not by
-themselves establish their repair.
+These are diagnostics, not proof that a completed button invocation granted read
+access. A synthetic reproduction retained the same enabled prompt after Invoke
+even with foreground and button focus proved immediately before the call.
+
+Windows permission interaction therefore separates focus acquisition from
+Invoke. It focuses the verified owned permission button once, then observes the
+same enabled, visible, focused target, unchanged bounds and owned foreground
+window for Windows' `GetDoubleClickTime()` interval. Chromium uses this interval
+for dialog input protection; its accessibility Invoke can return success without
+acceptance. See the qualifying browser revision's
+https://github.com/chromium/chromium/blob/fb096c0011f9d50f0a264a9376420cdea9c421e3/chrome/browser/ui/file_system_access/file_system_access_permission_dialog.cc[permission dialog],
+https://github.com/chromium/chromium/blob/fb096c0011f9d50f0a264a9376420cdea9c421e3/ui/views/input_event_activation_protector.cc[input protector], and
+https://github.com/chromium/chromium/blob/fb096c0011f9d50f0a264a9376420cdea9c421e3/ui/views/metrics_aura.cc[Windows interval].
+Loss of focus, movement or identity change fails without restarting the interval
+or repeating input. One Invoke follows readiness; actual picker resolution,
+granted native permission and acquisition remain mandatory. The 20-second helper
+and 10-second resolution bounds are unchanged. This path needs exclusive GUI
+automation access: offscreen placement does not make native focus acquisition
+non-interactive. It never moves the pointer, sends global input or activates an
+unrelated window.
+
+The observed focus/acceptance timing supports this readiness repair, but the
+browser's internal rejection branch was not instrumented. Exact attribution of
+earlier unresolved-picker runs remains uncertain; the separate inspect/select
+cardinality failure and isolated-desktop launcher-observer failure are not
+explained by this change. Successful synthetic runs do not retrospectively prove
+all historical failures repaired.
 
 == Main publication path
 

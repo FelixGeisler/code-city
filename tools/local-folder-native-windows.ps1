@@ -21,6 +21,20 @@ public class NativeProbe {
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int cmd);
+ [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] public static extern uint GetDoubleClickTime();
+ [StructLayout(LayoutKind.Sequential)] public struct RECT { public int left,top,right,bottom; }
+ [StructLayout(LayoutKind.Sequential)] public struct GUITHREADINFO { public int size; public uint flags; public IntPtr active,focus,capture,menuOwner,moveSize,caret; public RECT caretRect; }
+ [DllImport("user32.dll",SetLastError=true)] public static extern bool GetGUIThreadInfo(uint thread,ref GUITHREADINFO info);
+ public static object Gui(IntPtr h,uint expectedPid){
+  if(Pid(h)!=expectedPid)throw new Exception("GUI window owner changed");
+  uint p;uint thread=GetWindowThreadProcessId(h,out p);var g=new GUITHREADINFO();g.size=Marshal.SizeOf(g);
+  if(!GetGUIThreadInfo(thread,ref g))throw new Exception("Owned GUI thread query failed");
+  // Do not expose handles, identity or metadata of another process's windows.
+  return new {window=h.ToInt64(),thread,foreground=GetForegroundWindow()==h,active=g.active==h,
+   ownedActive=g.active!=IntPtr.Zero&&Pid(g.active)==expectedPid,ownedFocus=g.focus!=IntPtr.Zero&&Pid(g.focus)==expectedPid,
+   ownedCapture=g.capture!=IntPtr.Zero&&Pid(g.capture)==expectedPid,flags=g.flags};
+ }
  [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h,int x,int y,int w,int hgt,bool repaint);
  [DllImport("user32.dll",CharSet=CharSet.Unicode,EntryPoint="SendMessageTimeoutW")] public static extern IntPtr SendText(IntPtr h,uint msg,IntPtr w,string l,uint flags,uint timeout,out IntPtr result);
  [DllImport("user32.dll",EntryPoint="SendMessageTimeoutW")] public static extern IntPtr Send(IntPtr h,uint msg,IntPtr w,IntPtr l,uint flags,uint timeout,out IntPtr result);
@@ -39,9 +53,25 @@ function Verify {
  if($CreationTicks -and $ticks -ne $CreationTicks){throw 'Creation time mismatch'}
  return $ticks
 }
+# Read-only readiness observation. A lost target/focus fails; it never restarts
+# the interval or sends another action. Kept separate for no-GUI regression tests.
+function Wait-PermissionReady([scriptblock]$ReadState,[int]$ExpectedPid,[string]$RuntimeId,[ValidateRange(1,5000)][int]$SettleMs,[hashtable]$Evidence) {
+ $clock=New-Object Diagnostics.Stopwatch;$first=$true;$rect=$null
+ do {
+  $state=& $ReadState
+  $Evidence.state=$state
+  if(-not $state.foreground -or -not $state.active -or -not $state.focused){throw 'Owned permission focus unavailable before Invoke'}
+  if($state.pid -ne $ExpectedPid -or -not $state.enabled -or $state.offscreen -or $state.runtimeId -ne $RuntimeId){throw 'Permission target changed before Invoke'}
+  if($first){$rect=$state.rect;$first=$false;$clock.Start()}elseif($state.rect -ne $rect){throw 'Permission target moved before Invoke'}
+  if($clock.ElapsedMilliseconds -ge $SettleMs){break}
+  Start-Sleep -Milliseconds 50
+ } while($true)
+ $Evidence.observedMs=$clock.ElapsedMilliseconds
+ $Evidence.settled=[DateTime]::UtcNow.ToString('o')
+}
 $started=[DateTime]::UtcNow.ToString('o')
 $phase='verify'
-$failure=$null;$ownedProcesses=@();$windows=@();$descriptions=@();$browserUi=@();$action=$null
+$failure=$null;$ownedProcesses=@();$windows=@();$descriptions=@();$browserUi=@();$action=$null;$guiBefore=@();$guiAfter=@();$permissionAfter=@();$permissionFocus=$null
 try {
 $desktop=[NativeProbe]::Desktop()
 $ticks=Verify
@@ -89,7 +119,8 @@ if($Mode -in @('inspect-browser','allow-read','cancel-blocked')){
  $descendants=$element.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
  foreach($el in $descendants){$key=($el.GetRuntimeId() -join ':');if(-not $seen.ContainsKey($key)){$seen[$key]=$true;$all+=$el}}
  }
- foreach($el in $all){$cur=$el.Current;$browserUi+=@{type=$cur.ControlType.ProgrammaticName;name=$cur.Name;pid=$cur.ProcessId;automationId=$cur.AutomationId;enabled=$cur.IsEnabled;offscreen=$cur.IsOffscreen;runtimeId=($el.GetRuntimeId() -join ':')}}
+ foreach($handle in $main){$guiBefore+= [NativeProbe]::Gui($handle,$OwnedPid)}
+ foreach($el in $all){$cur=$el.Current;$browserUi+=@{type=$cur.ControlType.ProgrammaticName;name=$cur.Name;pid=$cur.ProcessId;automationId=$cur.AutomationId;enabled=$cur.IsEnabled;offscreen=$cur.IsOffscreen;focused=$cur.HasKeyboardFocus;focusable=$cur.IsKeyboardFocusable;runtimeId=($el.GetRuntimeId() -join ':')}}
  if($Mode -eq 'allow-read' -or $Mode -eq 'cancel-blocked'){
  $wanted='Allow'
  if($Mode -eq 'allow-read'){
@@ -106,9 +137,37 @@ if($Mode -in @('inspect-browser','allow-read','cancel-blocked')){
  $buttons=@($all|Where-Object{$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and $_.Current.Name -eq $wanted})
  if($buttons.Count -ne 1){throw 'Expected unique View files permission button'}
  if((Verify) -ne $ticks -or $buttons[0].Current.ProcessId -ne $OwnedPid){throw 'Permission control not owned'}
+ # Invoke may activate Chrome and synthesize a click during its input-protection
+ # interval. Focus once, then observe an unchanged owned target for the Windows
+ # double-click interval used by Chromium. Never repeat focus or Invoke.
+ if($main.Count -ne 1){throw 'Expected exactly one permission browser window'}
+ $permissionFocus=@{requested=[DateTime]::UtcNow.ToString('o');runtimeId=($buttons[0].GetRuntimeId() -join ':');settleMs=[NativeProbe]::GetDoubleClickTime()}
+ $buttons[0].SetFocus()
+ $permissionFocus.returned=[DateTime]::UtcNow.ToString('o')
+ $readPermissionState={
+  $cur=$buttons[0].Current;$gui=[NativeProbe]::Gui($main[0],$OwnedPid)
+  @{foreground=$gui.foreground;active=$gui.active;focused=$cur.HasKeyboardFocus;pid=$cur.ProcessId;enabled=$cur.IsEnabled;offscreen=$cur.IsOffscreen;runtimeId=($buttons[0].GetRuntimeId() -join ':');rect=$cur.BoundingRectangle.ToString()}
+ }
+ Wait-PermissionReady -ExpectedPid $OwnedPid -RuntimeId $permissionFocus.runtimeId -SettleMs $permissionFocus.settleMs -Evidence $permissionFocus -ReadState $readPermissionState
+ if((Verify) -ne $ticks){throw 'Process changed before Invoke'}
  $pattern=$buttons[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+ $current=& $readPermissionState
+ foreach($key in $permissionFocus.state.Keys){if($current[$key] -ne $permissionFocus.state[$key]){throw 'Permission readiness changed before Invoke'}}
+ $invokedRuntimeId=$current.runtimeId
+ $invokeStarted=[DateTime]::UtcNow.ToString('o')
  $pattern.Invoke()
- $action=@{mode=$Mode;button=$wanted;mechanism='scoped UIAutomation InvokePattern'}
+ $action=@{mode=$Mode;button=$wanted;mechanism='scoped UIAutomation InvokePattern';runtimeId=$invokedRuntimeId;invokeStarted=$invokeStarted;invokeReturned=[DateTime]::UtcNow.ToString('o')}
+ foreach($handle in $main){
+  $guiAfter+= [NativeProbe]::Gui($handle,$OwnedPid)
+  $fresh=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+  if($fresh.Current.ProcessId -ne $OwnedPid -or (Verify) -ne $ticks){throw 'Post-action root not owned'}
+  foreach($el in $fresh.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){
+   $cur=$el.Current
+   if($cur.ProcessId -eq $OwnedPid -and ($cur.ControlType -eq [System.Windows.Automation.ControlType]::Window -or $cur.Name -eq $wanted)){
+    $permissionAfter+=@{type=$cur.ControlType.ProgrammaticName;name=$cur.Name;enabled=$cur.IsEnabled;offscreen=$cur.IsOffscreen;focused=$cur.HasKeyboardFocus;runtimeId=($el.GetRuntimeId() -join ':')}
+   }
+  }
+ }
  }
 }
 if($Mode -notin @('inspect','prepare','inspect-browser','allow-read','cancel-blocked')){
@@ -150,5 +209,5 @@ if($Mode -notin @('inspect','prepare','inspect-browser','allow-read','cancel-blo
 } catch {
  $failure=$_.Exception.Message
 }
-@{desktop=$desktop;started=$started;finished=[DateTime]::UtcNow.ToString('o');mode=$Mode;phase=$phase;error=$failure;browserUi=$browserUi;ownedProcesses=$ownedProcesses;ownedTopClasses=@($windows|ForEach-Object { @{pid=[NativeProbe]::Pid($_);class=[NativeProbe]::Class($_);visible=[NativeProbe]::IsWindowVisible($_)} });pid=$OwnedPid;executable=$Executable;creationTicks=$ticks;dialogs=$descriptions;action=$action}|ConvertTo-Json -Depth 8 -Compress
+@{desktop=$desktop;started=$started;finished=[DateTime]::UtcNow.ToString('o');mode=$Mode;phase=$phase;error=$failure;browserUi=$browserUi;guiBefore=$guiBefore;guiAfter=$guiAfter;permissionAfter=$permissionAfter;permissionFocus=$permissionFocus;ownedProcesses=$ownedProcesses;ownedTopClasses=@($windows|ForEach-Object { @{pid=[NativeProbe]::Pid($_);class=[NativeProbe]::Class($_);visible=[NativeProbe]::IsWindowVisible($_)} });pid=$OwnedPid;executable=$Executable;creationTicks=$ticks;dialogs=$descriptions;action=$action}|ConvertTo-Json -Depth 8 -Compress
 if($failure){[Console]::Error.WriteLine($failure);exit 1}
